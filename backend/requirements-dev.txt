@@ -1,0 +1,11 @@
+# Development-only dependencies. NOT installed by build-python-env.{sh,ps1},
+# so these never ship to production users (the embedded electron python-env
+# only installs requirements.txt).
+#
+# To install for local development:
+#   pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+#
+# CI test runs should also install both files.
+
+pytest==8.3.4
+pytest-asyncio==0.25.2

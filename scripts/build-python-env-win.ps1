@@ -92,9 +92,7 @@ Get-ChildItem -Path $PythonEnvDir -Recurse -Force -Filter '*.pyc' `
     | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # Strip parts of the Python distribution we provably don't use at runtime.
-# Each removal here has been individually verified — conservative on purpose.
-# NOT removing pip/, babel/locale-data/, pygments lexers, or PIL — each had
-# at least one weak import-evidence trail.
+# Each removal here has been individually verified.
 Write-Host "Stripping unused Python distribution files..."
 $ToStrip = @(
     (Join-Path $PythonEnvDir 'include'),                          # C headers — never used at runtime
@@ -106,6 +104,40 @@ $ToStrip = @(
 )
 foreach ($p in $ToStrip) {
     if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
+}
+
+# ----- Babel locale-data trim (~30 MB / ~900 files) -----
+# Babel ships 1,084 CLDR locale .dat files. Trafilatura's transitive dep
+# courlan/filters.py:184 calls Locale.parse(seg) on URL path segments —
+# UnknownLocaleError IS caught at line 188 (graceful degradation: that URL
+# just doesn't get language-filtered). Keeping the 20 most common base
+# languages preserves filtering for the URLs we'll actually see.
+$Sp = Join-Path $PythonEnvDir 'lib\python3.13\site-packages'
+$LocaleDir = Join-Path $Sp 'babel\locale-data'
+if (Test-Path $LocaleDir) {
+    Write-Host "Trimming babel/locale-data..."
+    $KeepLangs = @('ar','de','es','fr','it','ja','ko','nl','pl','pt','ru','sv','tr','zh','hi','th','vi','id','da','no','fi','cs','el','he','uk')
+    Get-ChildItem -Path $LocaleDir -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $name = $_.Name
+        $keep = $false
+        if ($name -eq 'root.dat' -or $name -eq 'LICENSE.unicode') { $keep = $true }
+        elseif ($name -match '^en($|_)') { $keep = $true }
+        else {
+            foreach ($l in $KeepLangs) {
+                if ($name -eq "$l.dat") { $keep = $true; break }
+            }
+        }
+        if (-not $keep) { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
+    }
+}
+
+# ----- dist-info noise trim (~2 MB / ~280 files) -----
+# pip-only metadata. METADATA is kept (some packages call importlib.metadata).
+Write-Host "Trimming pip dist-info noise..."
+foreach ($pattern in @('RECORD','INSTALLER','WHEEL','top_level.txt','entry_points.txt')) {
+    Get-ChildItem -Path $Sp -Recurse -Filter $pattern -File -ErrorAction SilentlyContinue `
+        | Where-Object { $_.FullName -match '\.dist-info[\\/]' } `
+        | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 # Pre-compile bytecode so cold backend startup skips parse+compile on

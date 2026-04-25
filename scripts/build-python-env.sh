@@ -117,13 +117,7 @@ find "$PYTHON_ENV_DIR" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || tr
 find "$PYTHON_ENV_DIR" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 
 # Strip parts of the Python distribution we provably don't use at runtime.
-# Each removal here has been individually verified — see the audit notes in
-# the project plan. Doing this BEFORE compileall would also work, but doing
-# it after means the dirs are already definitely-not-imported (compileall
-# would have surfaced any backend code that touches them).
-#
-# Conservative on purpose. NOT removing pip/, babel/locale-data/, pygments
-# lexers, or PIL — each had at least one weak import-evidence trail.
+# Each removal here has been individually verified.
 echo "Stripping unused Python distribution files..."
 # C headers — only needed when building C extensions, never at runtime.
 rm -rf "$PYTHON_ENV_DIR/include"
@@ -136,6 +130,48 @@ rm -rf "$PYTHON_ENV_DIR/lib/python3.13/ensurepip"
 rm -rf "$PYTHON_ENV_DIR/lib/python3.13/turtledemo"
 # Man pages / desktop-integration files — embedded Python doesn't read these.
 rm -rf "$PYTHON_ENV_DIR/share"
+
+# ----- Babel locale-data trim (~30 MB / ~900 files) -----
+# Babel ships 1,084 CLDR locale .dat files (~30 MB). Our backend doesn't use
+# babel directly, but trafilatura's transitive dep `courlan/filters.py:184`
+# calls `Locale.parse(seg)` on URL path segments — if a stripped locale's
+# .dat is missing courlan raises `UnknownLocaleError`, which IS caught at
+# line 188 (graceful degradation: that URL just doesn't get language-
+# filtered). Even so, keeping the most-common 20 base languages preserves
+# language detection for the URLs we'll actually see in practice.
+SP="$PYTHON_ENV_DIR/lib/python3.13/site-packages"
+if [[ -d "$SP/babel/locale-data" ]]; then
+    echo "Trimming babel/locale-data..."
+    LOCALE_DIR="$SP/babel/locale-data"
+    # Keep:
+    #  - root.dat                — fallback for unknown locales
+    #  - LICENSE.unicode         — required by Unicode/CLDR license
+    #  - en*.dat                 — every English variant (130 files; small)
+    #  - <lang>.dat for the 20 most common base languages we'd plausibly see
+    #    in URL path segments. Country-suffix variants (fr_CA.dat, de_AT.dat
+    #    etc.) get dropped — courlan only uses .language so the base is enough.
+    KEEP_LANGS="ar de es fr it ja ko nl pl pt ru sv tr zh hi th vi id da no fi cs el he uk"
+    # Build a regex of "files to KEEP" so find can delete the rest.
+    KEEP_RE='^(root\.dat|LICENSE\.unicode|en($|_).*\.dat'
+    for L in $KEEP_LANGS; do KEEP_RE="$KEEP_RE|${L}\.dat"; done
+    KEEP_RE="$KEEP_RE)$"
+    # Find every file in locale-data that DOESN'T match KEEP_RE and delete it.
+    find "$LOCALE_DIR" -maxdepth 1 -type f \
+        | awk -v re="$KEEP_RE" 'BEGIN { FS="/" } { if ($NF !~ re) print }' \
+        | xargs -r -n 50 rm -f
+fi
+
+# ----- dist-info noise trim (~2 MB / ~280 files) -----
+# pip metadata that's only consulted by pip itself (which we don't run at
+# runtime). RECORD/INSTALLER/WHEEL/entry_points.txt/top_level.txt have zero
+# runtime readers in our shipped deps. METADATA we KEEP — some packages and
+# transitive deps occasionally call importlib.metadata.metadata("pkg").
+echo "Trimming pip dist-info noise..."
+find "$SP" -path '*.dist-info/RECORD'         -delete 2>/dev/null
+find "$SP" -path '*.dist-info/INSTALLER'      -delete 2>/dev/null
+find "$SP" -path '*.dist-info/WHEEL'          -delete 2>/dev/null
+find "$SP" -path '*.dist-info/top_level.txt'  -delete 2>/dev/null
+find "$SP" -path '*.dist-info/entry_points.txt' -delete 2>/dev/null
 
 # Pre-compile bytecode so cold backend startup skips the parse+compile
 # step on every imported .py. Worth ~5-10s on Windows under Defender

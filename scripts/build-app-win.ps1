@@ -60,10 +60,18 @@ if ($Sign) {
     }
 }
 
-# --- Step 0: Bundled uv/uvx (Windows zip) ---
+# --- Step 0: Bundled uvx for Windows ---
+# We deliberately ship ONLY uvx.exe (~700KB), NOT uv.exe (~30MB). Tools
+# only ever invoke uvx; bare uv is a build-time installer/manager. Saves
+# ~30MB from the Windows installer. See scripts/build-app.sh for context.
 $UvBinDir = Join-Path $ProjectRoot 'backend\uv-bin'
+# Defensively drop a stale uv.exe from prior builds.
+if (Test-Path (Join-Path $UvBinDir 'uv.exe')) {
+    Write-Host "[0] Removing legacy uv.exe (we now ship uvx only)..."
+    Remove-Item -Force (Join-Path $UvBinDir 'uv.exe')
+}
 if (-not (Test-Path (Join-Path $UvBinDir 'uvx.exe'))) {
-    Write-Host "[0] Downloading uv/uvx for Windows..."
+    Write-Host "[0] Downloading uvx for Windows..."
     New-Item -ItemType Directory -Force -Path $UvBinDir | Out-Null
     $UvUrl = 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip'
     $TmpZip = Join-Path $env:TEMP "uv-win-$([guid]::NewGuid()).zip"
@@ -71,15 +79,15 @@ if (-not (Test-Path (Join-Path $UvBinDir 'uvx.exe'))) {
     try {
         Invoke-WebRequest -Uri $UvUrl -OutFile $TmpZip -UseBasicParsing
         Expand-Archive -Path $TmpZip -DestinationPath $TmpExtract -Force
-        Get-ChildItem -Path $TmpExtract -Recurse -Filter 'uv.exe'  | Select-Object -First 1 | ForEach-Object { Copy-Item $_.FullName (Join-Path $UvBinDir 'uv.exe') -Force }
+        # Only copy uvx.exe — skip uv.exe entirely.
         Get-ChildItem -Path $TmpExtract -Recurse -Filter 'uvx.exe' | Select-Object -First 1 | ForEach-Object { Copy-Item $_.FullName (Join-Path $UvBinDir 'uvx.exe') -Force }
-        Write-Host "uv/uvx downloaded and bundled."
+        Write-Host "uvx.exe downloaded and bundled."
     } finally {
         Remove-Item -Force $TmpZip -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force $TmpExtract -ErrorAction SilentlyContinue
     }
 } else {
-    Write-Host "[0] uv/uvx binaries already present."
+    Write-Host "[0] uvx.exe already present."
 }
 Write-Host ""
 

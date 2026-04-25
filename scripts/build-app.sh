@@ -68,22 +68,32 @@ if $SIGN_MODE; then
     fi
 fi
 
-# Step 0: Ensure bundled uv/uvx binaries exist
+# Step 0: Ensure bundled uvx binary exists.
+# We deliberately ship ONLY uvx (~681KB universal), NOT uv (~97MB universal).
+# tools_lib.py probes for both, but the only tool config that uses either is
+# Google Workspace (cmd: "uvx"). Bare `uv` (the package installer/manager) is
+# never invoked at runtime by any shipped tool — it's a build-time tool.
+# Saves 97MB from the Mac DMG. If a future MCP needs `uv`, this is a one-line
+# add-back here.
 UV_BIN_DIR="$PROJECT_ROOT/backend/uv-bin"
+# Defensively drop a stale `uv` from prior builds so it doesn't ride along.
+if [[ -f "$UV_BIN_DIR/uv" ]]; then
+    echo "[0] Removing legacy uv binary (we now ship uvx only)..."
+    rm -f "$UV_BIN_DIR/uv"
+fi
 if [[ ! -f "$UV_BIN_DIR/uvx" ]]; then
-    echo "[0] Downloading uv/uvx binaries..."
+    echo "[0] Downloading uvx binary..."
     mkdir -p "$UV_BIN_DIR"
     TMPDIR_UV=$(mktemp -d)
-    # Download both architectures and create universal binaries
     curl -sL "https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz" | tar xz -C "$TMPDIR_UV"
     curl -sL "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-apple-darwin.tar.gz" | tar xz -C "$TMPDIR_UV"
-    lipo -create "$TMPDIR_UV/uv-aarch64-apple-darwin/uv" "$TMPDIR_UV/uv-x86_64-apple-darwin/uv" -output "$UV_BIN_DIR/uv"
+    # Only lipo uvx — skip uv entirely.
     lipo -create "$TMPDIR_UV/uv-aarch64-apple-darwin/uvx" "$TMPDIR_UV/uv-x86_64-apple-darwin/uvx" -output "$UV_BIN_DIR/uvx"
-    chmod +x "$UV_BIN_DIR/uv" "$UV_BIN_DIR/uvx"
+    chmod +x "$UV_BIN_DIR/uvx"
     rm -rf "$TMPDIR_UV"
-    echo "uv/uvx downloaded and bundled."
+    echo "uvx downloaded and bundled."
 else
-    echo "[0] uv/uvx binaries already present."
+    echo "[0] uvx binary already present."
 fi
 echo ""
 
