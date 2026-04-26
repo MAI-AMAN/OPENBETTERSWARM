@@ -17,6 +17,8 @@ name: Release (Windows)
 #   AZURE_SIGNING_ENDPOINT          e.g. https://wus2.codesigning.azure.net/
 #   AZURE_SIGNING_ACCOUNT           mist-code-signing
 #   AZURE_SIGNING_CERT_PROFILE      Mist-Windows-Signing
+#   GOOGLE_OAUTH_CLIENT_ID          shipped in production .env (Google OAuth)
+#   GOOGLE_OAUTH_CLIENT_SECRET      shipped in production .env (Google OAuth)
 
 on:
   push:
@@ -98,6 +100,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_OAUTH_CLIENT_ID:     ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           $ErrorActionPreference = 'Stop'
           $shouldPublish = ($env:GITHUB_EVENT_NAME -eq 'push') -or `
