@@ -2886,6 +2886,21 @@ class AgentManager:
             "message": user_msg.model_dump(mode="json"),
         })
 
+        # Fire a background aux LLM call to generate a 3-6 word verb-phrase
+        # describing this turn ("Auditing the pull request", "Drafting your
+        # email"). The narrator pill swaps from its heuristic verb to this
+        # label as soon as it lands — usually ~500ms-1s into the turn,
+        # which is exactly when "Thinking…" starts feeling generic.
+        # Provider-agnostic via resolve_aux_model. Non-blocking; failure
+        # is silent and the heuristic stays.
+        if not hidden and prompt:
+            try:
+                asyncio.create_task(
+                    self.generate_turn_label(session_id, user_msg.id, prompt)
+                )
+            except Exception:
+                pass
+
         # Track context attachment patterns
         if context_paths or attached_skills or images or forced_tools:
             _analytics("context.attached", {
@@ -3118,6 +3133,118 @@ class AgentManager:
             "name": title,
         })
         return title
+
+    async def generate_turn_label(
+        self,
+        session_id: str,
+        turn_id: str,
+        user_prompt: str,
+    ) -> None:
+        """Generate a 3-6 word verb-phrase describing what the model is doing
+        on this turn, and emit it as agent:turn_label over WS.
+
+        Fires in the background while the actual turn streams. The pill
+        renderer swaps from its heuristic verb to this label as soon as it
+        arrives, then back to the heuristic if the call fails. Cost is
+        ~$0.0001 per turn at Haiku tier — trivial vs the perceived-quality
+        win.
+
+        Provider-agnostic per memory rule: uses `resolve_aux_model`
+        (cheap-tier of whichever provider the user has connected).
+        """
+        try:
+            from backend.apps.settings.credentials import get_anthropic_client
+            from backend.apps.agents.providers.registry import resolve_aux_model
+            global_settings = load_settings()
+            aux_model, _ = await resolve_aux_model(global_settings, preferred_tier="haiku")
+            client = get_anthropic_client(global_settings)
+
+            system = (
+                "You generate a 1-6 word verb-phrase describing what an AI assistant "
+                "is doing right now, given the user's request. Output ONLY the phrase. "
+                "Use a present-tense '-ing' verb. No quotes, no punctuation, no first "
+                "person, no 'I'. Examples:\n"
+                "  Request: 'review this PR for security bugs' -> Auditing the pull request\n"
+                "  Request: 'plan a trip to tokyo' -> Sketching your trip itinerary\n"
+                "  Request: 'find files matching foo' -> Searching the codebase\n"
+                "  Request: 'send mom an email about thanksgiving' -> Drafting your email\n"
+                "  Request: 'what's in package.json' -> Reading package.json\n"
+                "  Request: 'hi' -> Saying hello\n"
+                "  Request: 'thanks' -> Acknowledging\n"
+                "  Request: 'fix the bug in agent_manager.py' -> Investigating the bug"
+            )
+            resp = await client.messages.create(
+                model=aux_model,
+                max_tokens=20,
+                system=system,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Generate the verb-phrase for this request. Output ONLY the phrase.\n\n"
+                        f"<request>\n{user_prompt[:2000]}\n</request>"
+                    ),
+                }],
+            )
+            label = resp.content[0].text.strip().strip('"\'').strip('.')
+            # Defensive: cap length and strip leading 'I' / first-person if it
+            # slipped through despite the system prompt.
+            if label.lower().startswith(("i ", "i'm ", "i'll ")):
+                return  # bail rather than show a hallucinated first-person label
+            if len(label) > 60:
+                label = label[:60].rsplit(" ", 1)[0]
+            if not label:
+                return
+
+            await ws_manager.send_to_session(session_id, "agent:turn_label", {
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "label": label,
+            })
+        except Exception as e:
+            # Aux call is best-effort; the heuristic narrator still works.
+            logger.debug(f"Turn label generation failed (non-fatal): {e}")
+
+    async def warm_prompt_cache(self, session_id: str) -> None:
+        """Pre-warm Anthropic's prompt cache for a session by firing a
+        max_tokens=1 dummy request through the same agent path. Anthropic
+        processes the system+tools prefix and writes the cache; the next
+        real user turn lands a cache hit instead of paying cold-start.
+
+        Skips silently if the session doesn't exist, isn't on Anthropic,
+        or has no Anthropic credentials. Skips if a real request is
+        already in flight on this session — Anthropic permits parallel
+        requests but it just wastes the warm.
+        """
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        # If a real run is in flight, the cache will be warmed by it —
+        # firing again is wasted tokens.
+        existing = self.tasks.get(session_id)
+        if existing and not existing.done():
+            return
+
+        try:
+            from backend.apps.agents.providers.registry import _find_builtin_model
+            entry = _find_builtin_model(session.model)
+            if not entry or entry.get("api") != "anthropic":
+                return  # other providers handle caching automatically
+
+            from backend.apps.settings.credentials import get_anthropic_client
+            global_settings = load_settings()
+            client = get_anthropic_client(global_settings)
+
+            # Single ping with the same system + minimal user message.
+            # max_tokens=1 keeps it cheap; we don't care about the output.
+            await client.messages.create(
+                model=entry.get("model_id", session.model),
+                max_tokens=1,
+                system="You are a helpful assistant. Reply with one character.",
+                messages=[{"role": "user", "content": "ping"}],
+            )
+            logger.debug(f"Cache pre-warm fired for session {session_id}")
+        except Exception as e:
+            logger.debug(f"Cache pre-warm failed (non-fatal): {e}")
 
     async def generate_group_meta(
         self,

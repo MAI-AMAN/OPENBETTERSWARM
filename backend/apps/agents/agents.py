@@ -209,6 +209,21 @@ async def resume_session(session_id: str):
     return {"session": session.model_dump(mode="json")}
 
 
+@agents.router.post("/sessions/{session_id}/warm-cache")
+async def warm_session_cache(session_id: str):
+    """Fire a max_tokens=1 dummy request through the agent path so
+    Anthropic processes the system+tools prefix and writes the prompt
+    cache. The next real user turn lands a cache hit instead of paying
+    cold-start TTFT. Non-blocking, fire-and-forget on the frontend.
+    Returns 200 even on failure (best-effort).
+    """
+    try:
+        await agent_manager.warm_prompt_cache(session_id)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # 9Router / Subscription endpoints
 # ---------------------------------------------------------------------------

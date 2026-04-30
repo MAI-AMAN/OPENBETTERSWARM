@@ -44,6 +44,18 @@ class Message(BaseModel):
     # server-confirmed echo. Plumbed through send_message and round-tripped
     # back via the agent:message WS event so the frontend can dedupe.
     client_message_id: Optional[str] = None
+    # Wall-clock duration in milliseconds spent producing this message's
+    # content. For thinking blocks: time from content_block_start →
+    # content_block_stop. Lets the persisted ThinkingBubble show
+    # "Thought for Ns" on reload instead of falling back to the static
+    # "Thoughts" label. Optional for back-compat with messages saved
+    # before this field existed.
+    elapsed_ms: Optional[int] = None
+    # Approximate output tokens for this message's content. For thinking
+    # blocks we use the same char/3.6 heuristic the live UI uses so the
+    # number frozen on the persisted bubble matches what the user saw
+    # rising during the stream. Pure display, not billing.
+    tokens: Optional[int] = None
 
 class MessageBranch(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)

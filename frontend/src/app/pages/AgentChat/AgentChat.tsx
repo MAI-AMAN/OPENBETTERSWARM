@@ -70,10 +70,13 @@ const thinkingShimmerKeyframes = `
 }
 `;
 
-const ThinkingBubble: React.FC = () => {
+const ThinkingBubble: React.FC<{ label?: string | null }> = ({ label }) => {
   const c = useClaudeTokens();
   const shimmerBase = c.text.tertiary;
   const shimmerHighlight = c.text.primary;
+  // Aux-LLM-generated turn label takes priority; falls back to the
+  // generic "Thinking…" verb if no label landed yet for this turn.
+  const display = label ? `${label}…` : 'Thinking…';
   return (
     <Box sx={{ display: 'flex', justifyContent: 'flex-start', my: 0.75 }}>
       <style>{thinkingShimmerKeyframes}</style>
@@ -102,9 +105,10 @@ const ThinkingBubble: React.FC = () => {
             WebkitTextFillColor: 'transparent',
             color: 'transparent',
             animation: 'thinking-shimmer 2s linear infinite',
+            transition: 'opacity 0.25s',
           }}
         >
-          Thinking…
+          {display}
         </Box>
       </Box>
     </Box>
@@ -1088,6 +1092,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
                 <MessageBubble
                   key={`streaming-${session.streamingMessage.id}`}
                   isStreaming
+                  dynamicTurnLabel={session.turn_label?.label}
                   message={{
                     id: session.streamingMessage.id,
                     role: session.streamingMessage.role,
@@ -1100,7 +1105,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
               )
             )}
             {(awaitingResponse || (session.status === 'running' && !session.streamingMessage)) && (
-              <ThinkingBubble />
+              <ThinkingBubble label={session.turn_label?.label} />
             )}
             {showResumeBubble && session.status === 'stopped' && (
               <Box sx={{ display: 'flex', justifyContent: 'flex-start', my: 0.75 }}>

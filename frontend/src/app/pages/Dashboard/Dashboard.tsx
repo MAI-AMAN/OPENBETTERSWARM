@@ -72,6 +72,7 @@ import { ElementSelectionProvider, useElementSelection } from '@/app/components/
 import { useDomElementSelector } from '@/app/components/useDomElementSelector';
 import SelectionOverlay from '@/app/components/SelectionOverlay';
 import { setClipboardCards, getClipboardCards, type ClipboardCard } from '@/shared/dashboardClipboard';
+import { API_BASE } from '@/shared/config';
 
 const SELECT_ATTR = 'data-select-type';
 
@@ -475,12 +476,44 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
     dispatch(fetchOutputs());
     dashboardWs.connect();
     const cleanupBrowserHandler = initBrowserCommandHandler();
-    // Note: cleanup runs only on dashboardId change (explicit dashboard switch)
-    // or full unmount. With the hide-don't-unmount pattern in AppShell, route
-    // navigation no longer triggers this cleanup. We deliberately do NOT call
-    // resetLayout() here — switching dashboards already calls it via the next
-    // effect run, and calling it from cleanup would race with the new layout fetch.
-    return () => { cleanupBrowserHandler(); dashboardWs.disconnect(); };
+
+    // Pre-warm Anthropic's prompt cache for sessions on this dashboard
+    // ~250ms after mount (debounced; AbortController cancels on
+    // dashboard switch). Fires a max_tokens=1 ping per session so the
+    // user's first real message hits a warm cache instead of paying
+    // cold-start TTFT. Cheap (~$0.0001/session) and non-blocking. Skips
+    // for non-Anthropic sessions server-side.
+    const warmAbort = new AbortController();
+    const warmTimer = setTimeout(async () => {
+      try {
+        const sessionsState = store.getState().agents.sessions;
+        const dashSessions = Object.values(sessionsState).filter(
+          (s) => s.dashboard_id === dashboardId &&
+                 s.status !== 'draft' &&
+                 s.mode !== 'browser-agent' &&
+                 s.mode !== 'sub-agent' &&
+                 s.mode !== 'invoked-agent',
+        );
+        for (const s of dashSessions) {
+          if (warmAbort.signal.aborted) break;
+          // Fire-and-forget — the endpoint always 200s and the side
+          // effect is invisible cache population.
+          fetch(`${API_BASE}/agents/sessions/${s.id}/warm-cache`, {
+            method: 'POST',
+            signal: warmAbort.signal,
+          }).catch(() => {});
+        }
+      } catch {
+        /* best-effort */
+      }
+    }, 250);
+
+    return () => {
+      clearTimeout(warmTimer);
+      warmAbort.abort();
+      cleanupBrowserHandler();
+      dashboardWs.disconnect();
+    };
   }, [dispatch, dashboardId]);
 
   const pendingBrowserUrl = useAppSelector((state) => state.tempState.pendingBrowserUrl);

@@ -21,6 +21,8 @@ import {
   setSessionConnState,
   fetchSession,
   recordCompaction,
+  setTurnLabel,
+  clearTurnLabel,
 } from '../state/agentsSlice';
 import { addBrowserCardFromBackend, removeBrowserCard, setBrowserCardPosition, setGlowingBrowserCards, GRID_GAP } from '../state/dashboardLayoutSlice';
 import { getAuthToken } from '../config';
@@ -451,6 +453,13 @@ class WebSocketManager {
               });
             }
           }
+
+          // Clear any leftover turn label when the agent reaches a
+          // terminal state so the next turn doesn't show a stale label
+          // before its own aux call lands.
+          if (session_id && (data.status === 'completed' || data.status === 'error' || data.status === 'stopped')) {
+            store.dispatch(clearTurnLabel(session_id));
+          }
         }
         // Per-sub-agent close via browser_id; skip user-created cards (no spawned_by).
         if (
@@ -559,6 +568,19 @@ class WebSocketManager {
           store.dispatch(recordCompaction({
             sessionId: session_id,
             throughMsgId: data.compacted_through_msg_id ?? null,
+          }));
+        }
+        break;
+
+      case 'agent:turn_label':
+        // Aux-LLM-generated verb-phrase for the current turn. Replaces
+        // the static "Thinking…" label until the turn ends, then the
+        // ThinkingBubble freezes to "Thought for Ns · M tokens".
+        if (session_id && data.label) {
+          store.dispatch(setTurnLabel({
+            sessionId: session_id,
+            turnId: data.turn_id || '',
+            label: data.label,
           }));
         }
         break;

@@ -24,6 +24,12 @@ export interface AgentMessage {
   // the server echo lands; 'failed' if the POST rejected. Confirmed messages
   // (i.e. ones echoed back from the server) drop this field entirely.
   optimistic_status?: 'pending' | 'failed';
+  // Server-stamped duration (ms) and approximate token count for the
+  // message's content. Today only thinking messages set these — the
+  // persisted ThinkingBubble reads them so "Thought for Ns · M tokens"
+  // survives reload instead of decaying to "Thoughts".
+  elapsed_ms?: number;
+  tokens?: number;
 }
 
 export interface ApprovalRequest {
@@ -98,6 +104,12 @@ export interface AgentSession {
   // subtle indicator without faking a terminal status. Cleared back
   // to 'live' on resume_ack. Never persisted to the backend.
   connection_state?: 'live' | 'reconnecting';
+  // Aux-LLM-generated verb-phrase describing what the model is doing
+  // on the current turn ("Auditing the pull request", "Drafting your
+  // email"). Set by agent:turn_label, scoped to the turn that produced
+  // it via turn_id. ThinkingBubble swaps in this label as soon as it
+  // arrives, then back to the heuristic when the turn ends.
+  turn_label?: { label: string; turn_id: string } | null;
 }
 
 export interface AgentConfig {
@@ -758,6 +770,23 @@ const agentsSlice = createSlice({
       session.compacted_through_msg_id = action.payload.throughMsgId;
     },
 
+    // Aux-LLM-generated turn label. The pill renderer prefers this over
+    // the static "Thinking…" verb when present.
+    setTurnLabel(
+      state,
+      action: PayloadAction<{ sessionId: string; turnId: string; label: string }>,
+    ) {
+      const session = state.sessions[action.payload.sessionId];
+      if (!session) return;
+      session.turn_label = { label: action.payload.label, turn_id: action.payload.turnId };
+    },
+
+    clearTurnLabel(state, action: PayloadAction<string>) {
+      const session = state.sessions[action.payload];
+      if (!session) return;
+      session.turn_label = null;
+    },
+
     streamStart(
       state,
       action: PayloadAction<{ sessionId: string; messageId: string; role: 'assistant' | 'tool_call' | 'thinking'; toolName?: string }>
@@ -1284,6 +1313,8 @@ export const {
   addOptimisticMessage,
   markOptimisticFailed,
   recordCompaction,
+  setTurnLabel,
+  clearTurnLabel,
   streamStart,
   streamDelta,
   streamEnd,

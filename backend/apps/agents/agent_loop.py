@@ -123,6 +123,12 @@ class AgentLoop:
         tool_names: dict[int, str] = {}
         tool_ids: dict[int, str] = {}
         block_types: dict[int, str] = {}
+        # Wall-clock start time per content block (server-side stamps).
+        # Used to compute elapsed_ms for thinking blocks so the persisted
+        # ThinkingBubble can show the duration after streaming ends.
+        block_start_ts: dict[int, float] = {}
+        thinking_total_ms: int = 0
+        thinking_total_chars: int = 0
 
         async for event in self.provider.stream_message(
             model=self.model,
@@ -169,6 +175,11 @@ class AgentLoop:
                     block_index_map[event.index] = thinking_msg_id
                     block_types[event.index] = "thinking"
                     text_buffers[event.index] = ""
+                    # Server-stamp the start so we can compute exact
+                    # elapsed_ms server-side at content_block_stop. Using
+                    # time.time() (not monotonic) is fine here — we only
+                    # subtract two values from the same clock.
+                    block_start_ts[event.index] = time.time()
                     await self.ws_emitter("agent:stream_start", {
                         "message_id": thinking_msg_id,
                         "role": "thinking",
@@ -227,9 +238,19 @@ class AgentLoop:
                         ),
                     ))
                 elif bt == "thinking":
+                    thinking_text = text_buffers.get(event.index, "")
                     collected_content.append(
-                        ContentBlock(type="thinking", text=text_buffers.get(event.index, ""))
+                        ContentBlock(type="thinking", text=thinking_text)
                     )
+                    # Accumulate per-block duration + char count for the
+                    # eventual persisted Message. We sum across multiple
+                    # thinking blocks in the same turn so a complex
+                    # interleaved (think → tool → think → answer) turn
+                    # still reports total time spent reasoning.
+                    start_ts = block_start_ts.get(event.index)
+                    if start_ts is not None:
+                        thinking_total_ms += int((time.time() - start_ts) * 1000)
+                    thinking_total_chars += len(thinking_text)
 
                 # Send stream_end for tool + thinking blocks (text block
                 # ends at message_stop). Thinking ends here so the
@@ -237,9 +258,24 @@ class AgentLoop:
                 # "Thought for Ns" the moment the model stops thinking,
                 # even if it then keeps streaming text.
                 if msg_id and (bt == "tool_use" or bt == "thinking"):
-                    await self.ws_emitter("agent:stream_end", {
-                        "message_id": msg_id,
-                    })
+                    payload: dict[str, Any] = {"message_id": msg_id}
+                    if bt == "thinking":
+                        # Server-stamped truth so the persisted bubble
+                        # doesn't fall back to "Thoughts" — and so the
+                        # live bubble freezes on the exact server-side
+                        # duration instead of the client's clock.
+                        block_start = block_start_ts.get(event.index)
+                        if block_start is not None:
+                            block_elapsed = int((time.time() - block_start) * 1000)
+                            payload["elapsed_ms"] = block_elapsed
+                        # Token estimate for THIS block (chars/3.6 ≈
+                        # Anthropic BPE for English prose). Matches the
+                        # heuristic the live UI used so the freeze
+                        # value doesn't visually jump.
+                        block_text = text_buffers.get(event.index, "")
+                        if block_text:
+                            payload["tokens"] = max(1, round(len(block_text) / 3.6))
+                    await self.ws_emitter("agent:stream_end", payload)
 
             elif event.type == "usage":
                 # Accumulate token usage from provider stream
@@ -261,6 +297,8 @@ class AgentLoop:
         # Build and emit the collected messages
         await self._emit_collected_messages(
             collected_content, stream_text_msg_id, stream_tool_msg_ids,
+            thinking_elapsed_ms=thinking_total_ms,
+            thinking_total_chars=thinking_total_chars,
         )
 
         return ModelResponse(
@@ -274,6 +312,8 @@ class AgentLoop:
         content: list[ContentBlock],
         text_msg_id: str | None,
         tool_msg_ids: dict[int, str],
+        thinking_elapsed_ms: int = 0,
+        thinking_total_chars: int = 0,
     ) -> None:
         """Emit finalized agent:message events for the collected response."""
         from backend.apps.agents.models import Message
@@ -285,9 +325,16 @@ class AgentLoop:
         # individually, this is just for the historical record.
         thinking_parts = [b.text for b in content if b.type == "thinking" and b.text]
         if thinking_parts:
+            joined = "\n\n".join(thinking_parts)
+            # Stamp duration + token estimate so the persisted bubble can
+            # show "Thought for Ns · M tokens" on reload instead of the
+            # generic "Thoughts" fallback. Use the server-side accumulated
+            # times so multi-block turns aggregate correctly.
             msg = Message(
                 role="thinking",
-                content="\n\n".join(thinking_parts),
+                content=joined,
+                elapsed_ms=thinking_elapsed_ms or None,
+                tokens=max(1, round(thinking_total_chars / 3.6)) if thinking_total_chars else None,
             )
             await self.ws_emitter("agent:message", {
                 "message": msg.model_dump(mode="json"),

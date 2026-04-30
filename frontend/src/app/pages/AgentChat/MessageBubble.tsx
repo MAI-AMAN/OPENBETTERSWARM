@@ -501,7 +501,17 @@ const ThinkingBubble: React.FC<{
   content: string;
   isStreaming?: boolean;
   timestamp?: string;
-}> = ({ content, isStreaming }) => {
+  // Server-stamped duration / token count, populated on the persisted
+  // Message at end-of-stream. When present, post-stream label uses these
+  // exact values instead of the in-memory React-state estimates that
+  // disappear when the streaming bubble unmounts.
+  persistedElapsedMs?: number;
+  persistedTokens?: number;
+  // Aux-LLM-generated dynamic label for the active turn ("Auditing the
+  // pull request", "Drafting your email"). Replaces the static
+  // "Thinking…" verb when present and the stream is still active.
+  dynamicLabel?: string | null;
+}> = ({ content, isStreaming, persistedElapsedMs, persistedTokens, dynamicLabel }) => {
   const c = useClaudeTokens();
 
   // Only time a think-session that we actually saw start live. For saved
@@ -541,17 +551,41 @@ const ThinkingBubble: React.FC<{
   const expanded = userOverride ?? true;
   const toggle = () => setUserOverride(!expanded);
 
-  const displayedSeconds = frozenElapsed ?? elapsed;
-  // Live token approximation: ~4 chars per token works well enough for a
-  // ticker. Skipped on history replay since `content` is fully populated
-  // and we don't want a misleading "still thinking" feel.
   const text = typeof content === 'string' ? content : JSON.stringify(content);
-  const liveTokenEstimate = isStreaming ? Math.max(0, Math.round(text.length / 4)) : 0;
+  // Live token estimate uses Anthropic's BPE-ish ratio for English prose
+  // (~3.6 chars/token) instead of the cruder /4. Still an estimate — true
+  // value lands via persistedTokens when the stream ends.
+  const liveTokenEstimate = isStreaming ? Math.max(0, Math.round(text.length / 3.6)) : 0;
+
+  // Post-stream label preference order:
+  //   1. Server-stamped persisted values (survive reload).
+  //   2. Live React-state values (set during this session's stream).
+  //   3. Generic "Thoughts" fallback for legacy messages with neither.
+  const persistedSecs = persistedElapsedMs != null
+    ? Math.max(1, Math.round(persistedElapsedMs / 1000))
+    : null;
+  const finalSeconds = persistedSecs ?? frozenElapsed;
+  const finalTokens = persistedTokens
+    ?? (text && !isStreaming ? Math.max(1, Math.round(text.length / 3.6)) : null);
+
+  // Active-stream label preference:
+  //   1. Aux-LLM dynamic label ("Auditing the pull request") when available.
+  //   2. Heuristic "Thinking…" with token estimate as the fallback.
+  // The dynamic label only replaces the verb part — token count chip
+  // appends after, so users still see the live counter.
+  const activeLabel = dynamicLabel
+    ? (liveTokenEstimate > 0 ? `${dynamicLabel}… · ~${liveTokenEstimate} tokens` : `${dynamicLabel}…`)
+    : (liveTokenEstimate > 0 ? `Thinking… (~${liveTokenEstimate} tokens)` : 'Thinking…');
+
   const label = isStreaming
-    ? (liveTokenEstimate > 0 ? `Thinking… (~${liveTokenEstimate} tokens)` : 'Thinking…')
-    : startedStreamingAt !== null
-      ? `Thought for ${displayedSeconds}s`
-      : 'Thoughts';
+    ? activeLabel
+    : finalSeconds != null
+      ? (finalTokens != null
+          ? `Thought for ${finalSeconds}s · ${finalTokens} tokens`
+          : `Thought for ${finalSeconds}s`)
+      : finalTokens != null
+        ? `Thoughts · ${finalTokens} tokens`
+        : 'Thoughts';
 
   // Shimmer colors — use a bright mid-tone against the muted base to make
   // the sweep visible without being loud. The base color matches the
@@ -639,9 +673,12 @@ interface Props {
   onSaveEdit?: (messageId: string, newContent: string) => void;
   onCancelEdit?: () => void;
   isStreaming?: boolean;
+  // Session's current aux-LLM turn label, if any. Only meaningful when
+  // this is the live-streaming thinking bubble; ignored otherwise.
+  dynamicTurnLabel?: string | null;
 }
 
-const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, onSaveEdit, onCancelEdit, isStreaming }) => {
+const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, onSaveEdit, onCancelEdit, isStreaming, dynamicTurnLabel }) => {
   const c = useClaudeTokens();
   const [editText, setEditText] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -663,6 +700,9 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
         content={typeof content === 'string' ? content : JSON.stringify(content)}
         isStreaming={isStreaming}
         timestamp={message.timestamp}
+        persistedElapsedMs={(message as any).elapsed_ms}
+        persistedTokens={(message as any).tokens}
+        dynamicLabel={isStreaming ? dynamicTurnLabel : null}
       />
     );
   }
