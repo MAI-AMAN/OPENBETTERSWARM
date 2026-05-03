@@ -178,12 +178,33 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
 
   useEffect(() => {
     if (!id || isDraft) return;
-    const ws = createSessionWs(id);
-    ws.connect();
-    wsRef.current = ws;
-    dispatch(fetchSession(id));
+    let cancelled = false;
+    let ws: ReturnType<typeof createSessionWs> | null = null;
+    // Order matters: hydrate the persisted message list from REST FIRST,
+    // THEN connect the WS. The WS resume protocol replays buffered
+    // events starting at last_seq=0, which includes every stream_*
+    // event for messages that finished before the disconnect. The
+    // replay-skip guard in WebSocketManager._messageAlreadyComplete
+    // checks `session.messages` to decide whether to drop deltas — so
+    // if we connect first, the slice is empty when the replay arrives,
+    // the guard returns false, and the user sees the chat type itself
+    // out again. Awaiting fetchSession before connect makes the slice
+    // authoritative before any replay event lands.
+    (async () => {
+      try {
+        await dispatch(fetchSession(id));
+      } catch {
+        // Even if the REST hydrate fails, still connect — the WS resume
+        // protocol can hydrate from buffered events as a fallback.
+      }
+      if (cancelled) return;
+      ws = createSessionWs(id);
+      ws.connect();
+      wsRef.current = ws;
+    })();
     return () => {
-      ws.disconnect();
+      cancelled = true;
+      if (ws) ws.disconnect();
       wsRef.current = null;
     };
   }, [id, isDraft, dispatch]);

@@ -36,6 +36,7 @@ const _getAuthTokenSafe = (): string => {
   try { return getAuthToken() || ''; } catch { return ''; }
 };
 
+
 const _genUuid = (): string => {
   // Avoid pulling in `crypto.randomUUID` for compat — this is a
   // disambiguator, not a security boundary, so a 96-bit hex string is
@@ -126,6 +127,15 @@ class WebSocketManager {
     this.skipStreamEvents = options?.skipStreamEvents ?? false;
     this.sessionId = options?.sessionId ?? null;
     this.connectionUuid = _genUuid();
+    // Seed lastSeq from the cross-mount persistent map so a fresh
+    // manager (created on every AgentChat remount via key={session.id})
+    // doesn't ask the server to replay events the previous manager
+    // already saw. This is the architectural fix for "completed chats
+    // re-type themselves on reopen": the server's resume protocol now
+    // sees a real high-water mark and has nothing to replay.
+    if (this.sessionId) {
+      this.lastSeq = _sessionLastSeq.get(this.sessionId) ?? 0;
+    }
   }
 
   private bufferDelta(sessionId: string, messageId: string, delta: string) {
@@ -362,6 +372,11 @@ class WebSocketManager {
     // session, so this is the high-water mark we send back on resume.
     if (typeof msg.seq === 'number' && msg.seq > this.lastSeq) {
       this.lastSeq = msg.seq;
+      // Mirror to the module-scope persistent map so the next fresh
+      // manager (next AgentChat remount) starts here, not at zero.
+      if (this.sessionId) {
+        _sessionLastSeq.set(this.sessionId, this.lastSeq);
+      }
     }
 
     // ----- Connection-scoped frames (no business-logic side effects) -----
@@ -395,8 +410,11 @@ class WebSocketManager {
         store.dispatch(fetchSession(session_id));
         // Reset lastSeq — the REST refetch is the new authoritative
         // baseline; subsequent server events with seq numbers will
-        // re-establish the high-water mark.
+        // re-establish the high-water mark. Also wipe the cross-mount
+        // persistent map so a remount during this gap window doesn't
+        // resurrect the stale value.
         this.lastSeq = 0;
+        _sessionLastSeq.delete(session_id);
       }
       return;
     }
@@ -484,29 +502,46 @@ class WebSocketManager {
         break;
 
       case 'agent:stream_start':
-        if (session_id && data.message_id) {
-          store.dispatch(streamStart({
-            sessionId: session_id,
-            messageId: data.message_id,
-            role: data.role,
-            toolName: data.tool_name,
-          }));
-        }
-        break;
-
       case 'agent:stream_delta':
-        if (session_id && data.message_id) {
-          this.bufferDelta(session_id, data.message_id, data.delta);
-        }
-        break;
-
       case 'agent:stream_end':
-        if (session_id && data.message_id) {
-          this.flushInterpolator(data.message_id);
-          store.dispatch(streamEnd({
-            sessionId: session_id,
-            messageId: data.message_id,
-          }));
+        // Replay-skip guard. The WS resume protocol replays buffered
+        // events from the ring buffer with seq > last_seq. When this
+        // manager is freshly constructed (every AgentChat mount,
+        // because of `key={session.id}`), last_seq is 0, so the server
+        // replays EVERY buffered stream_* event for the session.
+        // Without this guard, opening any chat with prior streaming
+        // turns animates the entire history through the typewriter
+        // interpolator on every reopen.
+        //
+        // The discriminator is `resumeAcked`: it flips to true when
+        // server:hello arrives, which the server sends AFTER the replay
+        // completes. Any stream_* event arriving while !resumeAcked is
+        // replay-from-buffer (historical) and can be dropped — the REST
+        // snapshot we awaited before connect is authoritative for any
+        // already-finalized message, and any genuinely live turn the
+        // server is pushing will continue emitting events after the ack.
+        if (!this.resumeAcked) break;
+        if (event === 'agent:stream_start') {
+          if (session_id && data.message_id) {
+            store.dispatch(streamStart({
+              sessionId: session_id,
+              messageId: data.message_id,
+              role: data.role,
+              toolName: data.tool_name,
+            }));
+          }
+        } else if (event === 'agent:stream_delta') {
+          if (session_id && data.message_id) {
+            this.bufferDelta(session_id, data.message_id, data.delta);
+          }
+        } else if (event === 'agent:stream_end') {
+          if (session_id && data.message_id) {
+            this.flushInterpolator(data.message_id);
+            store.dispatch(streamEnd({
+              sessionId: session_id,
+              messageId: data.message_id,
+            }));
+          }
         }
         break;
 
@@ -764,6 +799,40 @@ class WebSocketManager {
 import { WS_BASE } from '@/shared/config';
 
 export const dashboardWs = new WebSocketManager(`${WS_BASE}/ws/dashboard`, { skipStreamEvents: true });
+
+// Per-session high-water mark for the resume protocol. Survives across
+// AgentChat mounts/unmounts so reopening a chat doesn't re-trigger a
+// full replay from the server's ring buffer.
+//
+// Why this exists: AgentChat uses `key={session.id}` on the embedded
+// instance inside AgentCard, so every expand/collapse remounts the
+// component, which constructs a fresh WebSocketManager. Without this
+// persistent map, each fresh manager starts at last_seq=0 and asks the
+// server for the entire buffered history. The server faithfully
+// replays it, the client renders the typewriter animation again, and
+// the user sees their completed chat "type itself out" on every reopen.
+//
+// Lifetime: tied to the JS module load, which means the page tab. Lost
+// on full app reload (intentional — that should re-hydrate from REST).
+// On backend restart the buffers are wiped anyway, so a stale
+// lastSeq pointing past the buffer top falls into the "fresh client"
+// path on the server (last_seq>0 but no buffer) which short-circuits
+// to a no-op replay. Safe.
+const _sessionLastSeq: Map<string, number> = new Map();
+
+export function getPersistedLastSeq(sessionId: string): number {
+  return _sessionLastSeq.get(sessionId) ?? 0;
+}
+
+export function setPersistedLastSeq(sessionId: string, seq: number): void {
+  if (seq > (_sessionLastSeq.get(sessionId) ?? 0)) {
+    _sessionLastSeq.set(sessionId, seq);
+  }
+}
+
+export function clearPersistedLastSeq(sessionId: string): void {
+  _sessionLastSeq.delete(sessionId);
+}
 
 export function createSessionWs(sessionId: string): WebSocketManager {
   return new WebSocketManager(`${WS_BASE}/ws/agents/${sessionId}`, { sessionId });

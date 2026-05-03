@@ -64,6 +64,15 @@ class Message(BaseModel):
     # "Thought for 18s · 430 reasoning · 2.4K answer · 3 tools" label.
     answer_tokens: Optional[int] = None
     tool_count: Optional[int] = None
+    # Combined input+output token total for the turn that produced this
+    # thinking message — including all sub-work delegated to subagents
+    # (browser, invoke-agent) and tool MCP servers that report their own
+    # usage. Stored under `input_tokens` for back-compat with older
+    # session JSONs even though the value is now the full
+    # input+output+children sum. This is the "how big was this turn"
+    # number that drives the pill's "M tokens" segment. None when no
+    # usage data was captured.
+    input_tokens: Optional[int] = None
     # Gemini 2.5/3.x emit a `thoughtSignature` (an opaque encrypted
     # blob) on each thinking block, and Google rejects subsequent
     # multi-step requests with a 400 if the signature isn't echoed

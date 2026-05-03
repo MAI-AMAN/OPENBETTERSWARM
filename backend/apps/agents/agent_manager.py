@@ -2428,6 +2428,49 @@ class AgentManager:
                     _turn_total_ms = int((time.time() - _turn_started_ts) * 1000)
                 if _turn_thinking_msg_id is None:
                     _turn_thinking_msg_id = uuid4().hex
+                # Combined token total for the pill — input + output for
+                # the parent turn PLUS any work delegated to subagents
+                # (browser agents, invoke-agent forks) and tool MCP
+                # servers that produced their own usage on this turn.
+                # The user-visible answer to "how big is this turn" is
+                # the all-in sum, not just the primary's output. We sum
+                # every reachable source:
+                #   - parent's input  (session.tokens["input"] —
+                #     ResultMessage.usage at line ~2886)
+                #   - parent's output (session.tokens["output"] — same
+                #     ResultMessage)
+                #   - every direct sub-session whose parent_session_id
+                #     points at this session (browser agents, sub-agent
+                #     forks, invoke-agent calls book their own usage at
+                #     subprocess return time — agent_manager.py:1365 +
+                #     browser_agent.py:1000-1001)
+                # This mirrors how billing accumulates per-turn — caches,
+                # tool MCP servers that talk to LLMs (e.g. summarizers),
+                # and subagent reasoning all show up under the parent's
+                # "session.tokens" once their result lands.
+                _parent_in = 0
+                _parent_out = 0
+                if isinstance(session.tokens, dict):
+                    _parent_in = int(session.tokens.get("input", 0) or 0)
+                    _parent_out = int(session.tokens.get("output", 0) or 0)
+                _children_in = 0
+                _children_out = 0
+                try:
+                    for _child in self.sessions.values():
+                        if getattr(_child, "parent_session_id", None) != session.id:
+                            continue
+                        _ct = getattr(_child, "tokens", None)
+                        if not isinstance(_ct, dict):
+                            continue
+                        _children_in += int(_ct.get("input", 0) or 0)
+                        _children_out += int(_ct.get("output", 0) or 0)
+                except Exception:
+                    pass
+                _turn_total_tokens: int | None = (
+                    _parent_in + _parent_out + _children_in + _children_out
+                )
+                if not _turn_total_tokens or _turn_total_tokens <= 0:
+                    _turn_total_tokens = None
                 consolidated = Message(
                     id=_turn_thinking_msg_id,
                     role="thinking",
@@ -2435,6 +2478,7 @@ class AgentManager:
                     branch_id=session.active_branch_id,
                     elapsed_ms=_turn_total_ms or None,
                     tokens=turn_tokens,
+                    input_tokens=_turn_total_tokens,
                     tool_count=_turn_tool_count or None,
                     # Persist Gemini thoughtSignature so we can re-attach
                     # it on the next request — this is what stops Google
@@ -2807,6 +2851,30 @@ class AgentManager:
                                 # ResultMessage's count fills the gap.
                                 if _result_out > _turn_output_tokens:
                                     _turn_output_tokens = _result_out
+                        except Exception:
+                            pass
+
+                        # Pre-populate session.tokens BEFORE emitting the
+                        # final consolidated thinking pill. Order matters:
+                        # _emit_consolidated_thinking reads
+                        # session.tokens["input"]/["output"] for the
+                        # combined-total stamp on the pill. If we emit
+                        # first, the pill freezes with input=0 because
+                        # the ResultMessage hasn't been consumed yet
+                        # (the writes below at line ~2918 wouldn't
+                        # land until after the pill is already broadcast).
+                        try:
+                            _pre_usage = getattr(message, "usage", None) or {}
+                            if isinstance(_pre_usage, dict):
+                                _pre_in = int(_pre_usage.get("input_tokens", 0) or 0)
+                                _pre_create = int(_pre_usage.get("cache_creation_input_tokens", 0) or 0)
+                                _pre_read = int(_pre_usage.get("cache_read_input_tokens", 0) or 0)
+                                _pre_total_in = _pre_in + _pre_create + _pre_read
+                                _pre_out = int(_pre_usage.get("output_tokens", 0) or 0)
+                                if _pre_total_in > 0:
+                                    session.tokens["input"] = _pre_total_in
+                                if _pre_out > 0:
+                                    session.tokens["output"] = _pre_out
                         except Exception:
                             pass
 

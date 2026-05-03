@@ -30,6 +30,11 @@ export interface AgentMessage {
   // survives reload instead of decaying to "Thoughts".
   elapsed_ms?: number;
   tokens?: number;
+  // Server-stamped input-side token count for the turn (fresh
+  // input + cache_creation + cache_read). Populated on thinking
+  // messages so the pill can show "Thought for Ns · M in / K out"
+  // — which is the only honest answer to "how big was this turn".
+  input_tokens?: number;
   // Richer thinking-pill data: total post-thinking output tokens
   // (user-visible answer text + tool arguments) and tool invocation
   // count. Drives the "Thought for 18s · 430 reasoning · 2.4K answer

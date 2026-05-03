@@ -507,6 +507,11 @@ const ThinkingBubble: React.FC<{
   // disappear when the streaming bubble unmounts.
   persistedElapsedMs?: number;
   persistedTokens?: number;
+  // Server-stamped input-side total for the turn (fresh + cache-creation
+  // + cache-read). Used to render "M in" alongside the existing "K out"
+  // segment so the pill honestly reflects the full turn cost, not just
+  // output. Optional — turns with no SDK usage data (rare) skip it.
+  persistedInputTokens?: number;
   // Tool invocation count for this turn — drives the "3 tools used"
   // segment of the post-stream label.
   persistedToolCount?: number;
@@ -514,7 +519,7 @@ const ThinkingBubble: React.FC<{
   // pull request", "Drafting your email"). Replaces the static
   // "Thinking…" verb when present and the stream is still active.
   dynamicLabel?: string | null;
-}> = ({ content, isStreaming, persistedElapsedMs, persistedTokens, persistedToolCount, dynamicLabel }) => {
+}> = ({ content, isStreaming, persistedElapsedMs, persistedTokens, persistedInputTokens, persistedToolCount, dynamicLabel }) => {
   const c = useClaudeTokens();
 
   // Live timer is only used as a fallback when we don't yet have
@@ -620,23 +625,99 @@ const ThinkingBubble: React.FC<{
   // experiments showed it confused users (it counted both visible reply
   // text AND tool-call JSON arguments, making tool-heavy turns
   // misleadingly look like long answers).
-  const buildPostStreamLabel = () => {
-    const parts: string[] = [];
-    if (finalSeconds != null) {
-      parts.push(`Thought for ${fmtThoughtDuration(finalSeconds)}`);
-    } else {
-      parts.push('Thoughts');
+  // Backend stamps `input_tokens` as the all-in input+output+children
+  // total (parent's primary call PLUS every subagent and tool MCP that
+  // booked usage on this turn). Falls back to just-output (finalTokens)
+  // for legacy thinking messages that predate the combined-total field.
+  const combinedTotalTokens =
+    persistedInputTokens != null && persistedInputTokens > 0
+      ? persistedInputTokens
+      : finalTokens;
+  // Input/output split shown in the breakdown tooltip on click. We
+  // already have `finalTokens` (server-stamped output side) and
+  // `combinedTotalTokens` (input + output + children sum). The
+  // implied "input + children" portion is the difference. When the
+  // backend hasn't separated them yet (legacy data), we still show
+  // the total but skip the breakdown.
+  const tokenBreakdown = (() => {
+    if (combinedTotalTokens == null || combinedTotalTokens <= 0) return null;
+    if (finalTokens == null || finalTokens <= 0) {
+      // Total-only case (rare). No split available.
+      return { total: combinedTotalTokens, output: null as number | null, input: null as number | null };
     }
-    if (finalTokens != null) {
-      parts.push(`${fmtTokens(finalTokens)} tokens`);
+    const inputSide = Math.max(0, combinedTotalTokens - finalTokens);
+    return { total: combinedTotalTokens, output: finalTokens, input: inputSide };
+  })();
+
+  const renderPostStreamLabel = () => {
+    const segments: React.ReactNode[] = [];
+    segments.push(
+      <span key="duration">
+        {finalSeconds != null
+          ? `Thought for ${fmtThoughtDuration(finalSeconds)}`
+          : 'Thoughts'}
+      </span>
+    );
+    if (tokenBreakdown) {
+      const { total, input, output } = tokenBreakdown;
+      const tooltipBody = input != null && output != null ? (
+        <Box sx={{ p: 0.5, fontFamily: c.font.sans, fontSize: '0.78rem', lineHeight: 1.5 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+            <span>Input</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{input.toLocaleString()}</span>
+          </Box>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+            <span>Output</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{output.toLocaleString()}</span>
+          </Box>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, mt: 0.25, pt: 0.25, borderTop: `1px solid ${c.border.subtle}`, fontWeight: 600 }}>
+            <span>Total</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{total.toLocaleString()}</span>
+          </Box>
+          <Box sx={{ mt: 0.5, color: c.text.ghost, fontSize: '0.7rem', fontStyle: 'italic' }}>
+            Input includes system prompt, history, tool defs, cache reads, and any subagent/tool work this turn.
+          </Box>
+        </Box>
+      ) : (
+        <Box sx={{ p: 0.5, fontFamily: c.font.sans, fontSize: '0.78rem' }}>
+          {total.toLocaleString()} tokens (input + output + children)
+        </Box>
+      );
+      segments.push(<span key="sep-1"> · </span>);
+      segments.push(
+        <Tooltip
+          key="tokens"
+          title={tooltipBody}
+          placement="top"
+          arrow
+          slotProps={{ tooltip: { sx: { bgcolor: c.bg.elevated, color: c.text.primary, border: `1px solid ${c.border.medium}`, maxWidth: 'none' } } }}
+        >
+          <Box
+            component="span"
+            onClick={(e) => { e.stopPropagation(); }}
+            sx={{
+              cursor: 'help',
+              borderBottom: `1px dotted ${c.border.medium}`,
+              '&:hover': { color: c.text.secondary },
+            }}
+          >
+            {fmtTokens(total)} tokens
+          </Box>
+        </Tooltip>
+      );
     }
     if (persistedToolCount != null && persistedToolCount > 0) {
-      parts.push(`${persistedToolCount} tool${persistedToolCount === 1 ? '' : 's'} used`);
+      segments.push(<span key="sep-2"> · </span>);
+      segments.push(
+        <span key="tools">{persistedToolCount} tool{persistedToolCount === 1 ? '' : 's'} used</span>
+      );
     }
-    return parts.join(' · ');
+    return segments;
   };
 
-  const label = isStreaming ? activeLabel : buildPostStreamLabel();
+  // Streaming gets a plain string label (the shimmer animation needs
+  // the text to flow through a single gradient mask, which only works
+  // on a flat string node). Post-stream uses the React-node renderer
+  // so the tokens segment can be wrapped in a Tooltip with the
+  // input/output breakdown.
+  const label: React.ReactNode = isStreaming ? activeLabel : renderPostStreamLabel();
 
   // Shimmer colors — use a bright mid-tone against the muted base to make
   // the sweep visible without being loud. The base color matches the
@@ -805,6 +886,7 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
         timestamp={message.timestamp}
         persistedElapsedMs={(message as any).elapsed_ms}
         persistedTokens={(message as any).tokens}
+        persistedInputTokens={(message as any).input_tokens}
         persistedToolCount={(message as any).tool_count}
         dynamicLabel={isStreaming ? dynamicTurnLabel : null}
       />
