@@ -99,11 +99,7 @@ const ToolGroupBubble: React.FC<Props> = React.memo(({ group, isSessionRunning =
       sx={{
         maxWidth: '85%',
         my: 0.5,
-        // Layout containment: tool rows inserting inside this group
-        // don't reflow the rest of the transcript. The header chip
-        // count tabular-nums fix already handles the within-row
-        // jitter; this stops the OUTER scroll container from
-        // re-laying-out every other bubble when a new row appears.
+        // contain: stops new tool rows from reflowing the whole transcript.
         contain: 'layout style',
       }}
     >
@@ -200,10 +196,7 @@ const ToolGroupBubble: React.FC<Props> = React.memo(({ group, isSessionRunning =
           <Box
             sx={{
               borderTop: `0.5px solid ${c.border.medium}`,
-              // Each tool row fades in over 140ms when inserted, instead
-              // of jumping into place. Pure CSS — runs on the compositor
-              // and pairs with the parent's contain:layout so the rest
-              // of the transcript doesn't shift while the row settles.
+              // 140ms fade so rows don't pop in.
               '& > *': {
                 animation: 'toolRowFadeIn 140ms ease-out',
               },

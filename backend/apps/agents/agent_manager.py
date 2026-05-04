@@ -1598,57 +1598,20 @@ class AgentManager:
                 "type": "stdio",
             }
 
-            # -----------------------------------------------------------------
-            # openswarm-web MCP — DDG search + trafilatura fetch
-            # -----------------------------------------------------------------
-            # The CLI's built-in WebSearch/WebFetch wrap Anthropic's server-
-            # side web_search_20250305. Verified against 9Router 0.3.60's
-            # full chunk tree (grep returned zero hits for web_search,
-            # googleSearch, grounding, retrieval — 9Router does NOT translate
-            # WebSearch to any provider's native search tool). So for every
-            # non-Anthropic primary, the CLI delegates WebSearch execution
-            # back to Anthropic via ANTHROPIC_SMALL_FAST_MODEL. That path
-            # needs a Claude credential; without one it fails with "no
-            # credentials for provider: claude". When it succeeds it can
-            # still break on Gemini 3 thinking-mode thought-signature
-            # validation in subsequent turns.
-            #
-            # To sidestep all of that: register our own DDG-backed MCP for
-            # every primary whose native Anthropic delegation is unreliable
-            # or unreachable. Claude primaries (cc/ and openswarm-pro's
-            # Anthropic adaptive path) keep the built-in Anthropic search
-            # because it IS high-quality and works end-to-end for them.
-            #
-            # Free: DuckDuckGo HTML + trafilatura extraction run locally on
-            # each user's machine. No API keys, no subscriptions, no rate
-            # limits at per-user scale.
+            # The CLI's built-in WebSearch/WebFetch wraps Anthropic's
+            # web_search_20250305. For non-Claude primaries the CLI
+            # delegates execution back to Anthropic via
+            # ANTHROPIC_SMALL_FAST_MODEL — needs an Anthropic credential
+            # or it 401s. We register our DDG-backed MCP only for users
+            # with no Anthropic path; Anthropic's hosted search is
+            # higher-quality so we prefer it whenever it's reachable.
             _m = _router_model_id if isinstance(_router_model_id, str) else ""
-            # Decide whether to register our DDG/Gemini-grounded MCP.
-            #
-            # The CLI's built-in WebSearch/WebFetch wrap Anthropic's
-            # server-side web_search_20250305 tool. For Claude primaries
-            # it runs inline. For non-Claude primaries the CLI delegates
-            # the search execution back to Anthropic via a small model
-            # (ANTHROPIC_SMALL_FAST_MODEL → haiku). That delegation path
-            # needs *some* Anthropic credential to reach Anthropic.
-            #
-            # So: if the user has ANY Anthropic path available (Claude
-            # subscription via 9Router, openswarm-pro cloud proxy, or a
-            # direct Anthropic API key), we prefer the built-in. It's
-            # bundled into what they're already paying for and gives
-            # real Anthropic-curated search results — strictly higher
-            # quality than our DDG scrape. We only fall back to our MCP
-            # for users with ZERO Anthropic access.
             _has_anthropic_path = (
                 getattr(global_settings, "connection_mode", "own_key") == "openswarm-pro"
                 or bool(getattr(global_settings, "anthropic_api_key", None))
             )
-            # Check 9Router for any active connection that can serve
-            # Anthropic-format requests. Both the subscription id
-            # `claude` (OAuth'd Claude Code subscription) and the
-            # direct-API id `anthropic` (apikey connection — which is
-            # how we register OpenSwarm Pro as a Claude-compatible
-            # route) satisfy this.
+            # Both 9Router provider ids `claude` (subscription OAuth) and
+            # `anthropic` (direct API / Pro proxy) satisfy this check.
             _9r_has_anthropic = False
             try:
                 from backend.apps.nine_router import get_providers as _9r_providers
@@ -1662,18 +1625,11 @@ class AgentManager:
             except Exception:
                 pass
 
-            # For Pro users WITHOUT a 9Router Claude/Anthropic connection
-            # yet (sync not complete, or first run), the CLI's built-in
-            # WebSearch delegation through 9Router would fail. Only
-            # consider Anthropic reachable if 9Router can actually serve
-            # the Anthropic-format request.
-            # Deliberately exclude openswarm-pro from the "has anthropic
-            # path" heuristic when the primary is non-Claude. Reason: if
-            # a Pro user picks GPT or Gemini as their primary, we
-            # shouldn't drag their WebSearch/subagent calls through our
-            # Pro Anthropic pool — they're already paying for a
-            # ChatGPT/Gemini subscription we can use for free. Pro still
-            # kicks in when they switch the primary to a Claude model.
+            # When the primary is non-Claude we deliberately don't count
+            # OpenSwarm Pro as an Anthropic path — using the Pro pool for
+            # WebSearch on a GPT/Gemini session would drain it for the
+            # user's Claude turns. The user's GPT/Gemini subscription
+            # serves their non-Claude turns at zero cost to us.
             _primary_is_claude = _m.startswith("cc/") or (
                 isinstance(_router_model_id, str)
                 and not _router_model_id.startswith(("cc/", "cx/", "gc/", "ag/", "gemini/"))
@@ -2336,14 +2292,8 @@ class AgentManager:
             # "Thought signature is not valid" 400). None for providers
             # that don't use signatures.
             _turn_thought_signature: str | None = None
-            # Per-turn delta baseline. session.tokens["input"]/["output"]
-            # is the SDK's CUMULATIVE total across all turns (the SDK
-            # reports running totals on each ResultMessage, not per-turn
-            # deltas). To stamp the consolidated thinking pill with
-            # *this turn's* tokens — not the cumulative session total —
-            # we snapshot the cumulative values at turn start and
-            # subtract them at emit time. Same for any subagent token
-            # totals, which also accumulate across turns.
+            # session.tokens accumulates SDK running totals across turns,
+            # so subtract the turn-start baseline to get this turn's delta.
             _turn_baseline_session_in: int = 0
             _turn_baseline_session_out: int = 0
             _turn_baseline_children_in: int = 0
@@ -2509,11 +2459,8 @@ class AgentManager:
                 except Exception:
                     pass
 
-                # Per-turn deltas. If baseline wasn't captured (rare
-                # race: emit fired before any AssistantMessage on this
-                # turn), fall back to cumulative values — better than
-                # showing zero, and acceptable since this only happens
-                # on degenerate empty turns.
+                # Fall back to cumulative if the baseline wasn't captured
+                # (degenerate empty turn — better than showing zero).
                 if _turn_baseline_captured:
                     _parent_in = max(0, _cum_in - _turn_baseline_session_in)
                     _parent_out = max(0, _cum_out - _turn_baseline_session_out)
@@ -2539,12 +2486,6 @@ class AgentManager:
                     tokens=turn_tokens,
                     input_tokens=_turn_total_tokens,
                     tool_count=_turn_tool_count or None,
-                    # Persist Gemini thoughtSignature so we can re-attach
-                    # it on the next request — this is what stops Google
-                    # from rejecting multi-step turns with "Thought
-                    # signature is not valid" 400. None for any provider
-                    # that doesn't use signatures.
-                    thought_signature=_turn_thought_signature,
                 )
                 existing_idx = next(
                     (i for i, m in enumerate(session.messages)
@@ -2606,15 +2547,8 @@ class AgentManager:
                         # + assistant text generation.
                         if _turn_started_ts is None:
                             _turn_started_ts = time.time()
-                            # Capture cumulative-token baselines at turn
-                            # start so the pill can stamp per-turn deltas
-                            # instead of session totals. Without this,
-                            # turn 2's pill would show turn-1 tokens +
-                            # turn-2 tokens combined, and turn 3's would
-                            # show turn-1 + turn-2 + turn-3 — making it
-                            # look like every turn is bigger than the
-                            # last and that work was being "added on top"
-                            # of the first pill.
+                            # Snapshot cumulative tokens at turn start;
+                            # subtracted at emit time for per-turn deltas.
                             try:
                                 if isinstance(session.tokens, dict):
                                     _turn_baseline_session_in = int(session.tokens.get("input", 0) or 0)
@@ -2887,17 +2821,11 @@ class AgentManager:
 
                         if content_parts:
                             _asst_text = "\n".join(content_parts)
-                            # 9Router can deliver upstream auth failures
-                            # AS the assistant's reply ("Failed to
-                            # authenticate. API Error: 401 ... [codex/...]
-                            # Provided authentication token is expired").
-                            # When that happens, the SDK doesn't raise —
-                            # so our catch-all _is_auth_error path never
-                            # fires. Detect the pattern in the text
-                            # itself and substitute a friendly system
-                            # bubble + auth_error WS event so the user
-                            # gets an actionable message instead of a
-                            # raw 401 JSON dump in the chat.
+                            # 9Router sometimes returns upstream 401s as
+                            # the assistant reply (no SDK exception), so
+                            # the catch-all auth handler never fires.
+                            # Match the text pattern and surface a
+                            # friendly system bubble instead.
                             _lower_text = _asst_text.lower()
                             _looks_like_router_auth_error = (
                                 ("failed to authenticate" in _lower_text and "401" in _lower_text)
@@ -2906,8 +2834,6 @@ class AgentManager:
                                 or ("provided authentication token" in _lower_text and ("401" in _lower_text or "expired" in _lower_text))
                             )
                             if _looks_like_router_auth_error:
-                                # Build a friendly message keyed off the
-                                # provider name in the upstream error.
                                 if "codex/" in _lower_text or "[codex" in _lower_text:
                                     friendly = (
                                         "GPT subscription token expired. Open Settings → Models and click "

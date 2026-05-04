@@ -1427,12 +1427,8 @@ const ToolCallBubble: React.FC<ToolCallBubbleProps> = React.memo(
     const promptPrefix = getPromptPrefix(toolName);
     const shortAction = mcpInfo.isMcp ? getMcpShortAction(mcpInfo) : toolName;
 
-    // mcpCompact rows live INSIDE a ToolGroup whose header already shows
-    // the brand + count. Render the friendly verb form here ("Sent message",
-    // "Read 4 emails") so the row contributes a real noun instead of
-    // repeating the brand or showing the raw action like "Send Slack Message".
-    // Seed with call.id so each row picks a stable variant from the pool
-    // (no flicker on re-render, but adjacent rows get different verbs).
+    // mcpCompact rows live inside a ToolGroup whose header already shows
+    // the brand + count, so the row uses the verb form, not the brand.
     const mcpVerbLabel = (() => {
       const lbl = getToolLabel(toolName, call.id);
       return result && !isDenied ? lbl.past : lbl.present;
@@ -2013,18 +2009,7 @@ const ToolCallBubble: React.FC<ToolCallBubbleProps> = React.memo(
               }}
             >
               {(() => {
-                // Verb-tense progression: "Reading" while pending, "Read" once
-                // a tool_result has landed. Denied/streaming fall back to the
-                // present participle since the action is in-flight.
-                // Use the input-aware variant so MCPActivate shows the brand
-                // ("Connecting to Gmail") and Bash derives a verb from the
-                // command ("Deleted foo.ts" instead of "Ran command").
-                // Seed with call.id so the verb pool picks a stable variant
-                // per row (no flicker, variety across the transcript).
-                // MCP tools (singleton rows that aren't grouped) ALSO go
-                // through this path now so they get the friendly verb
-                // pool ("Pulled up email") instead of "Gmail Get Message
-                // Details" Title Case fallback.
+                // call.id seeds the variant pool so re-renders are stable.
                 const { present, past } = getToolLabelWithInput(toolName, input, call.id);
                 return result && !isDenied ? past : present;
               })()}

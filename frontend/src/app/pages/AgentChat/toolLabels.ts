@@ -1,25 +1,12 @@
-// Friendly verb-tense labels for tool calls. Replaces the raw tool name in
-// ToolCallBubble titles so the transcript reads as a narration of what the
-// agent is doing — "Reading foo.ts" while pending, "Read foo.ts" once done.
-//
-// Voice: a real person casually telling you what they did, in past tense.
-// Mixes Linear-style "cooking up your data" warmth with Fastmail-style
-// "Snoozed / Filed" physicality. Each tool has a small pool of variants;
-// a stable hash of the tool call's id picks one — same call always reads
-// the same way (no flicker on re-render), different calls get variety.
-//
-// **Confidence-scaled friendliness.** Read-side actions get the playful
-// variants. Destructive / irreversible operations (rm, git push, deletions)
-// stay flat and factual — quirky verbs on `rm -rf` would feel wrong.
+// Tool labels, with variant pools so the transcript reads like a person.
+// Destructive ops (rm, git push, delete) stay flat. quirky on rm felt off.
 
 export interface ToolLabel {
   present: string;
   past: string;
 }
 
-// Stable seeded pick. Same seed → same index across renders so the row
-// doesn't flicker between variants. Empty seed → always index 0 (the
-// "safe default" variant).
+// djb2. same seed always picks the same variant so rows don't flicker.
 function _stableIndex(seed: string | undefined, n: number): number {
   if (n <= 1 || !seed) return 0;
   let h = 5381;
@@ -33,9 +20,7 @@ function _pick<T>(variants: T[], seed?: string): T {
   return variants[_stableIndex(seed, variants.length)];
 }
 
-// Each entry is an array of variants. Index 0 is the safe-default
-// (used when no seed is supplied). Destructive / high-stakes tools
-// have a single-variant entry to keep them factual.
+// index 0 is the safe-default; single-entry pools = no seeded variation.
 const VARIANTS: Record<string, ToolLabel[]> = {
   read: [
     { present: 'Reading', past: 'Read' },
@@ -172,8 +157,7 @@ const VARIANTS: Record<string, ToolLabel[]> = {
     { present: 'Browsing the toolbox', past: 'Browsed the toolbox' },
     { present: 'Rummaging the toolbox', past: 'Rummaged the toolbox' },
   ],
-  // MCPActivate is brand-aware — see getToolLabelWithInput below. The
-  // bare entry here is a fallback when input.server_name isn't available.
+  // brand-aware version lives in getToolLabelWithInput; this is the fallback.
   mcpactivate: [
     { present: 'Connecting', past: 'Connected' },
     { present: 'Plugging in', past: 'Plugged in' },
@@ -286,9 +270,7 @@ const VARIANTS: Record<string, ToolLabel[]> = {
   ],
 };
 
-// Brand names for MCP servers — what we want users to *see* instead of
-// the kebab-case server id. Keyed by the sanitized server name (matches
-// _sanitize_server_name in tools_lib).
+// keys match _sanitize_server_name in tools_lib.
 const MCP_SERVER_BRAND: Record<string, string> = {
   'google-workspace': 'Google Workspace',
   'microsoft-365': 'Microsoft 365',
@@ -317,9 +299,7 @@ const MCP_SERVER_BRAND: Record<string, string> = {
   'openswarm-outputs-meta': 'views',
 };
 
-// MCP sub-tool action verbs. Each verb class has variants — playful
-// where it's safe, factual for destructive (delete/remove). Ordered:
-// most-specific first.
+// most specific verb pattern wins, so order matters.
 interface McpVerbVariant { present: string; past: string; }
 const MCP_VERB_PATTERNS: Array<{ match: RegExp; variants: McpVerbVariant[] }> = [
   { match: /^(send|new)_/, variants: [
@@ -361,8 +341,7 @@ const MCP_VERB_PATTERNS: Array<{ match: RegExp; variants: McpVerbVariant[] }> = 
       { present: 'Refining', past: 'Refined' },
       { present: 'Touching up', past: 'Touched up' },
   ]},
-  // Destructive — flat, no playful variants. Keep it factual so the
-  // agent doesn't sound flippant about deletions.
+  // delete = flat. don't be cute about deletions.
   { match: /^(delete|remove|cancel|archive)_/, variants: [
       { present: 'Deleting', past: 'Deleted' },
   ]},
@@ -427,18 +406,12 @@ const ACTION_OBJECTS: Array<{ match: RegExp; noun: string }> = [
   { match: /(?:^|_)(?:task|todo)/, noun: 'task' },
 ];
 
-// Sentence case the input — first word capitalized, rest lowercased.
-// We deliberately avoid Title Case (capitalize-every-word) because it
-// reads marketing-y in agent narration; sentence case is Linear/Notion/
-// Stripe convention and feels more like a human wrote it.
+// sentence case (Linear/Notion vibe). title case felt too marketing-y.
 function _humanizeName(name: string): string {
   const spaced = name.replace(/[-_]+/g, ' ').toLowerCase();
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-// Parse an mcp__<server>__<action> tool name into a friendly label.
-// Returns null when the input isn't an MCP-shaped tool name; callers
-// fall through to the builtin VARIANTS map.
 function _labelForMcpTool(toolName: string, seed?: string): ToolLabel | null {
   const parts = toolName.split('__');
   if (parts.length < 3 || parts[0] !== 'mcp') return null;
@@ -446,22 +419,17 @@ function _labelForMcpTool(toolName: string, seed?: string): ToolLabel | null {
   const action = parts.slice(2).join('__').toLowerCase();
   const brand = MCP_SERVER_BRAND[server] || _humanizeName(server);
 
-  // Our internal openswarm-* meta-MCPs expose action names that already
-  // map cleanly to VARIANTS keys (mcpsearch / mcpactivate / outputlist /
-  // outputsearch / etc.). Without this short-circuit we hit the
-  // verb-pattern fallback which renders "tools: Mcpsearch" — ugly.
+  // our internal meta-MCPs go through VARIANTS so we don't render "tools: Mcpsearch".
   if (server.startsWith('openswarm-')) {
     const builtin = VARIANTS[action];
     if (builtin) return _pick(builtin, seed);
   }
 
-  // Find verb class (variant pool)
   let verbVariants: McpVerbVariant[] | null = null;
   for (const p of MCP_VERB_PATTERNS) {
     if (p.match.test(action)) { verbVariants = p.variants; break; }
   }
 
-  // Find object noun
   let noun = '';
   for (const a of ACTION_OBJECTS) {
     if (a.match.test(action)) { noun = a.noun; break; }
@@ -475,7 +443,7 @@ function _labelForMcpTool(toolName: string, seed?: string): ToolLabel | null {
     return { present: `${verb.present} via ${brand}`, past: `${verb.past} via ${brand}` };
   }
 
-  // Verb didn't match — humanize the action name and pair with the brand.
+  // no verb match. fall back to brand: action.
   const human = _humanizeName(action.replace(/^_+|_+$/g, ''));
   return { present: `${brand}: ${human}`, past: `${brand}: ${human}` };
 }
@@ -487,20 +455,11 @@ export function getToolLabel(toolName: string, seed?: string): ToolLabel {
   const key = toolName.toLowerCase();
   const variants = VARIANTS[key];
   if (variants) return _pick(variants, seed);
-  // Fallback: capitalize the raw name with neutral verbs that read OK
-  // either way ("Running tool" / "Ran tool").
   const pretty = toolName.charAt(0).toUpperCase() + toolName.slice(1);
   return { present: `Running ${pretty}`, past: `Ran ${pretty}` };
 }
 
-// Variant that consults the tool's input arguments so a few tools can
-// produce a more specific label. Falls back to getToolLabel for the
-// general case. Specifically:
-//   - MCPActivate(server_name): "Connecting to Gmail" / "Connected to Gmail"
-//   - Bash(command): derive verb from the leading binary
-//
-// `seed` should be the tool call's id so the variant pick is stable
-// across re-renders of the same row but varies between rows.
+// for tools where the input changes the label (MCPActivate, Bash).
 export function getToolLabelWithInput(toolName: string, input: any, seed?: string): ToolLabel {
   if (!toolName) return { present: 'Working', past: 'Done' };
 
@@ -531,8 +490,7 @@ export function getToolLabelWithInput(toolName: string, input: any, seed?: strin
 
 // --- Bash verb extraction ---------------------------------------------------
 
-// Single-variant entries are kept flat by design — destructive (rm,
-// chmod) or directional (cd) ops shouldn't get cute paraphrases.
+// rm and chmod don't get cute paraphrases for obvious reasons.
 const GIT_VERBS: Record<string, ToolLabel[]> = {
   commit: [
     { present: 'Committing', past: 'Committed' },
@@ -646,7 +604,6 @@ function _pkgVerb(sub: string, seed?: string): ToolLabel {
 type BinEntry = ToolLabel[] | ((sub: string, seed?: string) => ToolLabel | null);
 
 const BIN_VERBS: Record<string, BinEntry> = {
-  // Destructive — single variant, factual.
   rm: [{ present: 'Deleting', past: 'Deleted' }],
   rmdir: [{ present: 'Removing folder', past: 'Removed folder' }],
   chmod: [{ present: 'Changing permissions', past: 'Changed permissions' }],
@@ -654,7 +611,6 @@ const BIN_VERBS: Record<string, BinEntry> = {
   killall: [{ present: 'Stopping process', past: 'Stopped process' }],
   kill: [{ present: 'Stopping process', past: 'Stopped process' }],
 
-  // Friendly — variant pool.
   mv: [
     { present: 'Moving', past: 'Moved' },
     { present: 'Shuffling', past: 'Shuffled' },
@@ -864,7 +820,6 @@ const BIN_VERBS: Record<string, BinEntry> = {
     { present: 'Listing processes', past: 'Listed processes' },
     { present: 'Checking what is running', past: 'Checked what is running' },
   ],
-  // Subcommand-driven
   git: (sub: string, seed?: string) => {
     const v = GIT_VERBS[sub];
     if (v) return _pick<ToolLabel>(v, seed);

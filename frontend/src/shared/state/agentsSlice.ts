@@ -35,11 +35,7 @@ export interface AgentMessage {
   // messages so the pill can show "Thought for Ns · M in / K out"
   // — which is the only honest answer to "how big was this turn".
   input_tokens?: number;
-  // Richer thinking-pill data: total post-thinking output tokens
-  // (user-visible answer text + tool arguments) and tool invocation
-  // count. Drives the "Thought for 18s · 430 reasoning · 2.4K answer
-  // · 3 tools" label. Set on thinking messages only.
-  answer_tokens?: number;
+  // tool count drives the "3 tools used" segment on the thinking pill.
   tool_count?: number;
 }
 

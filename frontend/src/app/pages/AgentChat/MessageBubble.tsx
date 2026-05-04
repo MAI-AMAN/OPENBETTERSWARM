@@ -32,10 +32,7 @@ const streamingCursorKeyframes = `
 }
 `;
 
-// Claude.ai-style shimmer that sweeps left → right across text while the
-// model is actively thinking. Uses background-clip: text to mask a moving
-// linear gradient onto the text glyphs so the effect looks like a light
-// wave traveling through the letters.
+// shimmer-on-text effect for thinking. background-clip:text + sliding gradient.
 const thinkingShimmerKeyframes = `
 @keyframes thinking-shimmer {
   0% { background-position: 200% 0; }
@@ -73,12 +70,9 @@ interface OpenSwarmErrorInfo {
   ctaAction?: 'upgrade' | 'retry' | 'settings' | 'waitlist';
 }
 
-// Turn a raw Claude-CLI / cloud error string into a user-friendly card.
-// Returns null for things that aren't obviously our errors — those fall
-// through to normal markdown rendering.
+// raw error text into a friendly card. null = not ours, render as markdown.
 function parseOpenSwarmError(text: string): OpenSwarmErrorInfo | null {
   if (!text) return null;
-  // Rate-limit cap from our cloud
   if (/rate_limit_error|reached your OpenSwarm.*plan limit|Usage cap exceeded/i.test(text)) {
     const reset = text.match(/Resets in ([\dhms\s]+)/)?.[1];
     return {
@@ -91,14 +85,7 @@ function parseOpenSwarmError(text: string): OpenSwarmErrorInfo | null {
       ctaAction: 'upgrade',
     };
   }
-  // Upstream capacity / 503 / transient. The backend already retries these
-  // for ~5.5 minutes (5/15/45/90/180s) before bubbling up, so by the time a
-  // user sees this the system has genuinely struggled — but it's almost
-  // always recoverable on the next send, not a plan/billing issue. Show a
-  // soft "connection hiccup" card instead of the waitlist/"servers maxed"
-  // copy, which misleads Pro/Pro+/Ultra subscribers into thinking their
-  // paid plan is out of capacity. The only real hard cap a user should see
-  // is their own per-plan 5h limit (matched above as `kind: 'cap'`).
+  // backend retried for ~5.5min before bubbling. show a soft hiccup, not a cap.
   if (/at capacity|Try again shortly|503|service unavailable/i.test(text)) {
     return {
       kind: 'network',
@@ -106,11 +93,7 @@ function parseOpenSwarmError(text: string): OpenSwarmErrorInfo | null {
       detail: 'That request timed out after a few retries. Send the message again to continue.',
     };
   }
-  // Too many MCP tool definitions for the chosen model's input window.
-  // Classic case: user has 5+ apps connected (M365 alone has 141 actions),
-  // chose Haiku (200K context), and even a one-line message can't fit
-  // because the tool schemas alone push past the limit. Bigger models
-  // (Sonnet/Opus, 1M) absorb it fine.
+  // tool schemas overflowed the window. M365 alone is 141 actions.
   if (/Prompt is too long|prompt_too_long|input length and `max_tokens`|context length/i.test(text)) {
     return {
       kind: 'too_many_tools',
@@ -125,7 +108,6 @@ function parseOpenSwarmError(text: string): OpenSwarmErrorInfo | null {
       ctaAction: 'settings',
     };
   }
-  // Auth / subscription problems
   if (/No active subscription|Subscription canceled|Subscription past_due|Invalid.*token|Missing bearer token/i.test(text)) {
     return {
       kind: 'auth',
@@ -135,15 +117,7 @@ function parseOpenSwarmError(text: string): OpenSwarmErrorInfo | null {
       ctaAction: 'settings',
     };
   }
-  // Genuine, hard network failures only. The bare word `network` used to
-  // match anything mentioning "network" (Python traces, MCP tool output,
-  // ffmpeg lines, etc.), and `fetch failed` / `ETIMEDOUT` alone fire for
-  // transient upstream blips the backend now silently retries — surfacing
-  // a card for those just confuses the user. So: require the specific
-  // errno codes at word boundaries, and only match `fetch failed` when
-  // paired with a concrete cause so we don't swallow every Node-level
-  // transient. The backend's capacity/transient retry layer handles the
-  // rest without ever reaching this classifier.
+  // strict matchers only. bare "network" used to false-match Python traces.
   if (/\b(?:ECONNREFUSED|ENETUNREACH|ENOTFOUND|EAI_AGAIN)\b|Could\s+not\s+reach\s+OpenSwarm|Unable\s+to\s+connect\s+to\s+OpenSwarm/i.test(text)) {
     return {
       kind: 'network',
@@ -491,57 +465,33 @@ const MessageImageThumbnails: React.FC<{
   );
 };
 
-// ── ThinkingBubble ──────────────────────────────────────────────────
-// Collapsible reasoning section styled after Claude.ai / ChatGPT /
-// Gemini. Defaults to expanded so thinking is always visible when
-// present. User can click the header to collapse. If we observed the
-// stream live we show "Thought for Ns"; otherwise (history replay) we
-// just show "Thoughts".
+// thinking pill. shows "Thought for Ns" if we caught it live, else just "Thoughts".
 const ThinkingBubble: React.FC<{
   content: string;
   isStreaming?: boolean;
   timestamp?: string;
-  // Server-stamped duration / token count, populated on the persisted
-  // Message at end-of-stream. When present, post-stream label uses these
-  // exact values instead of the in-memory React-state estimates that
-  // disappear when the streaming bubble unmounts.
+  // server-stamped totals for the turn. survives unmount.
   persistedElapsedMs?: number;
   persistedTokens?: number;
-  // Server-stamped input-side total for the turn (fresh + cache-creation
-  // + cache-read). Used to render "M in" alongside the existing "K out"
-  // segment so the pill honestly reflects the full turn cost, not just
-  // output. Optional — turns with no SDK usage data (rare) skip it.
   persistedInputTokens?: number;
-  // Tool invocation count for this turn — drives the "3 tools used"
-  // segment of the post-stream label.
   persistedToolCount?: number;
-  // Aux-LLM-generated dynamic label for the active turn ("Auditing the
-  // pull request", "Drafting your email"). Replaces the static
-  // "Thinking…" verb when present and the stream is still active.
+  // aux-LLM label like "Auditing the pull request". null = use the heuristic.
   dynamicLabel?: string | null;
 }> = ({ content, isStreaming, persistedElapsedMs, persistedTokens, persistedInputTokens, persistedToolCount, dynamicLabel }) => {
   const c = useClaudeTokens();
 
-  // Live timer is only used as a fallback when we don't yet have
-  // server-stamped persistedElapsedMs. The pill stays in "Thinking…"
-  // for the entire duration of a multi-block turn (think → tool →
-  // think → answer), and only swaps to "Thought for Ns · M tokens"
-  // once persistedElapsedMs lands via the agent:message event for
-  // role='thinking', which carries the per-turn aggregate (not the
-  // per-block stats the live UI used to freeze on prematurely).
+  // live timer is just the fallback. server-stamped values win.
   const [startedStreamingAt, setStartedStreamingAt] = useState<number | null>(
     isStreaming ? Date.now() : null
   );
   const [elapsed, setElapsed] = useState<number>(0);
 
-  // Record start time the first time we see streaming
   React.useEffect(() => {
     if (isStreaming && startedStreamingAt === null) {
       setStartedStreamingAt(Date.now());
     }
   }, [isStreaming, startedStreamingAt]);
 
-  // Tick the timer while streaming
   React.useEffect(() => {
     if (!isStreaming || startedStreamingAt === null) return;
     const iv = setInterval(() => {
@@ -550,29 +500,15 @@ const ThinkingBubble: React.FC<{
     return () => clearInterval(iv);
   }, [isStreaming, startedStreamingAt]);
 
-  // Default behavior: expanded while streaming (so the user can watch
-  // the model think live), collapsed after the turn ends (so the
-  // transcript reads as answer-first, with reasoning available on click).
-  // userOverride captures explicit clicks and pins the state — once the
-  // user has chosen, we respect their pick across the streaming →
-  // post-stream transition. This avoids the wall-of-text problem where
-  // a 1.6K-token reasoning block stayed expanded after the turn finished.
+  // expanded while streaming, collapsed after. userOverride pins explicit clicks.
   const [userOverride, setUserOverride] = useState<boolean | null>(null);
   const expanded = userOverride ?? !!isStreaming;
   const toggle = () => setUserOverride(!expanded);
 
   const text = typeof content === 'string' ? content : JSON.stringify(content);
-  // Live token estimate uses Anthropic's BPE-ish ratio for English prose
-  // (~3.6 chars/token) instead of the cruder /4. Still an estimate — true
-  // value lands via persistedTokens when the stream ends.
+  // 3.6 chars/token for English. swap for persistedTokens once the stream ends.
   const liveTokenEstimate = isStreaming ? Math.max(0, Math.round(text.length / 3.6)) : 0;
 
-  // Post-stream label preference order:
-  //   1. Server-stamped persisted values (per-turn aggregate, survives
-  //      reload — this is the truth source we actually want).
-  //   2. Live React-state elapsed (only used if server values are
-  //      missing, e.g. legacy messages).
-  //   3. Generic "Thoughts" fallback.
   const persistedSecs = persistedElapsedMs != null
     ? Math.max(1, Math.round(persistedElapsedMs / 1000))
     : null;
@@ -583,17 +519,10 @@ const ThinkingBubble: React.FC<{
   const finalTokens = persistedTokens
     ?? (text && !isStreaming ? Math.max(1, Math.round(text.length / 3.6)) : null);
 
-  // Active-stream label preference:
-  //   1. Aux-LLM dynamic label ("Auditing the pull request") when available.
-  //   2. Heuristic "Thinking…" with token estimate as the fallback.
-  // The dynamic label only replaces the verb part — token count chip
-  // appends after, so users still see the live counter.
   const activeLabel = dynamicLabel
     ? (liveTokenEstimate > 0 ? `${dynamicLabel}… · ~${liveTokenEstimate} tokens` : `${dynamicLabel}…`)
     : (liveTokenEstimate > 0 ? `Thinking… (~${liveTokenEstimate} tokens)` : 'Thinking…');
 
-  // Compact number formatter for the post-stream label — "2.4K" beats
-  // "2400" once token counts get large.
   const fmtTokens = (n: number) => {
     if (n >= 1000) {
       const k = n / 1000;
@@ -602,10 +531,7 @@ const ThinkingBubble: React.FC<{
     return String(n);
   };
 
-  // Duration formatter that rolls over at minute / hour boundaries so
-  // "Thought for 251s" reads as "Thought for 4m 11s" — same shape the
-  // header chip uses. Mirrors the AgentCard fmtSeconds helper but kept
-  // local so the bubble stays self-contained.
+  // 251s reads as "4m 11s". mirrors AgentCard's fmtSeconds.
   const fmtThoughtDuration = (sec: number) => {
     if (sec < 60) return `${sec}s`;
     const minutes = Math.floor(sec / 60);
@@ -618,31 +544,16 @@ const ThinkingBubble: React.FC<{
     return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
   };
 
-  // Post-stream label: "Thought for Ns · 32 tokens · 3 tools used".
-  // The reasoning-token count is the honest signal of how much thinking
-  // happened; tool count surfaces work done; duration surfaces wait time.
-  // We deliberately omit a separate "answer tokens" number — earlier
-  // experiments showed it confused users (it counted both visible reply
-  // text AND tool-call JSON arguments, making tool-heavy turns
-  // misleadingly look like long answers).
-  // Backend stamps `input_tokens` as the all-in input+output+children
-  // total (parent's primary call PLUS every subagent and tool MCP that
-  // booked usage on this turn). Falls back to just-output (finalTokens)
-  // for legacy thinking messages that predate the combined-total field.
+  // input_tokens is the full turn cost (parent + subagents + tool MCPs).
+  // legacy messages without it fall back to output-only.
   const combinedTotalTokens =
     persistedInputTokens != null && persistedInputTokens > 0
       ? persistedInputTokens
       : finalTokens;
-  // Input/output split shown in the breakdown tooltip on click. We
-  // already have `finalTokens` (server-stamped output side) and
-  // `combinedTotalTokens` (input + output + children sum). The
-  // implied "input + children" portion is the difference. When the
-  // backend hasn't separated them yet (legacy data), we still show
-  // the total but skip the breakdown.
+  // tooltip breakdown. legacy data without finalTokens shows total only.
   const tokenBreakdown = (() => {
     if (combinedTotalTokens == null || combinedTotalTokens <= 0) return null;
     if (finalTokens == null || finalTokens <= 0) {
-      // Total-only case (rare). No split available.
       return { total: combinedTotalTokens, output: null as number | null, input: null as number | null };
     }
     const inputSide = Math.max(0, combinedTotalTokens - finalTokens);
@@ -712,17 +623,9 @@ const ThinkingBubble: React.FC<{
     return segments;
   };
 
-  // Streaming gets a plain string label (the shimmer animation needs
-  // the text to flow through a single gradient mask, which only works
-  // on a flat string node). Post-stream uses the React-node renderer
-  // so the tokens segment can be wrapped in a Tooltip with the
-  // input/output breakdown.
+  // shimmer needs a flat string. post-stream uses nodes for the tooltip.
   const label: React.ReactNode = isStreaming ? activeLabel : renderPostStreamLabel();
 
-  // Shimmer colors — use a bright mid-tone against the muted base to make
-  // the sweep visible without being loud. The base color matches the
-  // static "Thought for Ns" state so the only visible change is the moving
-  // highlight band.
   const shimmerBase = c.text.tertiary;
   const shimmerHighlight = c.text.primary;
 
@@ -753,7 +656,6 @@ const ThinkingBubble: React.FC<{
             fontSize: '0.78rem',
             fontWeight: 500,
             ...(isStreaming ? {
-              // Moving gradient masked onto the text glyphs
               background: `linear-gradient(90deg, ${shimmerBase} 0%, ${shimmerBase} 40%, ${shimmerHighlight} 50%, ${shimmerBase} 60%, ${shimmerBase} 100%)`,
               backgroundSize: '200% 100%',
               WebkitBackgroundClip: 'text',
@@ -809,14 +711,7 @@ const ThinkingBubble: React.FC<{
   );
 };
 
-// Friendly explanation rendered in the expanded Thinking pill body when
-// the model thought but didn't return any reasoning text. Keeps the user
-// informed about *why* the panel is empty rather than leaving them
-// staring at a blank box. Three cases:
-//   1. Live-streaming, no text yet → "Reasoning..." with cursor
-//   2. Done, has reasoning tokens → explain that text isn't exposed by
-//      the upstream provider but the model spent N tokens / Ms thinking
-//   3. Done, no signal at all → say so honestly
+// fallback when the model thought but the provider didn't expose the text.
 const ProviderReasoningExplanation: React.FC<{
   isStreaming: boolean;
   tokens: number | null;
@@ -842,9 +737,6 @@ const ProviderReasoningExplanation: React.FC<{
     }
     return segs.join(' · ');
   })();
-  // Stable per-mount variant pick. Each render of the same bubble keeps
-  // its line; new bubbles get a fresh roll. Adds a touch of personality
-  // without becoming repetitive across the transcript.
   const variants = [
     "It's still thinking — we just aren't allowed to peek behind the curtain.",
     "Wheels are turning, but this provider keeps its thoughts private.",
@@ -869,8 +761,6 @@ interface Props {
   onSaveEdit?: (messageId: string, newContent: string) => void;
   onCancelEdit?: () => void;
   isStreaming?: boolean;
-  // Session's current aux-LLM turn label, if any. Only meaningful when
-  // this is the live-streaming thinking bubble; ignored otherwise.
   dynamicTurnLabel?: string | null;
 }
 
@@ -945,14 +835,10 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
     >{rawText}</ReactMarkdown>
   ), [rawText]);
 
-  // Detect friendly OpenSwarm / upstream errors and render a card instead of
-  // raw "API Error: ..." text. Checks both the wrapped format the Claude CLI
-  // uses ("API Error: NNN …") and the raw JSON body.
+  // upstream errors get a friendly card.
   const openswarmError = !isUser ? parseOpenSwarmError(rawText) : null;
 
-  // Fire subscription.rate_limit_hit exactly once per rate-limit error
-  // card mount. Dependency on (message.id, kind) ensures we don't re-fire
-  // on re-renders or content edits.
+  // fire once per cap card. (message.id, kind) keeps it from re-firing on edits.
   React.useEffect(() => {
     if (openswarmError?.kind === 'cap') {
       trackEvent('subscription.rate_limit_hit', { message_id: message.id });
@@ -981,8 +867,7 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
     ? content.slice(0, 200)
     : JSON.stringify(content).slice(0, 200);
 
-  // Optimistic-bubble visuals: dim the bubble until the server echoes it
-  // back (status: 'pending'), and tint it red on send failure.
+  // pending = dim, failed = red tint.
   const optimisticStatus = (message as any).optimistic_status as 'pending' | 'failed' | undefined;
   const isPending = optimisticStatus === 'pending';
   const isFailed = optimisticStatus === 'failed';
@@ -996,11 +881,7 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
         display: 'flex',
         justifyContent: isUser ? 'flex-end' : 'flex-start',
         my: 0.75,
-        // Layout-style containment: any reflow inside this bubble (text
-        // wrapping during streaming, tooltip popup, expand/collapse)
-        // doesn't propagate to siblings. Without this, every delta in
-        // a long assistant message reflowed the entire transcript.
-        // Browser support is universal in modern Chromium/WebKit.
+        // contain: reflow inside this bubble doesn't shake the transcript.
         contain: 'layout style',
       }}
     >
@@ -1015,9 +896,6 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
           py: 1.25,
           boxShadow: isUser ? 'none' : c.shadow.sm,
           overflow: 'hidden',
-          // Pending bubbles fade in at ~70% opacity until the server echo
-          // resolves them; failed bubbles get a soft red tint so the user
-          // can see the message didn't go through.
           opacity: isPending ? 0.7 : 1,
           transition: 'opacity 0.2s, border-color 0.2s',
         }}
@@ -1188,12 +1066,9 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
                       onClick={() => {
                         const api = (window as any).openswarm;
                         if (openswarmError.ctaAction === 'upgrade') {
-                          // Open the tier picker in a modal so the user can
-                          // choose Pro / Pro+ / Ultra + monthly/annual instead
-                          // of going directly to a hardcoded pro_plus checkout.
+                          // tier picker, not direct checkout.
                           setPickerOpen(true);
                         } else if (openswarmError.ctaAction === 'settings') {
-                          // Best-effort: dispatch a DOM event the Settings modal listens to
                           window.dispatchEvent(new CustomEvent('openswarm:open-settings', { detail: { tab: 'models' } }));
                         } else if (openswarmError.ctaAction === 'waitlist') {
                           const url = 'https://discord.com/channels/1486442924391796896/1486442927554170892';
