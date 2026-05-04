@@ -118,6 +118,7 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
   const expandNewChats = useAppSelector((state) => state.settings.data.expand_new_chats_in_dashboard);
   const autoRevealSubAgents = useAppSelector((state) => state.settings.data.auto_reveal_sub_agents);
   const outputs = useAppSelector((state) => state.outputs.items);
+  const outputsLoaded = useAppSelector((state) => state.outputs.loaded);
   const glowingAgentCards = useAppSelector((state) => state.dashboardLayout.glowingAgentCards);
   const glowingBrowserCards = useAppSelector((state) => state.dashboardLayout.glowingBrowserCards);
   // sessions is the top-level dict; useMemo on its identity so sessionList
@@ -553,7 +554,13 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
     const hasCards = Object.keys(allCards.cards).length > 0
       || Object.keys(allCards.viewCards).length > 0
       || Object.keys(allCards.browserCards).length > 0;
-    if (!hasCards) return;
+    if (!hasCards) {
+      // Empty dashboard — queue a thumbnail clear (sent on exit alongside
+      // the existing capture-update path). Backend treats '' as "set to
+      // empty"; null in PUT body means "don't update".
+      pendingThumbnailRef.current = '';
+      return;
+    }
     captureDashboardThumbnail(viewportEl, contentEl, allCards)
       .then((thumbnail) => { if (thumbnail) pendingThumbnailRef.current = thumbnail; })
       .catch(() => {});
@@ -573,7 +580,8 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
     const exitingId = dashboardId;
     return () => {
       const thumbnail = pendingThumbnailRef.current;
-      if (thumbnail) {
+      // null = no pending change; '' = pending clear; other = pending update.
+      if (thumbnail !== null) {
         store.dispatch(updateDashboardThumbnail({ id: exitingId, thumbnail }));
         pendingThumbnailRef.current = null;
       }
@@ -654,6 +662,18 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
     prevSessionIdsRef.current = liveIds;
     dispatch(reconcileSessions({ sessionIds: dashboardSessionIds, expandedSessionIds }));
   }, [sessions, layoutInitialized, dispatch, dashboardId, expandedSessionIds]);
+
+  // Prune orphan view cards whose underlying output was deleted (e.g. via
+  // the Views page). Without this, the layout entry persists in the
+  // minimap and contentBounds even though DashboardViewCard renders
+  // nothing. Gated on outputsLoaded so we don't wipe valid cards during
+  // the brief window between fetchLayout returning and outputs finishing.
+  useEffect(() => {
+    if (!layoutInitialized || !outputsLoaded) return;
+    for (const outputId of Object.keys(viewCards)) {
+      if (!outputs[outputId]) dispatch(removeViewCard(outputId));
+    }
+  }, [layoutInitialized, outputsLoaded, viewCards, outputs, dispatch]);
 
   // ---- Auto-reveal / collapse / unreveal sub-agent cards ----
   const autoRevealedRef = useRef(new Set<string>());
