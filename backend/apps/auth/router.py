@@ -78,7 +78,7 @@ def _sync_identity_to_service(settings_obj) -> None:
 
 class SigninActivateRequest(BaseModel):
     token: str
-    signin_method: Literal["google", "magic_link"]
+    signin_method: Literal["google"]
     email: Optional[str] = None
 
 
@@ -191,20 +191,39 @@ async def signout():
             # the cloud token is invalidated lazily on next use anyway.
             logger.warning("cloud signout failed (clearing local anyway): %s", e)
 
-    # Stop every running agent session BEFORE clearing local state. The
-    # next message in any tab will then re-launch the session, which
-    # re-reads settings (now empty) and re-spawns 9Router subprocesses
-    # with whatever the user re-signs-in with — or with own_key mode
-    # if they don't sign back in. Best-effort: failures here shouldn't
-    # block the sign-out itself.
+    # Stop every running agent session AND drop their cached SDK resume
+    # state BEFORE clearing local settings. Two failure modes this prevents:
+    #   1. A 9Router subprocess captured the now-revoked bearer at spawn
+    #      time and would 401 on the next /v1/messages call.
+    #   2. A session has an `sdk_session_id` from a conversation served by
+    #      the previous identity's Claude account; resuming against the new
+    #      bearer would 404 or 401 because the new account has no record
+    #      of that thread. Wiping it forces the SDK to start a fresh thread
+    #      on next send (transcript replay still works — only the SDK's
+    #      server-side resume cache is reset).
+    # Best-effort: failures here shouldn't block the sign-out itself.
     try:
         from backend.apps.agents.agent_manager import agent_manager
+        from backend.apps.agents.agent_manager import _save_session
+
         running = list(agent_manager.tasks.keys())
         for session_id in running:
             try:
                 await agent_manager.stop_agent(session_id)
             except Exception as e:
                 logger.warning("signout: stop_agent(%s) failed: %s", session_id, e)
+
+        # Walk every loaded session (running, stopped, persisted-but-resumed)
+        # and clear the SDK resume id so the next send starts a fresh thread
+        # under whichever identity the user re-signs-in with.
+        for sess in list(agent_manager.sessions.values()):
+            if sess.sdk_session_id:
+                sess.sdk_session_id = None
+                try:
+                    _save_session(sess.id, sess.model_dump(mode="json"))
+                except Exception as e:
+                    logger.warning("signout: save_session(%s) failed: %s", sess.id, e)
+
         if running:
             logger.info("signout: stopped %d in-flight agent session(s)", len(running))
     except Exception as e:

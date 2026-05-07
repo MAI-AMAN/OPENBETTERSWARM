@@ -4,9 +4,10 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useAppSelector } from '@/shared/hooks';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
-import { API_BASE } from '@/shared/config';
+import { API_BASE, OPENSWARM_DEFAULT_PROXY_URL } from '@/shared/config';
 import { report as _report } from '@/shared/serviceClient';
 import PlanPicker from '@/app/components/PlanPicker';
+import GoogleIcon from '@mui/icons-material/Google';
 
 // Email validation: format check + typo correction for common domains.
 // Real ownership verification is intentionally pushed downstream (mailing list /
@@ -143,7 +144,11 @@ const OnboardingModal: React.FC = () => {
   const c = useClaudeTokens();
   const settings = useAppSelector((s) => s.settings);
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<'profile' | 'walkthrough' | 'connect' | 'pricing'>('profile');
+  // v1.0.29: split the original "profile" step into two:
+  //   - signin: Google OAuth (gives us a verified email + user_id)
+  //   - about:  name, use case, referral source, with email shown read-only
+  // Existing flow (walkthrough → connect → pricing) is unchanged.
+  const [step, setStep] = useState<'signin' | 'about' | 'walkthrough' | 'connect' | 'pricing'>('signin');
   const [walkthroughIdx, setWalkthroughIdx] = useState(0);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
@@ -216,15 +221,46 @@ const OnboardingModal: React.FC = () => {
     check();
   }, []);
 
-  // Show once: if not previously dismissed
+  // Show once: if not previously dismissed. Pick the initial step based on
+  // whether the user is already signed in — a v1.0.28 user upgrading to
+  // v1.0.29 with `openswarm_onboarding_seen=true` won't see this modal at
+  // all, but a fresh install with no settings will start at signin. Edge
+  // case: if the user has a bearer (Stripe-paid) but no user_id (didn't
+  // sign in to v1.0.29 yet), we still start at signin to capture their
+  // email for analytics.
   useEffect(() => {
     const alreadySeen = localStorage.getItem('openswarm_onboarding_seen');
     if (alreadySeen === 'true') return;
     if (nineRouterReady === null) return; // still checking
 
     setOpen(true);
-    report('onboarding', 'started', { step: 'profile' });
+    const startStep: 'signin' | 'about' = settings.data.user_id ? 'about' : 'signin';
+    setStep(startStep);
+    if (startStep === 'about' && settings.data.user_email) {
+      // Pre-existing email from sign-in — no need to ask again.
+      setUserEmail(settings.data.user_email);
+    }
+    report('onboarding', 'started', { step: startStep });
+    // settings.data is intentionally not in deps — we only want to make this
+    // decision on first render. nineRouterReady transitions cause re-evaluation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nineRouterReady]);
+
+  // When the user completes sign-in mid-onboarding (browser-borne POST to
+  // /api/auth/signin-activate populates settings.user_id), advance from
+  // signin → about and pre-fill the email.
+  useEffect(() => {
+    if (!open) return;
+    if (step !== 'signin') return;
+    if (settings.data.user_id && settings.data.user_email) {
+      setUserEmail(settings.data.user_email);
+      report('onboarding', 'signin_completed', {
+        method: settings.data.signin_method ?? null,
+        first_signin: true,
+      });
+      setStep('about');
+    }
+  }, [open, step, settings.data.user_id, settings.data.user_email, settings.data.signin_method]);
 
   // Cleanup timers on unmount
   useEffect(() => {
@@ -240,6 +276,30 @@ const OnboardingModal: React.FC = () => {
   // who already had Pro (but cleared onboarding_seen) would see the modal
   // flash then immediately skip to the dashboard.
   const initialProActiveRef = useRef<boolean | null>(null);
+
+  // Re-baseline FIRST (declared before the auto-dismiss effect) so it runs
+  // before the auto-dismiss check on the same render commit. If the user
+  // signed in upstream as a Pro user, Pro is already active when they
+  // reach the connect/pricing step. Without re-baselining here, the
+  // auto-dismiss effect below would read the stale ref (false → still
+  // anonymous when modal opened), see Pro is active now, and fire a
+  // "you just paid via Stripe" auto-dismiss — even though they didn't
+  // pay via Stripe just now, they signed in 3 steps ago. That triggers
+  // a window.location.reload() that races the install-token bridge,
+  // resulting in a 401 cascade and the gate re-rendering as if they
+  // never signed in.
+  useEffect(() => {
+    if (!open) return;
+    if (step !== 'connect' && step !== 'pricing') return;
+    const mode = (settings.data as any).connection_mode;
+    const bearer = (settings.data as any).openswarm_bearer_token;
+    const isActive = mode === 'openswarm-pro' && !!bearer;
+    if (isActive) {
+      initialProActiveRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, step]);
+
   useEffect(() => {
     if (!open) { initialProActiveRef.current = null; return; }
     const mode = (settings.data as any).connection_mode;
@@ -249,13 +309,19 @@ const OnboardingModal: React.FC = () => {
       initialProActiveRef.current = isActive;
       return;
     }
-    if (!initialProActiveRef.current && isActive) {
+    // Auto-dismiss only fires for one specific case: user clicked Stripe
+    // checkout from the connect step, came back Pro-active. Two guards:
+    //   1. step must be connect or pricing
+    //   2. it must be a fresh transition — the re-baseline effect above
+    //      sets ref=true on entering connect/pricing if Pro was already
+    //      active, so this check only fires for genuine new activations.
+    if (!initialProActiveRef.current && isActive && (step === 'connect' || step === 'pricing')) {
       report('onboarding', 'openswarm_pro_activated');
       dismiss();
     }
     // dismiss is stable enough — don't include in deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, settings.data]);
+  }, [open, settings.data, step]);
 
   const dismiss = async () => {
     localStorage.setItem('openswarm_onboarding_seen', 'true');
@@ -278,9 +344,14 @@ const OnboardingModal: React.FC = () => {
             report('onboarding', 'completed', { dashboard_id: dashboard.id });
             localStorage.setItem('openswarm_walkthrough_pending', 'true');
             setOpen(false);
-            // Force full page load to ensure dashboard mounts fresh with walkthrough
-            window.location.href = `${window.location.pathname}${window.location.search}#/dashboard/${dashboard.id}`;
-            window.location.reload();
+            // Soft navigation via the hash router — NO window.location.reload().
+            // The reload was historically here to "ensure the dashboard mounts
+            // fresh with walkthrough", but it raced the install-token bridge
+            // and caused every post-onboarding request to 401. The walkthrough
+            // reads `openswarm_walkthrough_pending` from localStorage on its
+            // next mount, which happens naturally when HashRouter routes to
+            // the new dashboard URL.
+            window.location.hash = `#/dashboard/${dashboard.id}`;
             return;
           }
         }
@@ -292,7 +363,11 @@ const OnboardingModal: React.FC = () => {
     setOpen(false);
   };
 
-  // Actually persist profile + advance to connect step.
+  // Actually persist profile + advance to walkthrough step.
+  // v1.0.29: email is no longer collected here — it's already on
+  // settings.user_email from the signin step (verified by Google or
+  // magic-link). We persist user_email anyway for backwards compatibility
+  // with code that reads settings.user_email directly.
   const submitProfile = async () => {
     try {
       const r = await fetch(`${API_BASE}/settings`);
@@ -305,21 +380,23 @@ const OnboardingModal: React.FC = () => {
         referralSource === 'Other' && referralSourceOther.trim()
           ? `Other: ${referralSourceOther.trim()}`
           : referralSource;
+      const trimmedEmail = userEmail.trim() || currentSettings.user_email || null;
       await fetch(`${API_BASE}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...currentSettings,
           user_name: userName.trim() || null,
-          user_email: userEmail.trim() || null,
+          user_email: trimmedEmail,
           user_use_case: resolvedUseCases.length > 0 ? resolvedUseCases.join(', ') : null,
           user_referral_source: resolvedReferralSource || null,
         }),
       });
     } catch {}
-    report('onboarding', 'profile_submitted', {
+    // Email intentionally NOT included in payload — it's already on the
+    // Person record via the cloud's $identify capture during sign-in.
+    report('onboarding', 'about_submitted', {
       has_name: !!userName.trim(),
-      has_email: !!userEmail.trim(),
       use_cases: useCases,
       use_cases_count: useCases.length,
       use_case_other: useCases.includes('Other') ? useCaseOther.trim() : '',
@@ -329,6 +406,30 @@ const OnboardingModal: React.FC = () => {
     setStep('walkthrough');
     setWalkthroughIdx(0);
     report('onboarding', 'education_started');
+  };
+
+  // Sign-in step handler. Opens an external browser to the cloud's Google
+  // OAuth start URL. When the user completes consent, the cloud serves a
+  // bearer-handoff page that POSTs to /api/auth/signin-activate on this
+  // local backend, which writes settings.user_id. The effect above watches
+  // settings and auto-advances to the about step.
+  const proxyUrl = (settings.data as any).openswarm_proxy_url || OPENSWARM_DEFAULT_PROXY_URL;
+  const installId = (settings.data as any).installation_id ?? '';
+
+  const startGoogleSignin = () => {
+    report('onboarding', 'signin_method_selected', { method: 'google' });
+    // Pass local_port so the cloud's bearer-handoff page targets this
+    // exact backend port (Electron may have picked anything in 8324..8424).
+    const localPort = (window as any).__OPENSWARM_PORT__ || 8324;
+    const params = new URLSearchParams({
+      install_id: installId,
+      local_port: String(localPort),
+    });
+    const startUrl = (proxyUrl as string).replace(/\/$/, '') +
+      '/api/auth/google/start?' + params.toString();
+    const api = (window as any).openswarm;
+    if (api?.openExternal) api.openExternal(startUrl);
+    else window.open(startUrl, '_blank');
   };
 
   // 500ms debounce on Next/Back during the video walkthrough. The video
@@ -361,12 +462,11 @@ const OnboardingModal: React.FC = () => {
     setWalkthroughIdx((i) => Math.max(0, i - 1));
   };
 
-  // Whether all required profile fields are filled in.
-  const isProfileComplete = (() => {
+  // Whether all required "about" fields are filled in. v1.0.29: email is
+  // no longer required here — it comes from sign-in.
+  const isAboutComplete = (() => {
     const trimmedName = userName.trim();
-    const trimmedEmail = userEmail.trim();
     if (!trimmedName) return false;
-    if (!trimmedEmail || !isValidEmail(trimmedEmail)) return false;
     if (useCases.length === 0) return false;
     if (useCases.includes('Other') && !useCaseOther.trim()) return false;
     if (!referralSource) return false;
@@ -374,16 +474,9 @@ const OnboardingModal: React.FC = () => {
     return true;
   })();
 
-  // Continue: gate on full profile completion, then submit.
-  const handleProfileContinue = async () => {
-    const trimmed = userEmail.trim();
-    // Invalid format with non-empty value — refuse and force error state.
-    if (trimmed && !isValidEmail(trimmed)) {
-      setEmailBlurred(true);
-      report('onboarding', 'email_invalid_blocked', { value_length: trimmed.length });
-      return;
-    }
-    if (!isProfileComplete) return;
+  // Continue: gate on full about-step completion, then submit.
+  const handleAboutContinue = async () => {
+    if (!isAboutComplete) return;
     submitProfile();
   };
 
@@ -618,7 +711,11 @@ const OnboardingModal: React.FC = () => {
 
   const handleApiKey = () => { report('onboarding', 'api_key_chosen'); dismiss(); };
   const handleSkip = () => {
-    report('onboarding', step === 'profile' ? 'profile_skipped' : 'connect_skipped');
+    const action =
+      step === 'signin' ? 'signin_skipped' :
+      step === 'about' ? 'about_skipped' :
+      'connect_skipped';
+    report('onboarding', action);
     dismiss();
   };
 
@@ -640,13 +737,60 @@ const OnboardingModal: React.FC = () => {
           </Typography>
         )}
 
-        {step === 'profile' ? (
+        {step === 'signin' ? (
+          <>
+            <Typography sx={{ fontSize: '0.88rem', color: c.text.muted, mb: 2.5, textAlign: 'center' }}>
+              Sign in to sync your settings and back up your data
+            </Typography>
+
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2 }}>
+              <Button
+                fullWidth
+                variant="contained"
+                size="large"
+                startIcon={<GoogleIcon />}
+                onClick={startGoogleSignin}
+                sx={{
+                  py: 1.2,
+                  backgroundColor: c.text.primary,
+                  color: c.text.inverse,
+                  textTransform: 'none',
+                  fontSize: '0.95rem',
+                  fontWeight: 500,
+                  borderRadius: `${c.radius.md}px`,
+                  '&:hover': { backgroundColor: c.text.primary, opacity: 0.9 },
+                }}
+              >
+                Continue with Google
+              </Button>
+            </Box>
+
+            {/* Sign-in is mandatory — no skip link. The user must complete
+                Google auth to advance to the about step. */}
+          </>
+        ) : step === 'about' ? (
           <>
             <Typography sx={{ fontSize: '0.88rem', color: c.text.muted, mb: 2.5, textAlign: 'center' }}>
               Tell us a bit about yourself
             </Typography>
 
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2.5 }}>
+              {userEmail && (
+                <Box
+                  sx={{
+                    px: 1.5, py: 1,
+                    borderRadius: `${c.radius.md}px`,
+                    border: `1px solid ${c.status.success}40`,
+                    bgcolor: `${c.status.success}10`,
+                    display: 'flex', alignItems: 'center', gap: 1,
+                  }}
+                >
+                  <CheckCircleIcon sx={{ fontSize: 16, color: c.status.success }} />
+                  <Typography sx={{ fontSize: '0.82rem', color: c.text.secondary }}>
+                    Signed in as <strong style={{ color: c.text.primary }}>{userEmail}</strong>
+                  </Typography>
+                </Box>
+              )}
               <TextField
                 placeholder="Your name"
                 value={userName}
@@ -665,67 +809,6 @@ const OnboardingModal: React.FC = () => {
                   '& .MuiOutlinedInput-input::placeholder': { color: c.text.ghost, opacity: 1 },
                 }}
               />
-              {(() => {
-                const trimmed = userEmail.trim();
-                const valid = trimmed.length > 0 && isValidEmail(trimmed);
-                const showError = emailBlurred && trimmed.length > 0 && !valid;
-                const suggestion = valid ? getEmailSuggestion(trimmed) : null;
-                return (
-                  <Box>
-                    <TextField
-                      placeholder="Email address"
-                      type="email"
-                      value={userEmail}
-                      onChange={(e) => setUserEmail(e.target.value)}
-                      onBlur={() => setEmailBlurred(true)}
-                      error={showError}
-                      size="small"
-                      fullWidth
-                      InputProps={{
-                        endAdornment: valid ? (
-                          <InputAdornment position="end">
-                            <CheckCircleIcon sx={{ fontSize: 16, color: c.status.success }} />
-                          </InputAdornment>
-                        ) : undefined,
-                      }}
-                      sx={{
-                        '& .MuiOutlinedInput-root': {
-                          fontSize: '0.92rem',
-                          color: c.text.primary,
-                          borderRadius: `${c.radius.md}px`,
-                          '& fieldset': { borderColor: showError ? c.status.error : c.border.subtle },
-                          '&:hover fieldset': { borderColor: showError ? c.status.error : c.border.medium },
-                          '&.Mui-focused fieldset': { borderColor: showError ? c.status.error : c.accent.primary },
-                        },
-                        '& .MuiOutlinedInput-input::placeholder': { color: c.text.ghost, opacity: 1 },
-                      }}
-                    />
-                    {showError && (
-                      <Typography sx={{ fontSize: '0.78rem', color: c.status.error, mt: 0.4, ml: 0.5 }}>
-                        That doesn't look like a valid email address
-                      </Typography>
-                    )}
-                    {suggestion && (
-                      <Typography sx={{ fontSize: '0.78rem', color: c.text.muted, mt: 0.4, ml: 0.5 }}>
-                        Did you mean{' '}
-                        <Box
-                          component="span"
-                          onClick={() => handleApplySuggestion(suggestion)}
-                          sx={{
-                            color: c.accent.primary,
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            '&:hover': { textDecoration: 'underline' },
-                          }}
-                        >
-                          {suggestion}
-                        </Box>
-                        ?
-                      </Typography>
-                    )}
-                  </Box>
-                );
-              })()}
 
               <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: c.text.tertiary, textTransform: 'uppercase', letterSpacing: '0.08em', mt: 0.5 }}>
                 What will you use OpenSwarm for?
@@ -821,9 +904,9 @@ const OnboardingModal: React.FC = () => {
             </Box>
 
             <Button
-              onClick={handleProfileContinue}
+              onClick={handleAboutContinue}
               fullWidth
-              disabled={!isProfileComplete}
+              disabled={!isAboutComplete}
               sx={{
                 textTransform: 'none', fontSize: '0.92rem', fontWeight: 600,
                 bgcolor: c.accent.primary, color: '#fff',

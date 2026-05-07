@@ -47,11 +47,13 @@ export function useDeepLink(): void {
         const expires = url.searchParams.get('expires');
 
         if (isSignin) {
-          const signinMethod: 'google' | 'magic_link' =
-            signinMethodRaw === 'magic_link' ? 'magic_link' : 'google';
-          report('signin', 'deep_link_received', { method: signinMethod });
+          // v1.0.29 only supports Google sign-in. signinMethodRaw is read
+          // for forward compatibility / analytics if other methods are
+          // added later.
+          void signinMethodRaw;
+          report('signin', 'deep_link_received', { method: 'google' });
 
-          dispatch(activateSignin({ token, signin_method: signinMethod, email }))
+          dispatch(activateSignin({ token, signin_method: 'google', email }))
             .unwrap()
             .then((res) => {
               report('signin', 'activated', { method: res.signin_method, plan: res.plan });

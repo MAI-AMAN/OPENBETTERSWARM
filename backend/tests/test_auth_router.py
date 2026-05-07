@@ -89,7 +89,7 @@ def test_signin_activate_paid_user_flips_pro_mode(client, reset_settings):
         "email": "paid@example.com",
         "plan": "pro",
         "expires": "2027-01-01T00:00:00.000Z",
-        "signin_method": "magic_link",
+        "signin_method": "google",
     }
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
@@ -99,7 +99,7 @@ def test_signin_activate_paid_user_flips_pro_mode(client, reset_settings):
             "/api/auth/signin-activate",
             json={
                 "token": "fake-paid-bearer-abcdef0123456789",
-                "signin_method": "magic_link",
+                "signin_method": "google",
             },
         )
     assert r.status_code == 200
@@ -228,7 +228,7 @@ def test_signout_clears_local_identity(client, reset_settings):
     s = load_settings()
     s.user_id = "u-bye"
     s.user_email = "bye@example.com"
-    s.signin_method = "magic_link"
+    s.signin_method = "google"
     s.openswarm_bearer_token = "bearer-to-revoke-xxxxxxxx"
     s.connection_mode = "openswarm-pro"
     _save_settings(s)

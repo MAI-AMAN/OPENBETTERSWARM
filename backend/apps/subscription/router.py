@@ -36,14 +36,22 @@ def _proxy_url() -> str:
     return url.rstrip("/")
 
 
-async def _clear_subscription(settings_obj) -> None:
-    """Revert to own_key mode and drop all OpenSwarm Pro state. Used by the
-    explicit /disconnect endpoint and by /status when the cloud reports the
-    bearer as revoked (401) or the subscription as past its grace period
-    (402) — so a canceled/expired user flips back to BYO routing cleanly
-    instead of hammering a dead token."""
+async def _clear_subscription(settings_obj, *, drop_bearer: bool = True) -> None:
+    """Revert to own_key mode and drop OpenSwarm Pro routing state.
+
+    `drop_bearer=True` (the default) is the original behavior, used when the
+    cloud reports the bearer as revoked (401) or the subscription as past its
+    grace period (402) — the bearer is dead so we have to clear it.
+
+    `drop_bearer=False` is used by the explicit user-initiated /disconnect
+    endpoint: the bearer still authenticates the user's account at api.me
+    (Settings/AccountCard, future profile endpoints), they just don't want
+    /v1/messages routed through OpenSwarm Pro anymore. Without this branch
+    the AccountCard would say "signed in as alice@..." while the backend
+    bearer was gone, surfacing as 401s on every cloud call."""
     settings_obj.connection_mode = "own_key"
-    settings_obj.openswarm_bearer_token = None
+    if drop_bearer:
+        settings_obj.openswarm_bearer_token = None
     settings_obj.openswarm_subscription_plan = None
     settings_obj.openswarm_subscription_expires = None
     settings_obj.openswarm_usage_cached = None
@@ -328,8 +336,10 @@ async def portal():
 
 @subscription.router.post("/disconnect")
 async def disconnect():
-    """Clears local bearer + reverts to own_key mode. Does NOT cancel the
-    Stripe subscription (use the portal for that). Useful when a user wants
-    to temporarily route through their own API key."""
-    await _clear_subscription(load_settings())
+    """Reverts to own_key routing mode while keeping the user signed in.
+    Does NOT cancel the Stripe subscription (use the portal for that) and
+    does NOT sign the user out of OpenSwarm (use /api/auth/signout for that).
+    Useful when a user wants to temporarily route through their own API key
+    without losing their account state."""
+    await _clear_subscription(load_settings(), drop_bearer=False)
     return {"ok": True}

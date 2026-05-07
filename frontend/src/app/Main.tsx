@@ -243,6 +243,18 @@ const SignInGateLoader: React.FC<{ children: React.ReactNode }> = ({ children })
   // a still-valid Stripe bearer (paid user upgrading from v1.0.29).
   const alreadySignedIn = Boolean(settings.user_id || settings.openswarm_bearer_token);
 
+  // First-time-installs run sign-in INSIDE OnboardingModal as step 1 — we
+  // don't want a separate gate competing with the onboarding flow. The
+  // gate is only for *post-onboarding* signed-out users (e.g. they signed
+  // out from Settings, or they're an existing v1.0.28 user upgrading to
+  // v1.0.29 and never went through onboarding because openswarm_onboarding_seen
+  // was already true). In both of those cases SignInGate is the right UI.
+  const onboardingSeen = (() => {
+    try { return window.localStorage.getItem('openswarm_onboarding_seen') === 'true'; }
+    catch { return false; }
+  })();
+  const deferToOnboarding = !onboardingSeen;
+
   useEffect(() => {
     if (!settingsLoaded) return;
     if (alreadySignedIn) {
@@ -288,6 +300,11 @@ const SignInGateLoader: React.FC<{ children: React.ReactNode }> = ({ children })
 
   if (!settingsLoaded || !status) return null;
   if (status.authed) return <>{children}</>;
+
+  // Onboarding hasn't completed yet — let OnboardingModal handle sign-in.
+  // Render children so OnboardingModal (mounted as a sibling) can paint
+  // over them with its own modal.
+  if (deferToOnboarding) return <>{children}</>;
 
   const skipActive = !status.hard_gate && Date.now() < skipTs;
   if (skipActive) return <>{children}</>;

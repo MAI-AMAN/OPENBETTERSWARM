@@ -62,12 +62,12 @@ export interface AppSettings {
   openswarm_subscription_plan?: string | null;
   openswarm_subscription_expires?: string | null;
   openswarm_usage_cached?: SubscriptionUsage | null;
-  // Identity (v1.0.29+). Populated after a successful Google OAuth or
-  // magic-link sign-in via /api/auth/signin-activate. Stripe checkout also
-  // populates these because the cloud's bearer-mint always returns user info.
+  // Identity (v1.0.29+). Populated after a successful Google sign-in via
+  // /api/auth/signin-activate. Stripe checkout also populates these because
+  // the cloud's bearer-mint always returns user info.
   user_id?: string | null;
   user_email?: string | null;
-  signin_method?: 'google' | 'magic_link' | 'stripe' | null;
+  signin_method?: 'google' | 'stripe' | null;
   // Anonymous device identifier. Generated locally on first run, persists
   // across launches. Used to bind cloud OAuth flows to this install and to
   // stitch anonymous → authenticated PostHog Persons after sign-in.
@@ -82,7 +82,7 @@ export interface ActivateSubscriptionPayload {
 
 export interface ActivateSigninPayload {
   token: string;
-  signin_method: 'google' | 'magic_link';
+  signin_method: 'google';
   email?: string | null;
 }
 
@@ -201,7 +201,7 @@ export const activateSignin = createAsyncThunk(
       user_id: string;
       email: string;
       plan: string;
-      signin_method: 'google' | 'magic_link';
+      signin_method: 'google';
     };
   },
 );

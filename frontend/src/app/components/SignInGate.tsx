@@ -1,36 +1,30 @@
-// Sign-in gate. Shown at first launch (and to existing users past their
-// soft-gate grace window) before any other UI mounts. Two paths:
+// Sign-in gate. Shown post-onboarding to users without an active identity:
+//   - User signed out from Settings, gate appears so they can sign back in.
+//   - Existing v1.0.28 user upgrading to v1.0.29 with no user_id yet (the
+//     soft-gate grace window applies; see SignInGateLoader in Main.tsx).
 //
-//   1. "Continue with Google" → shell.openExternal opens the cloud's
-//      /api/auth/google/start in the system browser. Cloud handles the
-//      Google round-trip and serves a bearer-handoff page that POSTs the
-//      token directly to the local backend (same pattern as Stripe).
+// Fresh first-launch users go through OnboardingModal instead — its first
+// step is sign-in, this gate stays hidden in that path.
 //
-//   2. "Send magic link" → POST /api/auth/email/start to the cloud (proxied
-//      through the local backend so the renderer doesn't need cloud URL).
-//      User clicks link in email, cloud verifies + serves the same
-//      bearer-handoff page.
-//
-// Either way, after the bearer lands, settings.user_id flips to non-null
-// and the gate self-dismisses (driven by SignInGateLoader).
+// Path: "Continue with Google" → shell.openExternal opens the cloud's
+// /api/auth/google/start. Cloud handles the round-trip and serves a
+// bearer-handoff page that POSTs the bearer to the local backend's
+// /api/auth/signin-activate. After the bearer lands, settings.user_id
+// flips non-null and the gate self-dismisses (SignInGateLoader's poll
+// picks up the change within ~2s).
 
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Box,
   Typography,
   Modal,
   Button,
-  TextField,
-  CircularProgress,
-  Divider,
   Link,
 } from '@mui/material';
 import GoogleIcon from '@mui/icons-material/Google';
-import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { useAppSelector } from '@/shared/hooks';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
-import { API_BASE, OPENSWARM_DEFAULT_PROXY_URL } from '@/shared/config';
+import { OPENSWARM_DEFAULT_PROXY_URL } from '@/shared/config';
 import { report } from '@/shared/serviceClient';
 
 interface SignInGateProps {
@@ -39,8 +33,6 @@ interface SignInGateProps {
   onSkip?: () => void;
 }
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-
 export default function SignInGate({ softGate, onSkip }: SignInGateProps): JSX.Element {
   const tokens = useClaudeTokens();
   const proxyUrl = useAppSelector(
@@ -48,72 +40,25 @@ export default function SignInGate({ softGate, onSkip }: SignInGateProps): JSX.E
   );
   const installId = useAppSelector((s) => s.settings.data.installation_id ?? '');
 
-  const [emailMode, setEmailMode] = useState(false);
-  const [email, setEmail] = useState('');
-  const [emailErr, setEmailErr] = useState<string | null>(null);
-  const [emailSent, setEmailSent] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [resendCooldown, setResendCooldown] = useState(0);
-
-  const onGoogle = async () => {
+  const onGoogle = () => {
     report('signin', 'google_clicked');
+    // Pass local_port so the cloud's bearer-handoff page POSTs to this
+    // exact backend port. Without it, the page falls back to probing
+    // 8324..8328 — which fails for users whose machines have those ports
+    // occupied (Electron picks the first free port in 8324..8424).
+    const localPort = (window as any).__OPENSWARM_PORT__ || 8324;
+    const params = new URLSearchParams({
+      install_id: installId,
+      local_port: String(localPort),
+    });
     const startUrl =
       proxyUrl.replace(/\/$/, '') +
-      '/api/auth/google/start?install_id=' +
-      encodeURIComponent(installId);
+      '/api/auth/google/start?' + params.toString();
     const api = (window as any).openswarm;
     if (api?.openExternal) {
       api.openExternal(startUrl);
     } else {
       window.open(startUrl, '_blank');
-    }
-  };
-
-  const onSendMagicLink = async () => {
-    const trimmed = email.trim();
-    if (!EMAIL_REGEX.test(trimmed)) {
-      setEmailErr('That doesn’t look like an email address.');
-      return;
-    }
-    setEmailErr(null);
-    setSending(true);
-    report('signin', 'magic_link_requested');
-    try {
-      // Local backend proxies to cloud /api/auth/email/start. The local
-      // proxy doesn't exist yet — we POST directly to the cloud here. If
-      // your install has openswarm_proxy_url overridden (staging), it'll
-      // hit the right host.
-      const url = proxyUrl.replace(/\/$/, '') + '/api/auth/email/start';
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: trimmed, install_id: installId }),
-      });
-      // Cloud always returns 200 even if rate-limited (no enumeration
-      // leak). We mirror that here — show success regardless. If a real
-      // delivery failure is happening it's in the cloud's logs, not user-
-      // visible.
-      if (r.ok || r.status === 200) {
-        setEmailSent(true);
-        setResendCooldown(30);
-        const t = setInterval(() => {
-          setResendCooldown((n) => {
-            if (n <= 1) {
-              clearInterval(t);
-              return 0;
-            }
-            return n - 1;
-          });
-        }, 1000);
-      } else {
-        setEmailErr('Could not send the link. Try again in a moment.');
-        report('signin', 'magic_link_failed', { status: r.status });
-      }
-    } catch (e) {
-      setEmailErr('Network error. Check your connection and try again.');
-      report('signin', 'magic_link_failed', { error: String(e).slice(0, 120) });
-    } finally {
-      setSending(false);
     }
   };
 
@@ -139,151 +84,39 @@ export default function SignInGate({ softGate, onSkip }: SignInGateProps): JSX.E
           outline: 'none',
         }}
       >
-        {!emailSent ? (
-          <>
-            <Typography
-              variant="h5"
-              sx={{ fontFamily: '"Charter", Georgia, serif', fontWeight: 500, mb: 1 }}
-            >
-              Sign in to OpenSwarm
-            </Typography>
-            <Typography
-              variant="body2"
-              sx={{ color: tokens.text.muted, mb: 3, lineHeight: 1.5 }}
-            >
-              Sign in lets us sync your settings, back up your data, and stay in touch about updates.
-            </Typography>
+        <Typography
+          variant="h5"
+          sx={{ fontFamily: '"Charter", Georgia, serif', fontWeight: 500, mb: 1 }}
+        >
+          Sign in to OpenSwarm
+        </Typography>
+        <Typography
+          variant="body2"
+          sx={{ color: tokens.text.muted, mb: 3, lineHeight: 1.5 }}
+        >
+          Sign in lets us sync your settings and back up your data.
+        </Typography>
 
-            {!emailMode ? (
-              <>
-                <Button
-                  fullWidth
-                  variant="contained"
-                  size="large"
-                  startIcon={<GoogleIcon />}
-                  onClick={onGoogle}
-                  sx={{
-                    py: 1.4,
-                    backgroundColor: tokens.text.primary,
-                    color: tokens.text.inverse,
-                    textTransform: 'none',
-                    fontSize: 15,
-                    fontWeight: 500,
-                    '&:hover': { backgroundColor: tokens.text.primary, opacity: 0.9 },
-                  }}
-                >
-                  Continue with Google
-                </Button>
+        <Button
+          fullWidth
+          variant="contained"
+          size="large"
+          startIcon={<GoogleIcon />}
+          onClick={onGoogle}
+          sx={{
+            py: 1.4,
+            backgroundColor: tokens.text.primary,
+            color: tokens.text.inverse,
+            textTransform: 'none',
+            fontSize: 15,
+            fontWeight: 500,
+            '&:hover': { backgroundColor: tokens.text.primary, opacity: 0.9 },
+          }}
+        >
+          Continue with Google
+        </Button>
 
-                <Divider sx={{ my: 2.5, color: tokens.text.muted, fontSize: 12 }}>or</Divider>
-
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  size="large"
-                  startIcon={<EmailOutlinedIcon />}
-                  onClick={() => {
-                    setEmailMode(true);
-                    report('signin', 'email_mode_opened');
-                  }}
-                  sx={{
-                    py: 1.4,
-                    borderColor: tokens.border.subtle,
-                    color: tokens.text.primary,
-                    textTransform: 'none',
-                    fontSize: 15,
-                    fontWeight: 500,
-                    '&:hover': { borderColor: tokens.text.primary, backgroundColor: 'transparent' },
-                  }}
-                >
-                  Continue with email
-                </Button>
-              </>
-            ) : (
-              <>
-                <TextField
-                  fullWidth
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    setEmailErr(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !sending) onSendMagicLink();
-                  }}
-                  error={Boolean(emailErr)}
-                  helperText={emailErr ?? ' '}
-                  autoFocus
-                  disabled={sending}
-                  sx={{ mb: 1 }}
-                />
-                <Button
-                  fullWidth
-                  variant="contained"
-                  size="large"
-                  onClick={onSendMagicLink}
-                  disabled={sending || !email.trim()}
-                  sx={{
-                    py: 1.4,
-                    backgroundColor: tokens.text.primary,
-                    color: tokens.text.inverse,
-                    textTransform: 'none',
-                    fontSize: 15,
-                    fontWeight: 500,
-                    '&:hover': { backgroundColor: tokens.text.primary, opacity: 0.9 },
-                  }}
-                >
-                  {sending ? <CircularProgress size={20} sx={{ color: tokens.bg.surface }} /> : 'Send sign-in link'}
-                </Button>
-                <Box sx={{ mt: 1.5 }}>
-                  <Link
-                    component="button"
-                    onClick={() => {
-                      setEmailMode(false);
-                      setEmail('');
-                      setEmailErr(null);
-                    }}
-                    sx={{ fontSize: 13, color: tokens.text.muted, textDecoration: 'none' }}
-                  >
-                    Back
-                  </Link>
-                </Box>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <CheckCircleIcon sx={{ fontSize: 40, color: '#22c55e', mb: 1 }} />
-            <Typography
-              variant="h6"
-              sx={{ fontFamily: '"Charter", Georgia, serif', fontWeight: 500, mb: 1 }}
-            >
-              Check your inbox
-            </Typography>
-            <Typography
-              variant="body2"
-              sx={{ color: tokens.text.muted, mb: 3, lineHeight: 1.5 }}
-            >
-              We sent a sign-in link to <strong style={{ color: tokens.text.primary }}>{email}</strong>. Click it within 15 minutes to finish signing in. The link will open OpenSwarm automatically.
-            </Typography>
-            <Button
-              fullWidth
-              variant="text"
-              disabled={resendCooldown > 0 || sending}
-              onClick={() => {
-                setEmailSent(false);
-                onSendMagicLink();
-              }}
-              sx={{ color: tokens.text.muted, textTransform: 'none', fontSize: 13 }}
-            >
-              {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Didn't get it? Resend"}
-            </Button>
-          </>
-        )}
-
-        {softGate && onSkip && !emailSent && (
+        {softGate && onSkip && (
           <Box sx={{ mt: 3, pt: 2, borderTop: `1px solid ${tokens.border.subtle}` }}>
             <Link
               component="button"

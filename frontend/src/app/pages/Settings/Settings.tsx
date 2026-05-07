@@ -219,7 +219,6 @@ const AccountCard: React.FC = () => {
   const methodLabel = (() => {
     switch (signinMethod) {
       case 'google': return 'Signed in with Google';
-      case 'magic_link': return 'Signed in via email link';
       case 'stripe': return 'Signed in via Stripe checkout';
       default: return null;
     }
@@ -237,7 +236,14 @@ const AccountCard: React.FC = () => {
   };
 
   const onSignIn = () => {
-    const startUrl = proxyUrl.replace(/\/$/, '') + '/api/auth/google/start?install_id=' + encodeURIComponent(installId);
+    // Pass local_port so the bearer-handoff page POSTs to the right
+    // backend port (Electron may bind anything in 8324..8424).
+    const localPort = (window as any).__OPENSWARM_PORT__ || 8324;
+    const params = new URLSearchParams({
+      install_id: installId,
+      local_port: String(localPort),
+    });
+    const startUrl = proxyUrl.replace(/\/$/, '') + '/api/auth/google/start?' + params.toString();
     const api = (window as any).openswarm;
     if (api?.openExternal) api.openExternal(startUrl);
     else window.open(startUrl, '_blank');
