@@ -31,6 +31,13 @@ export const step06: OnboardingStep = {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.elementSelectionToggle },
     },
+    // Same auto-fit as step 5: the new orchestrator chat triggers
+    // Dashboard's autoFocusSessionId, which often pushes the older
+    // research card off-screen. Click fit-to-view first so both cards
+    // are visible together for the drag-select demo.
+    { kind: 'move_to', target: S.canvasFitToView },
+    { kind: 'click', target: S.canvasFitToView, simulate: true },
+    { kind: 'delay', ms: 350 },
     { kind: 'drag_select', target: 'agent-card' },
     {
       kind: 'popup',

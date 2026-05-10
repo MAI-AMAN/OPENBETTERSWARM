@@ -28,6 +28,17 @@ export const step05: OnboardingStep = {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.elementSelectionToggle },
     },
+    // Auto-fit the canvas before the drag-select demo so BOTH the new
+    // chat card AND the browser card are visible together. Without
+    // this, Dashboard's autoFocusSessionId pans the camera to center
+    // the freshly-created chat, which often clips the browser card half
+    // off-screen — and the user gets confused trying to drag-select
+    // something they can barely see. simulate:true clicks the
+    // fit-to-view toolbar button programmatically; user sees the
+    // camera resnap to a clean view in ~300ms before the drag demo.
+    { kind: 'move_to', target: S.canvasFitToView },
+    { kind: 'click', target: S.canvasFitToView, simulate: true },
+    { kind: 'delay', ms: 350 },
     // AC demonstrates the drag-select on the browser card, then asks the
     // user to do the same gesture for real (the actual product wires up
     // the selection during a real mouse drag).

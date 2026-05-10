@@ -251,7 +251,18 @@ const settingsSlice = createSlice({
       .addCase(fetchSettings.fulfilled, (state, action) => {
         state.loading = false;
         state.loaded = true;
-        state.data = action.payload;
+        // Belt-and-suspenders: skip the assignment when the payload is
+        // byte-identical to what we already have. The SignInGate's 2s poll
+        // would otherwise flip the `state.data` reference on every tick,
+        // re-running every effect that depends on `s.settings.data` —
+        // including form-sync useEffects elsewhere in the tree. Cheap on
+        // a small object, prevents an entire class of "polling wipes my
+        // form" bugs without needing every consumer to be defensive.
+        const next = JSON.stringify(action.payload);
+        const prev = JSON.stringify(state.data);
+        if (next !== prev) {
+          state.data = action.payload;
+        }
       })
       .addCase(fetchSettings.rejected, (state) => {
         state.loading = false;

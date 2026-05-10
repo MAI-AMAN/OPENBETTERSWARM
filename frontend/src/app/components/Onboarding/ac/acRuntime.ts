@@ -282,30 +282,45 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       const offX = op.offset?.x ?? 0;
       const offY = op.offset?.y ?? 0;
       const TITLE_BAR_BOTTOM = 38;
-      const looksDegenerate = (rr: DOMRect, y: number): boolean =>
+      // "Truly broken" rect = zero size or pinned in title bar. NOT
+      // "below viewport" — that just means a smooth-scroll is still in
+      // progress. Treating below-viewport as degenerate caused step 2
+      // to abort with the recovery message every time the YouTube row
+      // was below the fold and AC had to scroll-then-pin.
+      const isBroken = (rr: DOMRect, y: number): boolean =>
         y < TITLE_BAR_BOTTOM ||
-        y > window.innerHeight ||
         rr.width === 0 ||
         rr.height === 0;
+      // Off-viewport but valid — element exists, scroll just hasn't
+      // landed it yet. Worth waiting through, not an abort condition.
+      const isOffViewport = (y: number): boolean =>
+        y > window.innerHeight || y < 0;
       let r = el.getBoundingClientRect();
       let cx = r.left + r.width / 2 + offX;
       let cy = r.top + r.height / 2 + offY;
-      if (scrolled || looksDegenerate(r, cy)) {
-        // Either we just kicked off a smooth scroll, or the rect looks
-        // mid-commit. Wait one frame's worth (16ms) and re-read; only
-        // fall back to the longer wait if it's still bad.
-        await sleep(scrolled ? 180 : 16);
-        r = el.getBoundingClientRect();
-        cx = r.left + r.width / 2 + offX;
-        cy = r.top + r.height / 2 + offY;
-        if (looksDegenerate(r, cy)) {
-          await sleep(160);
+      // Active poll for scroll-settle. Smooth-scrolls take 250-500ms;
+      // poll the rect every 60ms up to 1s. Bails the moment the element
+      // is in viewport with a non-broken rect, so the happy path stays
+      // fast (single poll, immediate exit).
+      const SCROLL_SETTLE_MAX_MS = 1000;
+      const POLL_MS = 60;
+      const startedAt = performance.now();
+      const needsSettle = scrolled || isBroken(r, cy) || isOffViewport(cy);
+      if (needsSettle) {
+        while (performance.now() - startedAt < SCROLL_SETTLE_MAX_MS) {
+          await sleep(POLL_MS);
           r = el.getBoundingClientRect();
           cx = r.left + r.width / 2 + offX;
           cy = r.top + r.height / 2 + offY;
+          if (!isBroken(r, cy) && !isOffViewport(cy)) break;
         }
       }
-      if (looksDegenerate(r, cy)) {
+      // Only abort if the rect is BROKEN after the settle window —
+      // off-viewport at this point means the scroll never landed,
+      // which usually means the page hasn't fully rendered yet, but
+      // pinning the cursor off-screen is harmless (user just sees
+      // nothing land for a moment).
+      if (isBroken(r, cy)) {
         throw new Error(`waitForSelector: "${op.target}" rect did not settle`);
       }
       await ac.moveTo(cx, cy);

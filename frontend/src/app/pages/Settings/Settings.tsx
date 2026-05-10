@@ -1388,11 +1388,19 @@ const Settings: React.FC = () => {
     if (open && !initialTab) setActiveTab('general');
   }, [open, initialTab]);
 
+  // Sync form to Redux settings on modal open / first load only — NOT on
+  // every settings change. Including `settings` in the deps causes any
+  // background dispatch that touches state.data (the SignInGate's 2s
+  // fetchSettings poll, the window-focus refetch in SettingsLoader, the
+  // updateSettings response, etc.) to wipe the user's in-flight edits
+  // mid-typing — that's the "save button flashes and the key disappears"
+  // report from issue #25.
   useEffect(() => {
-    if (loaded) {
+    if (open && loaded) {
       setForm({ ...settings });
     }
-  }, [loaded, settings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, loaded]);
 
   const handleCheckForUpdates = async () => {
     dispatch(setChecking());

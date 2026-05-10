@@ -505,6 +505,18 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved'>('idle');
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Skip preview reloads when nothing the user can SEE changed.
+  // The iframe renders index.html; if a save only touched SKILL.md or
+  // other non-rendered files, there's no point reloading the iframe —
+  // the visible content is identical and we'd just flash the empty
+  // "Ready" placeholder during the reload-blank-moment. Tracking the
+  // last reloaded snapshot of index.html lets us short-circuit those.
+  // Combined with the trailing-edge debounce below, the iframe only
+  // reloads when (a) index.html actually changed AND (b) the agent
+  // has stopped writing for >600ms — usually 0-1 reloads per generation.
+  const previewReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastReloadedIndexHtmlRef = useRef<string>(initialFiles['index.html'] ?? '');
+  const PREVIEW_RELOAD_DEBOUNCE_MS = 600;
   const savingRef = useRef(false);
   const [executeResult, setExecuteResult] = useState<OutputExecuteResult | null>(null);
   const [showConsole, setShowConsole] = useState(false);
@@ -879,8 +891,25 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
       setSaveStatus('saved');
       if (savedStatusTimerRef.current) clearTimeout(savedStatusTimerRef.current);
       savedStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 3000);
-      if (close) onClose();
-      else previewRef.current?.reload();
+      if (close) {
+        onClose();
+      } else {
+        // Trailing-edge debounce + content-changed gate. Only triggers
+        // a real iframe reload when the agent has gone quiet AND the
+        // file the iframe actually renders (index.html) changed since
+        // the last reload. Eliminates the "Ready" empty-state flash
+        // entirely for non-rendered file writes (SKILL.md, etc).
+        if (previewReloadTimerRef.current) {
+          clearTimeout(previewReloadTimerRef.current);
+        }
+        previewReloadTimerRef.current = setTimeout(() => {
+          previewReloadTimerRef.current = null;
+          const currentHtml = files['index.html'] ?? '';
+          if (currentHtml === lastReloadedIndexHtmlRef.current) return;
+          lastReloadedIndexHtmlRef.current = currentHtml;
+          previewRef.current?.reload();
+        }, PREVIEW_RELOAD_DEBOUNCE_MS);
+      }
       captureThumbnailAsync(savedId);
     } catch (err: any) {
       console.error('Failed to save output:', err);
@@ -1141,6 +1170,7 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
       if (savedStatusTimerRef.current) clearTimeout(savedStatusTimerRef.current);
+      if (previewReloadTimerRef.current) clearTimeout(previewReloadTimerRef.current);
       wsPushTimers.current.forEach(t => clearTimeout(t));
     };
   }, []);

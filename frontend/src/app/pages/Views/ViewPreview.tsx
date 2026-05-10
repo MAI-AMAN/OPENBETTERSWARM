@@ -161,7 +161,15 @@ const ViewPreview = forwardRef<ViewPreviewHandle, Props>(({
     >
       <iframe
         ref={iframeRef}
-        key={iframeSrc ? `url-${reloadKey}` : 'srcdoc'}
+        // Key stable across reloads — only changes when switching MODES
+        // (URL vs srcdoc). Previously the key embedded reloadKey, which
+        // unmounted-and-remounted the iframe on every reload, producing
+        // a visible blank flash mid-burst. With a stable key, reloadKey
+        // still updates iframeSrc → React swaps the src attribute on
+        // the EXISTING iframe element → browser navigates in place,
+        // keeping the prior frame's pixels visible until the new doc
+        // paints. No flash.
+        key={iframeSrc ? 'url-mode' : 'srcdoc'}
         src={iframeSrc}
         sandbox="allow-scripts allow-same-origin"
         style={{

@@ -93,20 +93,13 @@ const OnboardingPanel: React.FC = () => {
   const done = progress.completedSteps.length;
 
   // Celebration banner — strike-through + check on the just-completed
-  // step. Auto-clears so we transition into the next step's card.
-  // Depend ONLY on the id (stable across renders); dispatching from
-  // the slice action directly avoids re-running the effect when the
-  // useOnboardingProgress wrapper produces a new clearJustCompleted
-  // reference each render (which would reset the timer endlessly).
+  // step. Timer lives INSIDE CelebrationView so it can't be cancelled
+  // by parent OnboardingPanel re-renders or AnimatePresence remounts.
+  // Removed the parent-level useEffect that was here; it was vulnerable
+  // to a "rapid re-render → cleanup → new timer → repeat" loop where
+  // the celebration would never actually clear.
   const justDoneStepId = progress.justCompletedStepId;
   const justDoneStep = justDoneStepId ? findStepById(justDoneStepId) : null;
-  useEffect(() => {
-    if (!justDoneStepId) return;
-    const t = window.setTimeout(() => {
-      dispatch(clearJustCompleted());
-    }, CELEBRATION_MS);
-    return () => window.clearTimeout(t);
-  }, [justDoneStepId, dispatch]);
 
   const handleShowMe = async () => {
     if (!currentStep) return;
@@ -564,6 +557,21 @@ interface CelebrationProps {
 
 const CelebrationView: React.FC<CelebrationProps> = ({ step, accent }) => {
   const c = useClaudeTokens();
+  const dispatch = useAppDispatch();
+  // Self-clearing timer: lives with the component instance and
+  // dispatches clearJustCompleted on mount. Because this component
+  // ONLY mounts when justCompletedStepId is set and unmounts when
+  // it's cleared, the timer fires exactly once per celebration.
+  // Cannot be cancelled by parent re-renders.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      dispatch(clearJustCompleted());
+    }, CELEBRATION_MS);
+    return () => window.clearTimeout(t);
+    // Empty deps = fires once on mount, cleans up on unmount. The
+    // dispatch ref is stable per redux store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <Box sx={{ px: 1.6, pt: 1.6, pb: 1.6 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
