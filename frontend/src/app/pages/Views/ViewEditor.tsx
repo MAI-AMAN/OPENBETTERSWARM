@@ -7,6 +7,11 @@ import TextField from '@mui/material/TextField';
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 import Tooltip from '@mui/material/Tooltip';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import HtmlIcon from '@mui/icons-material/Code';
 import PythonIcon from '@mui/icons-material/Terminal';
 import SchemaIcon from '@mui/icons-material/DataObject';
@@ -633,6 +638,28 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
     appendTerminalLine('frontend', level, text);
   }, [appendTerminalLine]);
 
+  // Reload button context menu — left-click is a soft reload (reloads
+  // the webview only); right-click opens this menu, which adds a Hard
+  // Reload that also restarts the persistent backend subprocess.
+  // Useful when backend.py has a Python-level error you can only clear
+  // by stopping and re-spawning the process.
+  const [reloadMenuAnchor, setReloadMenuAnchor] = useState<HTMLElement | null>(null);
+  const handleHardReload = useCallback(async () => {
+    setReloadMenuAnchor(null);
+    if (workspaceId) {
+      try {
+        const tok = getAuthToken();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (tok) headers.Authorization = `Bearer ${tok}`;
+        await fetch(`${API_BASE}/outputs/workspace/${workspaceId}/runtime/restart`, {
+          method: 'POST',
+          headers,
+        });
+      } catch { /* failures surface via the runtime log WS */ }
+    }
+    previewRef.current?.reload();
+  }, [workspaceId]);
+
   // Persistent backend lifecycle. Once we know the workspaceId:
   //   1. POST /runtime/start so the workspace's backend.py (if present)
   //      gets spawned and an `OUTPUT_BACKEND_URL` lands in the preview's
@@ -929,16 +956,39 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
             <Tab label="Terminal" value={TAB_TERMINAL} />
           </Tabs>
           {activeTab === TAB_PREVIEW && (
-            <Tooltip title="Reload preview">
+            <Tooltip title="Reload preview · right-click for Hard Reload">
               <IconButton
                 size="small"
                 onClick={() => previewRef.current?.reload()}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setReloadMenuAnchor(e.currentTarget as HTMLElement);
+                }}
                 sx={{ mr: 1, color: c.text.muted }}
               >
                 <RefreshIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </Tooltip>
           )}
+          <Menu
+            anchorEl={reloadMenuAnchor}
+            open={!!reloadMenuAnchor}
+            onClose={() => setReloadMenuAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          >
+            <MenuItem onClick={handleHardReload} dense>
+              <ListItemIcon>
+                <RestartAltIcon sx={{ fontSize: 18 }} />
+              </ListItemIcon>
+              <ListItemText
+                primary="Reset & Hard Reload"
+                secondary="Restart backend.py + reload preview"
+                primaryTypographyProps={{ fontSize: '0.82rem', fontWeight: 500 }}
+                secondaryTypographyProps={{ fontSize: '0.7rem', color: c.text.ghost }}
+              />
+            </MenuItem>
+          </Menu>
         </Box>
 
         {/* Tab content */}
