@@ -261,13 +261,23 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
 
   switch (op.kind) {
     case 'move_to': {
-      // Pre-flight: if the target lives inside a collapsed Customization
-      // section, walk the user through expanding it first. This is the
-      // "asks me to click on it twice" fix — without this guard, AC's
-      // popup pointed at an Actions/Skills/Modes item that wasn't yet
-      // visible, the user would click Customization to reveal it (which
-      // didn't satisfy the wait), then click the item, looking like a
-      // duplicate prompt.
+      // Pre-flight order matters: open the whole sidebar first (so
+      // sub-section markers exist in DOM), THEN check the Customization
+      // collapse, THEN target.
+      //
+      // Sidebar collapsed case ("AC freezes when user had sidebar
+      // hidden") — without this guard, waitForSelector for any
+      // sidebar-* target would hit its 2.5s lost-target timeout because
+      // the entire panel is unrendered.
+      const expandSidebarOps = maybeBuildExpandSidebarOps(op.target);
+      if (expandSidebarOps) {
+        await runOps(expandSidebarOps, ctx);
+      }
+      // Customization collapsed case ("asks me to click on it twice")
+      // — without this guard, AC's popup pointed at an Actions/Skills/
+      // Modes item that wasn't yet visible, the user would click
+      // Customization to reveal it (which didn't satisfy the wait),
+      // then click the item, looking like a duplicate prompt.
       const expandOps = maybeBuildExpandCustomizationOps(op.target);
       if (expandOps) {
         await runOps(expandOps, ctx);
@@ -374,7 +384,7 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
     }
     case 'popup': {
       if (ctx.silent) return;
-      ac.showPopup(op.text);
+      ac.showPopup(op.text, { side: op.side });
       return;
     }
     case 'multi_choice': {
@@ -411,7 +421,7 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       // op (move_to / click / type_into / drag_select / outro) or at
       // step-end in the runStep finally block.
       if (op.popup && !ctx.silent) {
-        ac.showPopup(op.popup);
+        ac.showPopup(op.popup, { side: op.popupSide });
       }
       // Optional minimum dwell so very-fast paths still register the
       // glow visually. Defaults to a short beat; explicit durationMs
@@ -706,6 +716,61 @@ const CUSTOMIZATION_AREA_TARGETS = new Set<string>([
   'sidebar-skills',
   'sidebar-modes',
 ]);
+
+// Targets that live anywhere inside the sidebar (top-level nav rows,
+// section headers, items revealed by an expanded section). If a step's
+// move_to points at one of these and the WHOLE sidebar is collapsed
+// (the AppShell ViewSidebar toggle hides the entire panel), the target
+// element isn't in the DOM at all and waitForSelector would freeze the
+// AC for a full 2.5s lost-target timeout before giving up.
+//
+// `sidebar-toggle` is deliberately excluded — it lives in the top bar
+// and is the thing we click to expand. Recursing on it would loop.
+const SIDEBAR_AREA_TARGETS = new Set<string>([
+  'sidebar-settings-button',
+  'sidebar-dashboards',
+  'sidebar-customization',
+  'sidebar-skills',
+  'sidebar-actions',
+  'sidebar-modes',
+  'sidebar-apps',
+  'dashboard-row-first',
+]);
+
+/**
+ * If the requested target lives inside the sidebar panel and the panel
+ * is currently collapsed (aria-expanded="false" on the top-bar
+ * ViewSidebar toggle), return ops to walk the user through clicking the
+ * toggle. Otherwise return null. Caller should runOps() the result
+ * before its own move_to.
+ *
+ * This guard MUST run before maybeBuildExpandCustomizationOps because
+ * the Customization header itself lives inside the collapsible panel —
+ * checking for an expanded Customization on a hidden panel would always
+ * read "not expanded" and queue an impossible click.
+ */
+function maybeBuildExpandSidebarOps(target: string): ACOp[] | null {
+  if (!SIDEBAR_AREA_TARGETS.has(target)) return null;
+  const toggle = document.querySelector<HTMLElement>(
+    '[data-onboarding="sidebar-toggle"]',
+  );
+  // aria-expanded reflects !sidebarCollapsed (true = sidebar visible).
+  // Missing / undefined means we couldn't find the toggle — assume
+  // visible and let waitForSelector handle the (unlikely) real failure
+  // so we don't gate on a missing marker.
+  const expanded =
+    toggle?.getAttribute('aria-expanded') === 'true' || toggle === null;
+  if (expanded) return null;
+  return [
+    { kind: 'move_to', target: 'sidebar-toggle' },
+    { kind: 'popup', text: 'Pop the sidebar back open.' },
+    {
+      kind: 'wait_user',
+      condition: { kind: 'click_target', target: 'sidebar-toggle' },
+      timeoutMs: 60000,
+    },
+  ];
+}
 
 /**
  * If the requested target lives inside the Customization collapse and the

@@ -401,6 +401,12 @@ const AppShell: React.FC = () => {
           <IconButton
             size="small"
             onClick={() => setSidebarCollapsed((prev) => !prev)}
+            // Onboarding handle — the runtime reads aria-expanded to
+            // detect a collapsed sidebar and walks the user through
+            // clicking this toggle before targeting any sidebar-* item,
+            // mirroring the customization-collapse preflight.
+            data-onboarding="sidebar-toggle"
+            aria-expanded={!sidebarCollapsed}
             sx={{
               WebkitAppRegion: 'no-drag',
               color: c.text.tertiary,

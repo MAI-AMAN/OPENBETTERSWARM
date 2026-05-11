@@ -51,8 +51,16 @@ export interface AgenticCursorHandle {
    * showPopup replaces it. The runtime calls hidePopup() before any op
    * that physically moves the cursor or types, so the popup naturally
    * disappears when the cursor's "instruction" no longer applies.
+   *
+   * `side` overrides the default "render bottom-right of cursor"
+   * placement. Use `'left'` when the cursor lands on an icon whose
+   * right-hand neighbors would otherwise be covered by the bubble (the
+   * dashboard toolbar's [+ grid globe history note] cluster, the chat
+   * input's [cursor-circle clip mic] cluster, etc.). The bubble still
+   * auto-flips back to the other side if the chosen side would clip the
+   * viewport.
    */
-  showPopup: (text: string) => void;
+  showPopup: (text: string, opts?: { side?: 'left' | 'right' }) => void;
   /**
    * Single-select multi-choice. Resolves with the chosen option id; the
    * panel that calls this can route the rest of the flow accordingly.
@@ -64,6 +72,7 @@ export interface AgenticCursorHandle {
 
 interface PopupState {
   text: string;
+  side?: 'left' | 'right';
 }
 
 interface MultiChoiceState {
@@ -273,11 +282,11 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
     stopTracking() {
       stopTrackingInternal();
     },
-    showPopup(text) {
+    showPopup(text, opts) {
       // Non-blocking — replaces any existing popup. Caller advances the
       // flow; popup auto-clears on the next op that physically moves the
       // cursor (move_to / click / type_into / drag_select / outro).
-      setPopup({ text });
+      setPopup({ text, side: opts?.side });
     },
     showMultiChoice(question, options) {
       return new Promise<string>((resolve) => {
@@ -364,7 +373,7 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
           inherited from the cursor wrapper's pointer-events:none. They
           subscribe to cursorStore to track the live position. */}
       <AnimatePresence>
-        {popup && <ACPopup key="popup" text={popup.text} />}
+        {popup && <ACPopup key="popup" text={popup.text} side={popup.side} />}
         {multiChoice && (
           <ACMultiChoice
             key="multi-choice"

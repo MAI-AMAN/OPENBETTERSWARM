@@ -8,6 +8,16 @@ interface Props {
   text: string;
   /** Offset from cursor tip in px when there's room. */
   offset?: { x: number; y: number };
+  /**
+   * Preferred horizontal side of the cursor. Default `'right'` (the
+   * bubble appears to the bottom-right of the tip). Pass `'left'` for
+   * cursors that land on an icon whose right-hand neighbors would
+   * otherwise be covered by the bubble (toolbar [+ grid globe history
+   * note], chat input [cursor-circle clip mic], etc.). The viewport
+   * clip-flip still wins — if the chosen side would clip, we flip to
+   * the other side.
+   */
+  side?: 'left' | 'right';
 }
 
 const SAFE_PAD = 8;
@@ -34,7 +44,7 @@ const STREAM_MIN_CHARS = 5;
  * when the chosen position would clip past the viewport. Re-evaluates
  * whenever the cursor moves (cursorStore subscription).
  */
-const ACPopup: React.FC<Props> = ({ text, offset = { x: 14, y: 14 } }) => {
+const ACPopup: React.FC<Props> = ({ text, offset = { x: 14, y: 14 }, side = 'right' }) => {
   const c = useClaudeTokens();
   const { x, y, visible } = useCursorPosition();
   const ref = useRef<HTMLDivElement>(null);
@@ -88,14 +98,23 @@ const ACPopup: React.FC<Props> = ({ text, offset = { x: 14, y: 14 } }) => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
 
-    let nx = x + offset.x;
+    // Start on the preferred side. `flipX = true` means the bubble is
+    // drawn to the LEFT of the cursor (and its tail anchors on the
+    // bubble's right edge). Default preference is right.
+    let flipX = side === 'left';
+    let nx = flipX ? x - w - offset.x : x + offset.x;
     let ny = y + offset.y;
-    let flipX = false;
     let flipY = false;
 
-    if (nx + w + SAFE_PAD > vw) {
+    // Viewport clip: if the preferred side would overflow, flip to the
+    // other side. The flip wins over the preference so the bubble stays
+    // on-screen no matter what the caller asked for.
+    if (!flipX && nx + w + SAFE_PAD > vw) {
       nx = x - w - offset.x;
       flipX = true;
+    } else if (flipX && nx < SAFE_PAD) {
+      nx = x + offset.x;
+      flipX = false;
     }
     if (ny + h + SAFE_PAD > vh) {
       ny = y - h - offset.y;
@@ -105,7 +124,7 @@ const ACPopup: React.FC<Props> = ({ text, offset = { x: 14, y: 14 } }) => {
     ny = Math.max(SAFE_PAD, Math.min(ny, vh - h - SAFE_PAD));
 
     setPos({ x: nx, y: ny, flipX, flipY });
-  }, [x, y, offset.x, offset.y, text, streamCount]);
+  }, [x, y, offset.x, offset.y, side, text, streamCount]);
 
   if (!visible) return null;
 

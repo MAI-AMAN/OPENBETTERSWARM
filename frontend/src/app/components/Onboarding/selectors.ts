@@ -16,6 +16,12 @@ export const S = {
   // new — sidebar
   sidebarSettingsButton: 'sidebar-settings-button',
   sidebarDashboards: 'sidebar-dashboards',
+  // The ViewSidebar icon in AppShell's top bar that hides/shows the
+  // whole sidebar. Wears aria-expanded={!sidebarCollapsed} so the
+  // runtime's expand-sidebar preflight can detect a collapsed state and
+  // walk the user through clicking it before targeting anything else
+  // in the sidebar.
+  sidebarToggle: 'sidebar-toggle',
   // First row inside the expanded Dashboards section. The "click into a
   // dashboard" hop targets this so the user lands inside a dashboard
   // route (where the toolbar + and browser button actually exist).
