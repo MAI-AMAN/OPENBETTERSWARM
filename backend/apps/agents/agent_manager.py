@@ -1153,6 +1153,15 @@ class AgentManager:
                 norm = os.path.normpath(os.path.expanduser(file_path))
             except Exception:
                 return False
+            # Normalize to forward slashes so the patterns match on Windows
+            # too — `os.path.normpath` produces backslashes on Windows
+            # (`C:\Users\eric\.ssh\authorized_keys`), and fnmatch treats
+            # `/` in the pattern as a literal character. Without this,
+            # every sensitive-path gate would silently no-op on Windows
+            # production and the prompt-injected `Write` to `~/.ssh/...`
+            # would go through unchallenged.
+            if os.sep != '/':
+                norm = norm.replace(os.sep, '/')
             for pat in _SENSITIVE_PATH_PATTERNS:
                 if _fnmatch.fnmatch(norm, pat):
                     return True

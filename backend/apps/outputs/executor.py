@@ -184,10 +184,17 @@ async def execute_backend_code(
 
     preamble = (
         "import json, sys, io, builtins\n"
-        # Defense-in-depth: even with an AST allowlist on the host, scrub
-        # dangerous attrs off `builtins` here so attribute-style accesses
-        # (e.g. via metaclass.__subclasses__ chains) can't reach them.
-        "for _b in ('exec','eval','compile','__import__','open','input',\n"
+        # Defense-in-depth: scrub dangerous attrs off `builtins` so
+        # attribute-style accesses (metaclass.__subclasses__ chains) can't
+        # reach them. NOTE: __import__ is deliberately NOT scrubbed —
+        # Python's `import` statement bytecode reads `__import__` from
+        # builtins, so removing it makes EVERY import (including allowlisted
+        # ones like `import math`) fail with "ImportError: __import__ not
+        # found". The AST allowlist on the host is what blocks `import
+        # subprocess`; the per-subprocess scrub just plugs the named-builtin
+        # attack vectors that the AST can't see (eval/exec via attribute
+        # access on objects, etc.).
+        "for _b in ('exec','eval','compile','open','input',\n"
         "           'breakpoint','exit','quit'):\n"
         "    try: delattr(builtins, _b)\n"
         "    except AttributeError: pass\n"
