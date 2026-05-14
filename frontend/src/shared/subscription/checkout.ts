@@ -29,10 +29,27 @@ export async function subscribeToPlan(
     // Cloud schema uses "yearly"; the desktop UI uses "annual".
     // Normalize at the boundary so the rest of the client stays consistent.
     const wireInterval = billingInterval === 'annual' ? 'yearly' : billingInterval;
+
+    // Pull app_install_id from Electron's persisted install.json so the cloud
+    // can join Stripe checkout against install_tokens for affiliate payout
+    // attribution. Best-effort: missing IPC (renderer running outside the
+    // shell, e.g. in a dev browser) just means no attribution, not an error.
+    let appInstallId: string | null = null;
+    try {
+      const api = (window as any).openswarm;
+      const state = await api?.getInstallState?.();
+      if (state && typeof state.app_install_id === 'string') {
+        appInstallId = state.app_install_id;
+      }
+    } catch {}
+
+    const body: Record<string, unknown> = { plan, billing_interval: wireInterval };
+    if (appInstallId) body.app_install_id = appInstallId;
+
     const r = await fetch('https://api.openswarm.com/api/stripe/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan, billing_interval: wireInterval }),
+      body: JSON.stringify(body),
     });
     if (!r.ok) {
       console.error(`Checkout request failed: ${r.status}`);

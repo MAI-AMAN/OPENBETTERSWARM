@@ -7,6 +7,7 @@ const os = require('os');
 const fs = require('fs');
 const getPort = require('get-port');
 const http = require('http');
+const affiliateTracking = require('./affiliateTracking');
 
 // Prevent duplicate instances. Without this, double-clicking the app icon
 // (or macOS auto-launch + manual launch overlapping) spawns two independent
@@ -926,6 +927,21 @@ app.whenReady().then(async () => {
 
     // Don't block on Widevine; it'll resolve in the background. Logged above.
     widevinePromise.catch(() => {});
+
+    // Affiliate / referral handshake. On the very first launch, opens the
+    // landing page's /welcome handler in the user's default browser so the
+    // browser (which holds the install_token from the click on the
+    // download CTA) can pair our app_install_id with the referral code.
+    // No-op on every subsequent launch, no-op in dev unless forced. Fire
+    // and forget, never blocks UI startup. See electron/affiliateTracking.js.
+    affiliateTracking.maybeRunFirstLaunchHandshake({
+      shell,
+      userDataDir: app.getPath('userData'),
+      isDev,
+      isPackaged,
+    }).catch((err) => {
+      console.warn('[affiliate] handshake failed:', err && err.message);
+    });
   } catch (err) {
     console.error('Failed to start:', err);
     // Surface the failure on the splash instead of silently quitting.
@@ -1277,6 +1293,17 @@ ipcMain.handle('capture-page', async (event, rect) => {
 ipcMain.handle('open-external', (_event, url) => {
   if (typeof url === 'string' && /^https?:\/\//.test(url)) {
     shell.openExternal(url);
+  }
+});
+
+// Affiliate install state. Returns the persisted install.json contents so
+// the renderer can attach the referral code to authenticated cloud calls
+// (Stripe checkout, sign-in events) for downstream attribution.
+ipcMain.handle('get-install-state', () => {
+  try {
+    return affiliateTracking._readState(app.getPath('userData'));
+  } catch (_) {
+    return {};
   }
 });
 

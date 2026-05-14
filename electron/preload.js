@@ -22,6 +22,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
+    // Returns the persisted install state (app_install_id, ref, ...).
+    // Renderer attaches the ref to Stripe checkout + sign-in flows so
+    // the cloud can credit the affiliate. Resolves to {} if no state yet.
+    getInstallState: () => ipcRenderer.invoke('get-install-state'),
     connectSlack: () => ipcRenderer.invoke('connect-slack'),
     sendCdpCommand: (wcId, method, params) => ipcRenderer.invoke('send-cdp-command', wcId, method, params),
     cdpCacheSet: (wcId, indexMap) => ipcRenderer.invoke('cdp-cache-set', wcId, indexMap),
