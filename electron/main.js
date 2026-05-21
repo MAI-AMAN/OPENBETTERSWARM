@@ -9,6 +9,22 @@ const getPort = require('get-port');
 const http = require('http');
 const affiliateTracking = require('./affiliateTracking');
 
+// Defender warmup: NSIS runs us with --prewarm right after install so Windows scans the bundled binaries while the user is already watching the installer instead of staring at a slow first launch.
+if (process.argv.includes('--prewarm') && process.platform === 'win32') {
+  const touchExe = (rel) => {
+    const full = path.join(process.resourcesPath, rel);
+    try {
+      if (fs.existsSync(full)) {
+        execFileSync(full, ['--version'], { timeout: 15000, stdio: 'ignore', windowsHide: true });
+      }
+    } catch (_) {}
+  };
+  touchExe(path.join('python-env', 'python.exe'));
+  touchExe(path.join('node', 'x64', 'node.exe'));
+  touchExe(path.join('node', 'arm64', 'node.exe'));
+  process.exit(0);
+}
+
 // Prevent duplicate instances. Without this, double-clicking the app icon
 // (or macOS auto-launch + manual launch overlapping) spawns two independent
 // processes — each with its own backend on a different port — resulting in
