@@ -508,6 +508,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
             <SchedulePopover
               mode={popoverMode}
               onModeChange={setPopoverMode}
+              hideTopChrome
               historyResults={historySearch.results.map((e) => ({ id: e.id, name: e.name, closed_at: e.closed_at }))}
               historyLoading={historySearch.loading}
               historyQuery={historyQuery}

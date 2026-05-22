@@ -32,11 +32,15 @@ interface Props {
   onExpand: () => void;
   historyScrollRef?: React.RefObject<HTMLDivElement>;
   onHistoryScroll?: () => void;
+  /** When true, hides the internal Search/Schedule chips + redundant "+ New"
+   *  pill. The new DashboardToolbar pills above the popover replace them. */
+  hideTopChrome?: boolean;
 }
 
 export default function SchedulePopover({
   mode, onModeChange, historyResults, historyLoading, historyQuery, onHistoryQueryChange,
   onHistorySelect, onNewChat, onWorkflowSelect, onExpand, historyScrollRef, onHistoryScroll,
+  hideTopChrome = false,
 }: Props) {
   const c = useClaudeTokens();
   const [calendarView, setCalendarView] = useState<'Week' | 'Month' | 'List'>('Week');
@@ -83,11 +87,15 @@ export default function SchedulePopover({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', width: POPOVER_W, maxWidth: POPOVER_W, gap: 0.75, flexShrink: 0 }}>
-      {/* Floating mode chips OUTSIDE the content card (Figma image #30) */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, px: 0.5 }}>
-        <ModeChip label="Search" icon={<SearchIcon sx={{ fontSize: 14 }} />} active={mode === 'search'} onClick={() => onModeChange('search')} />
-        <ModeChip label="Schedule" icon={<CalendarMonthIcon sx={{ fontSize: 14 }} />} active={mode === 'schedule'} onClick={() => onModeChange('schedule')} />
-      </Box>
+      {/* Floating mode chips. Hidden when the parent toolbar supplies its
+          own pill row (Image #32 / #54); kept around so the legacy callers
+          that surface Schedule mode still have a way in. */}
+      {!hideTopChrome && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, px: 0.5 }}>
+          <ModeChip label="Search" icon={<SearchIcon sx={{ fontSize: 14 }} />} active={mode === 'search'} onClick={() => onModeChange('search')} />
+          <ModeChip label="Schedule" icon={<CalendarMonthIcon sx={{ fontSize: 14 }} />} active={mode === 'schedule'} onClick={() => onModeChange('schedule')} />
+        </Box>
+      )}
 
       {/* Content card — separately bordered/rounded, like image #30.
           Inner content crossfades on tab switch so search↔schedule isn't
@@ -122,10 +130,12 @@ export default function SchedulePopover({
                 placeholder="Search past chats..."
                 sx={{ flex: 1, fontSize: '0.85rem', color: c.text.primary, '& input::placeholder': { color: c.text.ghost, opacity: 1 } }}
               />
-              <Box onClick={onNewChat} role="button" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, fontSize: '0.78rem', fontWeight: 500, color: c.text.secondary, px: 1, py: 0.45, border: `1px solid ${c.border.subtle}`, borderRadius: `${c.radius.md}px`, cursor: 'pointer', '&:hover': { color: c.accent.primary, bgcolor: c.bg.elevated } }}>
-                <AddIcon sx={{ fontSize: 12 }} />
-                New
-              </Box>
+              {!hideTopChrome && (
+                <Box onClick={onNewChat} role="button" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, fontSize: '0.78rem', fontWeight: 500, color: c.text.secondary, px: 1, py: 0.45, border: `1px solid ${c.border.subtle}`, borderRadius: `${c.radius.md}px`, cursor: 'pointer', '&:hover': { color: c.accent.primary, bgcolor: c.bg.elevated } }}>
+                  <AddIcon sx={{ fontSize: 12 }} />
+                  New
+                </Box>
+              )}
             </Box>
             <Box ref={historyScrollRef} onScroll={onHistoryScroll} sx={{ flex: 1, overflowY: 'auto', borderTop: `1px solid ${c.border.subtle}` }}>
               {historyResults.length === 0 && !historyLoading && (
