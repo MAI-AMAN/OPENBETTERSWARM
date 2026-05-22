@@ -405,6 +405,104 @@ async def delete_workflow(workflow_id: str):
     return {"ok": True}
 
 
+@workflows.router.post("/{workflow_id}/propose-edit")
+async def propose_edit(workflow_id: str, body: dict):
+    """Aux-LLM-propose a single-step edit from a natural-language request.
+
+    Powers the Edit Agent chat (Image #38). Frontend hands us the user's
+    message, the current draft steps, and optional failure-context (when
+    we're inside Fix-with-Agent). We respond with a reply string PLUS,
+    optionally, a `step_idx` + `new_text` that the FE shows as a
+    proposal card. The user clicks Apply to merge into their local draft;
+    nothing is persisted until they click Save in the header.
+    """
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    message = (body or {}).get("message", "").strip()
+    steps_in = (body or {}).get("steps") or []
+    context = (body or {}).get("context") or None
+    if not message or not isinstance(steps_in, list):
+        raise HTTPException(status_code=400, detail="Missing message or steps")
+    try:
+        from backend.apps.agents.providers.registry import resolve_aux_model, get_anthropic_client_for_model
+        from backend.apps.settings.settings import load_settings as _ls
+    except Exception:
+        raise HTTPException(status_code=500, detail="Aux model unavailable")
+    settings = _ls()
+    try:
+        aux_model, _ = await resolve_aux_model(settings, preferred_tier="haiku")
+        client = get_anthropic_client_for_model(settings, aux_model)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Aux model unavailable")
+    import json, re
+    steps_lines = "\n".join(
+        f"{i+1}. {(s.get('label') or '').strip() or (s.get('text') or '')[:60]}: {(s.get('text') or '')}"
+        for i, s in enumerate(steps_in)
+    )
+    fix_context = ""
+    if context and isinstance(context, dict):
+        fs = context.get("failed_step")
+        err = context.get("error")
+        if fs is not None and err:
+            fix_context = (
+                f"\n\nFAILURE CONTEXT: Step {int(fs) + 1} failed on the most recent run. "
+                f"The error was: {err}\n"
+                f"Your proposed edit should specifically address that failure if possible."
+            )
+    prompt = (
+        "You are an Edit Agent helping the user iterate on a saved automation "
+        "workflow. The workflow's current steps are listed below. The user has "
+        "asked for a modification.\n\n"
+        "Respond with STRICT JSON, no prose, no fence. Schema:\n"
+        '  {"reply": string, '
+        '"step_idx": int | null, '
+        '"new_text": string | null, '
+        '"explanation": string | null}\n\n'
+        "Rules:\n"
+        "- `reply` is a short conversational acknowledgement (1-2 sentences).\n"
+        "- If the user is asking a question or for clarification, set step_idx=null and new_text=null.\n"
+        "- If the user is asking to change a specific step, set step_idx (0-based) and new_text to the FULL replacement prompt for that step.\n"
+        "- `explanation` describes the change in user-facing terms.\n"
+        "- Never invent new steps. Never remove steps. Only edit existing ones.\n\n"
+        f"Workflow steps:\n{steps_lines}{fix_context}\n\n"
+        f"User: {message}"
+    )
+    try:
+        resp = await client.messages.create(
+            model=aux_model,
+            max_tokens=400,
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "{"},
+            ],
+        )
+        out = ""
+        if isinstance(resp.content, list):
+            for block in resp.content:
+                if getattr(block, "type", None) == "text":
+                    out += getattr(block, "text", "")
+        raw = "{" + out.strip() if not out.strip().startswith("{") else out.strip()
+        m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        if m:
+            raw = m.group(0)
+        data = json.loads(raw)
+    except Exception as e:
+        logger.warning("propose-edit: aux LLM failed: %s", e)
+        raise HTTPException(status_code=400, detail="Couldn't generate a proposal")
+    reply = str(data.get("reply") or "").strip()[:600]
+    step_idx = data.get("step_idx")
+    new_text = data.get("new_text")
+    explanation = str(data.get("explanation") or "").strip()[:600]
+    out: dict = {"reply": reply}
+    if isinstance(step_idx, int) and 0 <= step_idx < len(steps_in) and isinstance(new_text, str) and new_text.strip():
+        out["step_idx"] = step_idx
+        out["new_text"] = new_text.strip()
+        if explanation:
+            out["explanation"] = explanation
+    return out
+
+
 @workflows.router.post("/{workflow_id}/parse-schedule")
 async def parse_schedule(workflow_id: str, body: dict):
     """Aux-LLM-parse natural language into a ScheduleConfig.

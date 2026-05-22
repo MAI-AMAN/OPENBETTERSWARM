@@ -36,6 +36,7 @@ import WorkflowEditViews from './WorkflowEditViews';
 import { HistoryDetail, HistoryList, PreviewView, SavedView } from './WorkflowCardSubviews';
 import { CompletedView, FailedView, RunningView } from './WorkflowCardLiveViews';
 import SchedulingView from './SchedulingView';
+import EditAgentView from './EditAgentView';
 import StopRounded from '@mui/icons-material/StopRounded';
 import PauseRounded from '@mui/icons-material/PauseRounded';
 import { StatusDot, RunSparkline, LastFiredHint, isStaleSinceLastRun } from './workflowVisuals';
@@ -612,12 +613,7 @@ const WorkflowCard: React.FC<Props> = ({
           <SchedulingView workflow={workflow} steps={steps} />
         )}
         {(card.view === 'edit_agent' || card.view === 'fix_agent') && workflow && (
-          <WorkflowEditViews
-            workflow={workflow}
-            facet={card.editFacet || 'General'}
-            onChangeFacet={(f) => dispatch(updateWorkflowCard({ workflowId, patch: { editFacet: f } }))}
-            onDirtyChange={setEditDirty}
-          />
+          <EditAgentView workflow={workflow} steps={steps} isFixMode={card.view === 'fix_agent'} />
         )}
         </Box>
       </Box>
