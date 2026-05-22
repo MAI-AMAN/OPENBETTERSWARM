@@ -6,7 +6,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import Tooltip, { tooltipClasses } from '@mui/material/Tooltip';
 import Icon from '@mui/material/Icon';
 import { styled } from '@mui/material/styles';
-import AddIcon from '@mui/icons-material/Add';
+import ChatBubbleRounded from '@mui/icons-material/ChatBubbleRounded';
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded';
 import StickyNote2OutlinedIcon from '@mui/icons-material/StickyNote2Outlined';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
@@ -611,7 +611,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                   }),
                 }}
               >
-                <AddIcon sx={{ fontSize: 20 }} />
+                <ChatBubbleRounded sx={{ fontSize: 18 }} />
               </Box>
             </WarmTooltip>
 
