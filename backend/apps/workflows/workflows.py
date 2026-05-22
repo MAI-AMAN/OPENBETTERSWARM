@@ -405,6 +405,83 @@ async def delete_workflow(workflow_id: str):
     return {"ok": True}
 
 
+@workflows.router.post("/{workflow_id}/parse-schedule")
+async def parse_schedule(workflow_id: str, body: dict):
+    """Aux-LLM-parse natural language into a ScheduleConfig.
+
+    Frontend SchedulingView (Image #49) hits this on submit; the parsed
+    config rides back to the user for explicit "Schedule it" confirmation
+    before any persistence. Returns the parsed config under {"schedule": ...}.
+    """
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    text = (body or {}).get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Missing text")
+    try:
+        from backend.apps.agents.providers.registry import resolve_aux_model, get_anthropic_client_for_model
+        from backend.apps.settings.settings import load_settings as _ls
+    except Exception:
+        raise HTTPException(status_code=500, detail="Aux model unavailable")
+    settings = _ls()
+    try:
+        aux_model, _ = await resolve_aux_model(settings, preferred_tier="haiku")
+        client = get_anthropic_client_for_model(settings, aux_model)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Aux model unavailable")
+    import json, re
+    prompt = (
+        "Parse the following natural-language schedule into STRICT JSON. "
+        "No prose, no fence, no comments. Schema:\n"
+        '  {"repeat_unit": "day"|"week"|"month", '
+        '"repeat_every": int>=1, '
+        '"on_days": [int 0..6, Sunday=0], '
+        '"hour": int 0..23, "minute": int 0..59, '
+        '"timezone": IANA tz string (default to local)}\n\n'
+        "Rules:\n"
+        "- If user says weekdays, on_days=[1,2,3,4,5], repeat_unit=week.\n"
+        "- If user says weekends, on_days=[0,6], repeat_unit=week.\n"
+        "- If user names a single day (e.g. \"Mondays\"), on_days=[1], repeat_unit=week.\n"
+        "- If user says daily/everyday, repeat_unit=day, on_days=[].\n"
+        "- If no AM/PM, assume PM for 1-7 and AM for 8-12.\n"
+        "- timezone: assume system local if not given.\n\n"
+        f"Input: {text}"
+    )
+    try:
+        resp = await client.messages.create(
+            model=aux_model,
+            max_tokens=180,
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "{"},
+            ],
+        )
+        out = ""
+        if isinstance(resp.content, list):
+            for block in resp.content:
+                if getattr(block, "type", None) == "text":
+                    out += getattr(block, "text", "")
+        raw = "{" + out.strip() if not out.strip().startswith("{") else out.strip()
+        m = re.search(r"\{[^{}]*\}", raw, flags=re.DOTALL)
+        if m:
+            raw = m.group(0)
+        data = json.loads(raw)
+    except Exception as e:
+        logger.warning("parse-schedule: aux LLM failed: %s", e)
+        raise HTTPException(status_code=400, detail="Couldn't parse schedule")
+    cfg = wf.schedule.model_copy(update={
+        "enabled": True,
+        "repeat_unit": str(data.get("repeat_unit") or "week"),
+        "repeat_every": int(data.get("repeat_every") or 1),
+        "on_days": [int(d) for d in (data.get("on_days") or [])],
+        "hour": int(data.get("hour") or 9),
+        "minute": int(data.get("minute") or 0),
+        "timezone": str(data.get("timezone") or wf.schedule.timezone or "UTC"),
+    })
+    return {"schedule": cfg.model_dump(mode="json")}
+
+
 @workflows.router.post("/{workflow_id}/run")
 async def run_workflow_now(workflow_id: str):
     wf = storage.get_workflow(workflow_id)

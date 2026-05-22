@@ -35,6 +35,7 @@ import { fetchSession } from '@/shared/state/agentsSlice';
 import WorkflowEditViews from './WorkflowEditViews';
 import { HistoryDetail, HistoryList, PreviewView, SavedView } from './WorkflowCardSubviews';
 import { CompletedView, FailedView, RunningView } from './WorkflowCardLiveViews';
+import SchedulingView from './SchedulingView';
 import StopRounded from '@mui/icons-material/StopRounded';
 import PauseRounded from '@mui/icons-material/PauseRounded';
 import { StatusDot, RunSparkline, LastFiredHint, isStaleSinceLastRun } from './workflowVisuals';
@@ -607,10 +608,13 @@ const WorkflowCard: React.FC<Props> = ({
         {card.view === 'failed' && workflow && (
           <FailedView workflow={workflow} steps={steps} runs={runs} mode={card.sidecarKind === 'viewing-error' ? 'sidecar-linked' : 'card'} />
         )}
-        {(card.view === 'edit_agent' || card.view === 'fix_agent' || card.view === 'scheduling') && workflow && (
+        {card.view === 'scheduling' && workflow && (
+          <SchedulingView workflow={workflow} steps={steps} />
+        )}
+        {(card.view === 'edit_agent' || card.view === 'fix_agent') && workflow && (
           <WorkflowEditViews
             workflow={workflow}
-            facet={card.view === 'scheduling' ? 'Schedule' : (card.editFacet || 'General')}
+            facet={card.editFacet || 'General'}
             onChangeFacet={(f) => dispatch(updateWorkflowCard({ workflowId, patch: { editFacet: f } }))}
             onDirtyChange={setEditDirty}
           />
