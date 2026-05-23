@@ -1,4 +1,4 @@
-import { parseMcpToolName } from './mcpToolName';
+import { parseMcpToolName } from '@/shared/mcpToolMeta';
 
 export function isBrowserAgentTool(name: string): boolean {
   if (name === 'CreateBrowserAgent' || name === 'BrowserAgent' || name === 'BrowserAgents') return true;

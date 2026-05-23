@@ -1,6 +1,6 @@
 import { AgentMessage } from '@/shared/state/agentsSlice';
 import { prettyPath, prettyUrl, quoteQuery, bashCommandDetail } from './toolLabels';
-import { parseMcpToolName, getMcpInputSummary, getGmailHeader } from './mcpToolName';
+import { parseMcpToolName, getMcpInputSummary, getGmailHeader } from '@/shared/mcpToolMeta';
 
 export function getToolData(call: AgentMessage) {
   const content = typeof call.content === 'object' ? call.content : {};

@@ -1,4 +1,4 @@
-import { getGmailHeader } from './mcpToolName';
+import { getGmailHeader } from '@/shared/mcpToolMeta';
 
 export function formatTimestamp(ts: string | number | undefined): string {
   if (!ts) return '';

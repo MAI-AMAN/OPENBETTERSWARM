@@ -15,7 +15,7 @@ import { GoogleServiceIcon } from './GoogleServiceIcon';
 import { ElapsedTimer, formatElapsed } from './toolBubbleChrome';
 import { useTermColors } from './toolColorize';
 import { ParsedResult } from './toolResultParsing';
-import { McpToolInfo, getMcpShortAction } from './mcpToolName';
+import { McpToolInfo, getMcpShortAction } from '@/shared/mcpToolMeta';
 import { McpResultCard } from './McpResultCard';
 
 interface CompactMcpBubbleProps {

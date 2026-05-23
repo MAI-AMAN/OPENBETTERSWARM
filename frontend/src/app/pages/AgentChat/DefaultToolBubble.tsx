@@ -17,7 +17,7 @@ import { GoogleServiceIcon } from './GoogleServiceIcon';
 import { ElapsedTimer, formatElapsed } from './toolBubbleChrome';
 import { useTermColors, colorizeInput, colorizeOutput } from './toolColorize';
 import { ParsedResult } from './toolResultParsing';
-import { McpToolInfo } from './mcpToolName';
+import { McpToolInfo } from '@/shared/mcpToolMeta';
 import { McpResultCard } from './McpResultCard';
 
 interface DefaultToolBubbleProps {

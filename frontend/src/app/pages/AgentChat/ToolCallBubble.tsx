@@ -12,7 +12,7 @@ import {
   getResultSummary,
   getPromptPrefix,
 } from './toolResultParsing';
-import { parseMcpToolName } from './mcpToolName';
+import { parseMcpToolName } from '@/shared/mcpToolMeta';
 import {
   isBrowserAgentTool,
   isInvokeAgentTool,
@@ -26,8 +26,8 @@ import { CreateAgentBubble } from './CreateAgentBubble';
 import { CompactMcpBubble } from './CompactMcpBubble';
 import { DefaultToolBubble } from './DefaultToolBubble';
 
-export { parseMcpToolName, getMcpShortAction } from './mcpToolName';
-export type { McpToolInfo } from './mcpToolName';
+export { parseMcpToolName, getMcpShortAction } from '@/shared/mcpToolMeta';
+export type { McpToolInfo } from '@/shared/mcpToolMeta';
 
 export interface ToolPair {
   type: 'tool_pair';

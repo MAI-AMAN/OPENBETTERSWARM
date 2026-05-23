@@ -1,6 +1,6 @@
 import React from 'react';
 import { useThemeMode } from '@/shared/styles/ThemeContext';
-import { parseMcpToolName } from './mcpToolName';
+import { parseMcpToolName } from '@/shared/mcpToolMeta';
 import { isBashTool } from './toolResultParsing';
 
 export interface TermColors {
