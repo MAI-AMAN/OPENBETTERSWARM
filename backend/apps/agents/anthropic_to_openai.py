@@ -290,7 +290,7 @@ async def _translate_response_stream(
 
 
 async def forward_to_openai(
-    parsed: dict, api_key: str, headers_in: dict[str, str],
+    parsed: dict, api_key: str,
 ) -> tuple[int, AsyncIterator[bytes], dict[str, str]]:
     """Translate + forward an Anthropic request to OpenAI Chat Completions.
     Returns (status, body_stream, response_headers)."""
@@ -299,7 +299,7 @@ async def forward_to_openai(
 
 
 async def forward_to_openrouter(
-    parsed: dict, api_key: str, headers_in: dict[str, str],
+    parsed: dict, api_key: str,
 ) -> tuple[int, AsyncIterator[bytes], dict[str, str]]:
     """Translate + forward to OpenRouter, injecting the file-parser plugin
     so any OR model parses the attached PDFs server-side."""

@@ -14,7 +14,7 @@ _pending_oauth: dict[str, dict] = {}
 # Recently-completed OAuth states so the /api/subscriptions/callback handler
 # can distinguish a legitimate duplicate callback (browser prefetch, refresh,
 # or Google redirect retry after a slow first response) from a truly stale
-# request. Bounded FIFO — drops the oldest entries once it grows past
+# request. Bounded FIFO, drops the oldest entries once it grows past
 # _MAX_COMPLETED_OAUTH so it can't leak memory.
 _completed_oauth: list[str] = []
 _MAX_COMPLETED_OAUTH = 64
@@ -68,7 +68,7 @@ install_token_scrubber()
 
 
 # CORS: previously wide open (`allow_origins=["*"]`), which combined with
-# `allow_credentials=True` was a security footgun — any external origin
+# `allow_credentials=True` was a security footgun, any external origin
 # could CORS-preflight us. Now restricted to Electron renderer origins +
 # localhost dev servers. The token middleware below provides the
 # *primary* defense; CORS is defense-in-depth so a misconfigured page
@@ -101,18 +101,18 @@ async def _auth_middleware(request: Request, call_next):
     """Reject HTTP requests without our per-install bearer token.
 
     Exemptions (see `auth.is_path_exempt`):
-      - `/api/subscriptions/callback` — external OAuth redirects
-      - `/api/health`, `/api/version` — Electron boot handshake
-      - `OPTIONS` preflights — browsers don't send Authorization on them
+      - `/api/subscriptions/callback`, external OAuth redirects
+      - `/api/health`, `/api/version`, Electron boot handshake
+      - `OPTIONS` preflights, browsers don't send Authorization on them
 
     Anything else requires `Authorization: Bearer <token>` OR
     `x-openswarm-token: <token>`. Failure responds with 401 and a short
-    JSON error — no upstream handler sees the request.
+    JSON error, no upstream handler sees the request.
 
     The anthropic-proxy route (`/api/anthropic-proxy/v1/*`) is NOT
     exempt. Its caller (the Claude Code CLI we spawn) is configured
     with `ANTHROPIC_API_KEY=<our_token>` so the CLI's `x-api-key`
-    header carries our token — which `request_matches_token` accepts
+    header carries our token, which `request_matches_token` accepts
     via its auth-header branches.
     """
     # Preflights never carry Authorization.
@@ -122,11 +122,11 @@ async def _auth_middleware(request: Request, call_next):
         response = await call_next(request)
     else:
         # Accept Authorization Bearer, x-openswarm-token, OR x-api-key
-        # (CLI path — CLI sends x-api-key with our token as value).
+        # (CLI path, CLI sends x-api-key with our token as value).
         headers = dict(request.headers)
         x_api_key = headers.get("x-api-key") or headers.get("X-API-Key")
         # Accept `?token=<token>` query param too. Required for browser-driven
-        # GETs that can't set headers — notably the App Builder iframe loading
+        # GETs that can't set headers, notably the App Builder iframe loading
         # /api/outputs/.../serve/index.html via <iframe src="...">.
         auth_ok = request_matches_token(headers, query_params=dict(request.query_params))
         if not auth_ok and x_api_key:
@@ -237,14 +237,14 @@ async def websocket_session(websocket: WebSocket, session_id: str):
                 await agent_manager.stop_agent(session_id)
     except WebSocketDisconnect:
         # Drops the socket from the connection list. Does NOT cancel
-        # the agent task — that's intentional. See module docstring.
+        # the agent task, that's intentional. See module docstring.
         ws_manager.disconnect_session(session_id, websocket)
 
 def _ws_auth_ok(websocket: WebSocket) -> bool:
     """Validate token + origin before accepting a WS. Returns True if OK.
 
-    On failure closes with 4401 (custom app-level code) and returns False
-    — the caller must NOT call `websocket.accept()` or read any data.
+    On failure closes with 4401 (custom app-level code) and returns False,
+    the caller must NOT call `websocket.accept()` or read any data.
     """
     headers = dict(websocket.headers)
     qp = dict(websocket.query_params)
@@ -253,7 +253,7 @@ def _ws_auth_ok(websocket: WebSocket) -> bool:
     origin_ok = is_origin_allowed(origin)
     if not (token_ok and origin_ok):
         reason = "bad token" if not token_ok else f"bad origin ({origin})"
-        logger.warning(f"ws: rejecting connection to {websocket.url.path} — {reason}")
+        logger.warning(f"ws: rejecting connection to {websocket.url.path}, {reason}")
         # Can't `await websocket.close()` before accept(), so schedule the
         # close in a task. The client receives a 403 on handshake.
         import asyncio as _asyncio
@@ -274,7 +274,7 @@ async def websocket_runtime_logs(websocket: WebSocket, workspace_id: str):
     from backend.apps.outputs.runtime import manager as runtime_manager
     rt = runtime_manager.get(workspace_id)
     if rt is None:
-        # No active runtime — surface that to the client and close. The
+        # No active runtime, surface that to the client and close. The
         # frontend will call /runtime/start and reconnect. Also emit a
         # status frame with is_new_mode (computed from disk) so the
         # preview pane shows the "starting preview…" placeholder for
@@ -339,7 +339,7 @@ async def websocket_runtime_logs(websocket: WebSocket, workspace_id: str):
             }))
             # Runtime-level events (start, frontend-ready, exit) flow
             # through the same log channel with stream="runtime". When
-            # the client sees one, it usually wants the fresh status —
+            # the client sees one, it usually wants the fresh status;
             # bind-ready in particular flips frontend_url from null
             # to the Vite URL and the preview pane has to know to
             # switch over. Re-push status after every runtime line.
@@ -441,7 +441,7 @@ async def subscriptions_callback(request: Request):
     error = request.query_params.get("error", "")
 
     if error:
-        # Escape both inputs — `error_description` and `error` are attacker-
+        # Escape both inputs, `error_description` and `error` are attacker-
         # controllable query params and the endpoint is auth-exempt, so an
         # unescaped interpolation here is a reflected XSS in the localhost
         # origin (loadable inside the Electron app context, where same-origin
@@ -452,7 +452,7 @@ async def subscriptions_callback(request: Request):
     pending = _pending_oauth.pop(state, None)
     if not pending:
         # Either a duplicate callback for a state we've already exchanged,
-        # or a truly stale state. Duplicates are the expected case —
+        # or a truly stale state. Duplicates are the expected case:
         # Chrome's prefetcher and some extensions speculatively GET URLs.
         if state and state in _completed_oauth:
             logger.info(f"Duplicate OAuth callback for state {state[:8]}... (already completed)")
@@ -465,7 +465,7 @@ async def subscriptions_callback(request: Request):
         await exchange_oauth(pending["provider"], code, pending["redirect_uri"], pending["code_verifier"], state)
     except Exception as e:
         logger.warning(f"OAuth exchange failed for provider={pending.get('provider')}: {e}")
-        # Escape the exception message — upstream OAuth provider errors can
+        # Escape the exception message, upstream OAuth provider errors can
         # echo back attacker-influenced strings (e.g. error_description from
         # the original request URL), and this response is rendered in the
         # localhost origin.
@@ -526,7 +526,7 @@ async def mcp_meta(action: str, request: Request):
     # these, MCPSearch("email") fails to surface Google Workspace because
     # the tool's stored description says "Gmail" not "email". Keys are
     # sanitized server names; values are extra search-hint tokens appended
-    # to the haystack. Only generic synonyms — anything that's already in
+    # to the haystack. Only generic synonyms, anything that's already in
     # the description doesn't need to be listed.
     _SERVER_SEARCH_ALIASES: dict[str, list[str]] = {
         "google-workspace": [
@@ -638,7 +638,7 @@ async def mcp_meta(action: str, request: Request):
         session.active_mcps.append(server_name)
         session.needs_fork = True
         # When the session has prior turns, fork_session alone won't
-        # make the bundled CLI re-read mcp_servers — the transport
+        # make the bundled CLI re-read mcp_servers, the transport
         # snapshot at launch time is what serves tool schemas. Force a
         # full fresh-session restart so the next turn rebuilds with the
         # newly-activated server in its mcp_servers dict from scratch.
@@ -661,7 +661,7 @@ async def mcp_meta(action: str, request: Request):
         # Auto-continue: flag the session so that after its current turn
         # ends (which is the turn that contains this MCPActivate tool
         # call), the agent loop dispatches a synthetic "continue" turn
-        # with the freshly-activated tools available. Race-free — read
+        # with the freshly-activated tools available. Race-free, read
         # at the natural turn-boundary inside _run_agent_loop instead of
         # racing a background task against the turn's completion path.
         # Turns the typical 3-prompt flow ("check email" → MCPActivate

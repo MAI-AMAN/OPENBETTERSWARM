@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Full set of model-id prefixes that force routing through 9Router.
+_NINEROUTER_MODEL_PREFIXES = ("cc/", "cx/", "gc/", "ag/", "gemini/", "openrouter/")
+
 # Entry fields: value, label, context_window, model_id, router_model_id, api,
 # subscription_only, reasoning, route ("cc"|"api"|"openrouter"|None).
 # 9Router prefixes: cc/ Claude sub (dashes), cx/ Codex sub (dots), gc/ Gemini CLI.
@@ -950,9 +953,8 @@ def compute_billing_kind(
 
 COST_PER_1M_TOKENS: dict[tuple[str, str], tuple[float, float]] = {
     # (provider, model): (input_cost_per_1M, output_cost_per_1M)
-    # NOTE: `calculate_cost` is currently unused in the live path; real
-    # cost numbers come from 9Router's usage stats. These entries are kept
-    # so the table matches BUILTIN_MODELS and can
+    # NOTE: real cost numbers come from 9Router's usage stats. These entries
+    # are kept so the table matches BUILTIN_MODELS and can
     # be used by any future native-loop path. Subscription-routed models
     # are zero-cost to the user, but API rates are recorded here for
     # reference where they exist.
@@ -987,23 +989,3 @@ COST_PER_1M_TOKENS: dict[tuple[str, str], tuple[float, float]] = {
     ("Qwen", "qwen/qwen3-235b-a22b"): (0.20, 0.70),
     ("Cohere", "cohere/command-a-03-2025"): (2.50, 10.0),
 }
-
-
-def calculate_cost(
-    provider: str, model: str,
-    input_tokens: int, output_tokens: int,
-) -> float:
-    """Calculate cost in USD from token counts."""
-    # Direct lookup first
-    rates = COST_PER_1M_TOKENS.get((provider, model))
-    if not rates:
-        # Case-insensitive provider lookup
-        lower = provider.lower()
-        for (p, m), r in COST_PER_1M_TOKENS.items():
-            if p.lower() == lower and m == model:
-                rates = r
-                break
-    if not rates:
-        return 0.0
-    input_rate, output_rate = rates
-    return (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000

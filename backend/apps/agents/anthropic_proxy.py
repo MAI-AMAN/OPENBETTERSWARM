@@ -92,22 +92,7 @@ def _is_openai_max_completion_tokens_model(model: str) -> bool:
 
 
 def _rewrite_document_to_openai_file(parsed: dict) -> None:
-    """In-place: Anthropic `document` (PDF) and `image` blocks → OpenAI
-    Chat Completions native shapes. Critically also handles `image` →
-    `image_url` because **9router 0.3.60 strips any block type that is
-    not 'text' or 'image_url'**, stringifying it into a text block (verified
-    in router/.next/server/chunks/318.js, the `b.messages.map` translator).
-    So we have to land on `image_url` for images AND `file` for PDFs.
-
-    For document: → `{type:"file", file:{filename, file_data:"data:application/pdf;base64,..."}}`.
-    For image: → `{type:"image_url", image_url:{url:"data:image/...;base64,..."}}`.
-
-    OpenAI Chat Completions natively accepts both shapes on GPT-5.x vision
-    models. 9router preserves `image_url` and (per the same chunk's check
-    for unknown types getting passed-through if NOT in the rewrite-list)
-    seems to preserve `file` too in this codepath. Verified empirically
-    May 2026 after fixing the image stringification bug.
-    """
+    """In-place: rewrite Anthropic base64 `image` blocks to OpenAI `image_url` (PDFs go via OpenRouter)."""
     msgs = parsed.get("messages") if isinstance(parsed, dict) else None
     if not isinstance(msgs, list):
         return
@@ -409,7 +394,7 @@ async def proxy(rest: str, request: Request):
             _oak = (getattr(_s, "openai_api_key", "") or "").strip()
             if _should_bypass_oai(parsed_for_bypass, _oak):
                 status, body_stream, hdrs = await _forward_oai(
-                    parsed_for_bypass, _oak, dict(request.headers),
+                    parsed_for_bypass, _oak,
                 )
                 return StreamingResponse(
                     body_stream, status_code=status, headers=hdrs,
@@ -419,7 +404,7 @@ async def proxy(rest: str, request: Request):
             _ork = (getattr(_s, "openrouter_api_key", "") or "").strip()
             if _should_bypass_or(parsed_for_bypass, _ork):
                 status, body_stream, hdrs = await _forward_or(
-                    parsed_for_bypass, _ork, dict(request.headers),
+                    parsed_for_bypass, _ork,
                 )
                 return StreamingResponse(
                     body_stream, status_code=status, headers=hdrs,
