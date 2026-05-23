@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
+import { motion } from 'framer-motion';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import Snackbar from '@mui/material/Snackbar';
@@ -382,6 +383,15 @@ const WorkflowCard: React.FC<Props> = ({
 
   return (
     <Box
+      component={motion.div}
+      // Mount animation: a soft pop-in matching AgentCard's spawn so the
+      // Convert-to-workflow swap doesn't feel instant. Springy scale +
+      // opacity over ~220ms; no position morph because the card already
+      // lands at the source chat's exact coords (handled in AgentCard's
+      // convert handler).
+      initial={{ opacity: 0, scale: 0.92 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ scale: { type: 'spring', stiffness: 320, damping: 26, mass: 0.6 }, opacity: { duration: 0.18 } }}
       data-select-type="workflow-card"
       data-select-id={workflowId}
       data-select-meta={JSON.stringify({ name: title })}

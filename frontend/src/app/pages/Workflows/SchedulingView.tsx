@@ -10,7 +10,6 @@ import React, { useCallback, useState } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Dialog from '@mui/material/Dialog';
-import TextareaAutosize from '@mui/material/TextareaAutosize';
 import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { useAppDispatch } from '@/shared/hooks';
@@ -18,6 +17,7 @@ import { updateWorkflow, updateWorkflowCard, type ScheduleConfig, type Workflow 
 import StepList from './StepList';
 import { API_BASE, getAuthToken } from '@/shared/config';
 import { useAppSelector as _useAppSelector } from '@/shared/hooks';
+import ChatInput from '@/app/pages/AgentChat/ChatInput';
 
 interface Props {
   workflow: Workflow;
@@ -59,7 +59,6 @@ function InlineSubtitle({ workflow }: { workflow: Workflow }) {
 export default function SchedulingView({ workflow, steps }: Props) {
   const c = useClaudeTokens();
   const dispatch = useAppDispatch();
-  const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ScheduleConfig | null>(null);
@@ -68,8 +67,9 @@ export default function SchedulingView({ workflow, steps }: Props) {
     dispatch(updateWorkflowCard({ workflowId: workflow.id, patch: { view: 'saved' } }));
   }, [dispatch, workflow.id]);
 
-  const onSubmit = useCallback(async () => {
-    if (!draft.trim() || busy) return;
+  const onSubmit = useCallback(async (text: string) => {
+    const cleaned = (text || '').trim();
+    if (!cleaned || busy) return undefined;
     setBusy(true);
     setError(null);
     try {
@@ -77,25 +77,27 @@ export default function SchedulingView({ workflow, steps }: Props) {
       const res = await fetch(`${API_BASE}/workflows/${encodeURIComponent(workflow.id)}/parse-schedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
-        body: JSON.stringify({ text: draft.trim() }),
+        body: JSON.stringify({ text: cleaned }),
       });
       if (!res.ok) {
         setError(`Couldn't parse that. Try "every Wednesday at 1pm" or "Mondays at 3pm".`);
-        return;
+        return undefined;
       }
       const data = await res.json();
       const cfg = data?.schedule as ScheduleConfig | undefined;
       if (!cfg) {
         setError(`Couldn't read a schedule out of that. Try being more specific.`);
-        return;
+        return undefined;
       }
       setPending(cfg);
+      return cfg;
     } catch (e) {
       setError((e as Error)?.message || 'Network error.');
+      return undefined;
     } finally {
       setBusy(false);
     }
-  }, [draft, busy, workflow.id]);
+  }, [busy, workflow.id]);
 
   const onConfirm = useCallback(async () => {
     if (!pending) return;
@@ -153,49 +155,24 @@ export default function SchedulingView({ workflow, steps }: Props) {
         <Typography sx={{ fontSize: '0.82rem', color: c.status.error }}>{error}</Typography>
       )}
       <Box sx={{ flex: 1 }} />
-      <Box sx={{
-        p: 1, borderRadius: `${c.radius.lg}px`,
-        border: `1px solid ${c.border.subtle}`, bgcolor: c.bg.surface,
-        display: 'flex', flexDirection: 'column', gap: 0.5,
-      }}>
-        <TextareaAutosize
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void onSubmit();
-            }
-          }}
-          minRows={1}
-          maxRows={4}
-          placeholder="Agent, @ for context, / for commands"
-          style={{
-            width: '100%', resize: 'none', boxSizing: 'border-box',
-            fontFamily: 'inherit', fontSize: '0.92rem', color: c.text.primary,
-            border: 'none', outline: 'none', background: 'transparent',
-            padding: '6px 4px', lineHeight: 1.45,
-          }}
+      {/* Real ChatInput (same one the toolbar / agent chat use) so the
+          composer matches Image #54 / #64 exactly: live model picker,
+          mode picker, thinking level, paperclip + mic, the works. We
+          ignore everything except the message text on send and route it
+          through /parse-schedule. sessionId is a stable per-workflow id
+          so ChatInput's draft persistence survives view re-mounts. */}
+      <Box sx={{ mx: -0.5 }}>
+        <ChatInput
+          onSend={(msg) => { void onSubmit(msg); }}
+          mode={workflow.mode || 'agent'}
+          onModeChange={() => { /* schedule chat doesn't persist mode */ }}
+          model={workflow.model || 'sonnet'}
+          onModelChange={() => { /* schedule chat doesn't persist model */ }}
+          embedded
+          autoFocus
+          sessionId={`schedule-${workflow.id}`}
+          disabled={busy}
         />
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Pill label="Agent" />
-          <Pill label="Claude Opus 4.6" />
-          <Pill label="High" />
-          <Box sx={{ flex: 1 }} />
-          <Box
-            onClick={onSubmit}
-            role="button"
-            sx={{
-              fontSize: '0.78rem', fontWeight: 700,
-              color: '#fff', bgcolor: c.accent.primary,
-              px: 1.2, py: 0.4, borderRadius: 999,
-              cursor: busy || !draft.trim() ? 'not-allowed' : 'pointer',
-              opacity: busy || !draft.trim() ? 0.5 : 1,
-              '&:hover': { filter: 'brightness(1.05)' },
-            }}>
-            {busy ? 'Working…' : 'Send'}
-          </Box>
-        </Box>
       </Box>
 
       <Dialog open={!!pending} onClose={() => setPending(null)}>
@@ -228,17 +205,6 @@ export default function SchedulingView({ workflow, steps }: Props) {
         </Box>
       </Dialog>
     </Box>
-  );
-}
-
-function Pill({ label }: { label: string }) {
-  const c = useClaudeTokens();
-  return (
-    <Box sx={{
-      fontSize: '0.74rem', fontWeight: 600, color: c.text.secondary,
-      px: 0.8, py: 0.25, borderRadius: 999,
-      border: `1px solid ${c.border.subtle}`,
-    }}>{label}</Box>
   );
 }
 
