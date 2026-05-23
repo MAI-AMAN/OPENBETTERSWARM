@@ -108,7 +108,6 @@
       "frontend/src/app/pages/Dashboard/AgentCard.tsx",
       "frontend/src/app/pages/Dashboard/BrowserAgentOverlay.tsx",
       "frontend/src/app/pages/Dashboard/BrowserCard.tsx",
-      "frontend/src/app/pages/Dashboard/Dashboard.tsx",
       "frontend/src/app/pages/Dashboard/DashboardHeader.tsx",
       "frontend/src/app/pages/Dashboard/DashboardToolbar.tsx",
       "frontend/src/app/pages/Dashboard/DashboardViewCard.tsx",
