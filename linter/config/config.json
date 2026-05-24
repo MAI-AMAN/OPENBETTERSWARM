@@ -2,6 +2,7 @@
   "enabled": {
     "max-file-lines": true,
     "max-folder-items": true,
+    "import-cycles": true,
     "no-nested-imports": false,
     "vulture": true,
     "eslint": false,
@@ -14,11 +15,13 @@
     "eslint-knip": "Node tooling deferred to a later pass.",
     "classes": "Placeholder check, not wired up. endpoints: orphaned-endpoint triage deferred.",
     "max-file-lines-exceptions": "Grandfather list of pre-existing >300-line files (existing debt, not new). Paths updated after the folder-tree restructure moved several of them.",
-    "max-folder-items-exceptions": "Exact-path allow for folders that are intentionally big. backend/ and backend/apps are FastAPI feature-package registries (each child is an app mounted in main.py); agents/ aggregates agent subsystems; core/, service/, tools_lib/, tests/ are conventionally flat. These replaced a blanket backend/.lintignore-max-folder-items so the rule still catches NEW unplanned bloat in every other folder. The webapp_template Vite scaffold is a payload, exempted as a whole subtree by its own .lintignore-max-folder-items (same as vendored mcp-bundles)."
+    "max-folder-items-exceptions": "Exact-path allow for folders that are intentionally big. backend/ and backend/apps are FastAPI feature-package registries (each child is an app mounted in main.py); agents/ aggregates agent subsystems; core/, service/, tools_lib/, tests/ are conventionally flat. These replaced a blanket backend/.lintignore-max-folder-items so the rule still catches NEW unplanned bloat in every other folder. The webapp_template Vite scaffold is a payload, exempted as a whole subtree by its own .lintignore-max-folder-items (same as vendored mcp-bundles).",
+    "import-cycles": "Flags RUNTIME circular imports only (SCC>1). Skips type-only imports (import type / export type) and dynamic import() since neither runs at module init, which is why the idiomatic Redux store<->hooks type cycle is not flagged. Frontend alias resolution comes from import-cycle-aliases. Zero cycles today; the check keeps it that way."
   },
   "rules": {
     "max-file-lines": 300,
     "max-folder-items": 7,
+    "import-cycle-aliases": { "@/": "frontend/src/" },
     "vulture-min-confidence": 1,
     "vulture-error-threshold": 1,
     "no-nested-imports": true,
@@ -138,6 +141,7 @@
       "backend/tests"
     ],
     "no-nested-imports": [],
+    "import-cycles": [],
     "vulture": ["backend/tests/*"],
     "endpoints": [],
     "classes": []

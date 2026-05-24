@@ -17,6 +17,7 @@ from checks.eslint import run_eslint
 from checks.knip import run_knip
 from checks.endpoints import run_endpoint_check
 from checks.classes import run_class_check
+from checks.cycles import run_cycle_check
 from watchfiles import watch, DefaultFilter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -28,7 +29,7 @@ def load_config() -> dict[str, Any]:
         return json.load(f)
 
 
-def run_checks(root: Path) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str]]:
+def run_checks(root: Path) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str], list[str]]:
     config = load_config()
     enabled: dict[str, bool] = config.get("enabled", {})
     rules: dict[str, int] = config["rules"]
@@ -101,8 +102,10 @@ def run_checks(root: Path) -> tuple[list[str], list[str], list[str], list[str], 
     endpoint_ignore_routes: list[str] = rules.get("endpoint-ignore-routes", [])
     endpoint_errors = run_endpoint_check(root, exceptions, endpoint_ignore_routes, ignores) if enabled.get("endpoints", True) else []
     class_errors = run_class_check(root, exceptions, excludes, ignores) if enabled.get("classes", True) else []
+    aliases: dict[str, str] = rules.get("import-cycle-aliases", {})
+    cycle_errors = run_cycle_check(root, excludes, aliases, exceptions, ignores) if enabled.get("import-cycles", True) else []
 
-    return sorted(structural_errors), sorted(vulture_errors), sorted(eslint_errors), sorted(knip_errors), sorted(endpoint_errors), sorted(class_errors)
+    return sorted(structural_errors), sorted(vulture_errors), sorted(eslint_errors), sorted(knip_errors), sorted(endpoint_errors), sorted(class_errors), sorted(cycle_errors)
 
 
 def _print_section(name: str, errors: list[str]) -> None:
@@ -116,6 +119,7 @@ def print_results(
     structural_errors: list[str], vulture_errors: list[str],
     eslint_errors: list[str], knip_errors: list[str],
     endpoint_errors: list[str], class_errors: list[str],
+    cycle_errors: list[str],
 ) -> None:
     _print_section("structural", structural_errors)
     _print_section("vulture", vulture_errors)
@@ -123,6 +127,7 @@ def print_results(
     _print_section("knip", knip_errors)
     _print_section("endpoints", endpoint_errors)
     _print_section("classes", class_errors)
+    _print_section("import-cycles", cycle_errors)
 
 
 def watch_loop(root: Path) -> None:
