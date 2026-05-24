@@ -61,7 +61,8 @@ def check_folder_items(
     except OSError:
         return None
     count = len(items)
-    if count >= max_items:
+    # the cap is the most you're allowed: 7 items is fine, the 8th is the straw.
+    if count > max_items:
         anchor = _find_anchor_file(dirpath, root)
         rel = dirpath.relative_to(root)
         msg = (
