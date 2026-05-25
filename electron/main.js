@@ -1,4 +1,4 @@
-const { app, components, BrowserWindow, ipcMain, shell, session } = require('electron');
+const { app, components, BrowserWindow, ipcMain, shell, session, dialog } = require('electron');
 // Platform-split auto-updater: electron-updater on Mac (full-featured: allowPrerelease, allowDowngrade, progress), Electron's built-in autoUpdater on Windows (required for Squirrel.Windows target; electron-updater dropped Squirrel support).
 let autoUpdater;
 let isSquirrelUpdater = false;
@@ -740,32 +740,28 @@ function createWindow() {
     }
   });
 
+  // Identity-checked: on crash recovery we recreate the window, which means BOTH the old and new BrowserWindow are alive briefly. The OLD window's closed handler must not clobber the NEW mainWindow reference when the old finally destroys.
+  const thisWindow = mainWindow;
   mainWindow.on('closed', () => {
-    mainWindow = null;
+    if (mainWindow === thisWindow) mainWindow = null;
   });
 
-  // Renderer process death (GPU/native/OOM crash) is invisible to React error
-  // boundaries: the whole content process is gone, so JS never runs to catch
-  // anything. Without this the window just sits blank forever. Reload to
-  // recover, but cap retries so a deterministic crash-on-load can't pin the CPU
-  // in an infinite reload storm; after the cap we leave it so the splash/quit
-  // path can take over rather than thrash.
+  // Renderer process death (GPU/native/OOM crash) is invisible to React error boundaries since the whole content process is gone. We RECREATE the window rather than reload(): the Electron 40 CastLabs build hits NOTREACHED in base/observer_list.h on reload after a renderer crash (some session/webview observer is re-registered against a list that disallows duplicates), aborting the entire main process with exit 3. A fresh BrowserWindow side-steps that. Crashes capped at 3 in 60s; after the cap we surface a native dialog so the user picks Reload vs Quit themselves rather than thrashing.
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     const reason = details && details.reason;
     if (reason === 'clean-exit') return;
-    // Don't fight the shutdown: the renderer dying mid-quit-drain is expected, reloading it then would resurrect a window we're trying to close.
+    // Renderer dying mid-quit-drain is expected; recreating then would resurrect a window we're trying to close.
     if (drainingForQuit) return;
     console.error('[main] renderer process gone:', reason);
     const now = Date.now();
     rendererCrashTimes = rendererCrashTimes.filter((t) => now - t < 60_000);
     if (rendererCrashTimes.length >= 3) {
-      console.error('[main] renderer crashed 3x in 60s — not auto-reloading again');
+      console.error('[main] renderer crashed 3x in 60s, showing recovery dialog');
+      showCrashRecoveryOverlay();
       return;
     }
     rendererCrashTimes.push(now);
-    try {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
-    } catch (_) {}
+    recreateMainWindow();
   });
 
   // Window-blur / window-focus tracking — analytics signal for "user
@@ -788,6 +784,75 @@ function createWindow() {
   };
   mainWindow.on('blur', () => sendFocusEvent('blur'));
   mainWindow.on('focus', () => sendFocusEvent('focus'));
+}
+
+// Crash recovery path A: tear down the dead BrowserWindow and stand up a fresh one. Used by the render-process-gone handler under the 3-in-60s cap.
+//
+// Why createWindow first, destroy old after:
+//   - If we destroy old before creating new, mainWindow goes null. Electron fires window-all-closed → app.quit() runs in the gap and we lose the process before the new window exists.
+//   - createWindow() assigns mainWindow = newWindow synchronously, so the window list never drops to zero.
+//
+// Why setImmediate for the destroy:
+//   - We're INSIDE the old window's render-process-gone handler. Destroying its BrowserWindow from inside its own event callback works in current Electron but is fragile across version bumps; deferring one tick is free insurance.
+function recreateMainWindow() {
+  const oldWindow = mainWindow;
+  mainWindowReady = false;
+  try {
+    createWindow();
+  } catch (err) {
+    console.error('[main] recreateMainWindow: createWindow failed:', err && err.message);
+    return;
+  }
+  const freshWindow = (mainWindow && mainWindow !== oldWindow) ? mainWindow : null;
+  if (freshWindow) {
+    freshWindow.once('ready-to-show', () => {
+      try {
+        freshWindow.show();
+        freshWindow.focus();
+        mainWindowReady = true;
+      } catch (_) {}
+    });
+    // After recreate the splash is long gone, so we can't rely on the boot path's swapToMain. Re-attach the update-notif listener that app.whenReady installed on the original webContents; the new webContents has no listeners yet.
+    if (!isDev) {
+      freshWindow.webContents.on('did-finish-load', () => {
+        if (cachedUpdateStatus.status === 'available') {
+          sendToRenderer('update-available', cachedUpdateStatus.info);
+        } else if (cachedUpdateStatus.status === 'downloaded') {
+          sendToRenderer('update-downloaded', cachedUpdateStatus.info);
+        }
+      });
+    }
+  }
+  setImmediate(() => {
+    if (oldWindow && !oldWindow.isDestroyed()) {
+      try { oldWindow.destroy(); } catch (_) {}
+    }
+  });
+}
+
+// Crash recovery path B: the cap-exceeded fallback. Native dialog (not a BrowserWindow) so we cannot trigger the same observer-double-add DCHECK that motivated this whole change. User-driven Reload runs in a clean call stack outside the render-process-gone handler.
+async function showCrashRecoveryOverlay() {
+  try {
+    const result = await dialog.showMessageBox({
+      type: 'error',
+      title: 'OpenSwarm needs to reload',
+      message: 'OpenSwarm had repeated UI errors and stopped auto-recovering.',
+      detail: 'Reload to try again, or quit if this keeps happening.',
+      buttons: ['Reload', 'Quit'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (result.response === 0) {
+      rendererCrashTimes = [];
+      recreateMainWindow();
+    } else {
+      app.quit();
+    }
+  } catch (err) {
+    console.error('[main] showCrashRecoveryOverlay failed:', err && err.message);
+    app.quit();
+  }
 }
 
 function sendToRenderer(channel, ...args) {
