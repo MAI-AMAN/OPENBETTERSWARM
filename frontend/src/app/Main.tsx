@@ -33,6 +33,21 @@ const OnboardingRoot = lazy(() =>
 const SignInGate = lazy(() => import('./components/overlays/SignInGate'));
 
 if (typeof window !== 'undefined') {
+  // Diagnostic global error capture. The packaged bundle has no source maps, so without these handlers the only thing that reaches main-process stderr is "Uncaught TypeError: ... (bundle.js:2)" with zero stack context. Forward error.stack and Redux action.type when available so we can pinpoint the offender across the chat-spawn / workflow rendering paths even in minified prod.
+  window.addEventListener('error', (e) => {
+    try {
+      // eslint-disable-next-line no-console
+      console.error('[diag][window.error]', e.message, '@', e.filename, ':', e.lineno, ':', e.colno, '\nstack:\n', e.error && (e.error as Error).stack);
+    } catch { /* never let the handler itself throw */ }
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    try {
+      const reason = (e as PromiseRejectionEvent).reason;
+      // eslint-disable-next-line no-console
+      console.error('[diag][window.unhandledrejection]', reason && reason.message, '\nstack:\n', reason && reason.stack);
+    } catch { /* never let the handler itself throw */ }
+  });
+
   (window as any).__openswarmPrefetchRoute = (path: string) => {
     switch (path) {
       case '/skills': void import('./pages/Skills/Skills'); return;
