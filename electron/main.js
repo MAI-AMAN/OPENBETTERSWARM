@@ -1103,6 +1103,26 @@ app.whenReady().then(async () => {
     return allowed.includes(permission);
   });
 
+  // Strip X-Frame-Options and CSP frame-ancestors directives on iframe subframe loads so the Windows BrowserCard iframe fallback (used because <webview> tag commit segfaults on Chromium 144 + this Electron 40 CastLabs build) can render sites that normally refuse to be embedded. Scoped to types:['sub_frame'] so OAuth popups, the main app frame, deep-link redirects, and DRM license fetches keep their security headers intact. urls filter limits to http/https so file:// loads of the bundled frontend are untouched.
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ['http://*/*', 'https://*/*'], types: ['sub_frame'] },
+    (details, callback) => {
+      const headers = { ...(details.responseHeaders || {}) };
+      for (const k of Object.keys(headers)) {
+        const lk = k.toLowerCase();
+        if (lk === 'x-frame-options') {
+          delete headers[k];
+        } else if (lk === 'content-security-policy' || lk === 'content-security-policy-report-only') {
+          const cleaned = (headers[k] || [])
+            .map((v) => v.split(';').filter((d) => !/^\s*frame-ancestors\b/i.test(d)).join(';').trim())
+            .filter(Boolean);
+          if (cleaned.length) headers[k] = cleaned; else delete headers[k];
+        }
+      }
+      callback({ responseHeaders: headers });
+    },
+  );
+
   // Read-only logging for DRM license requests — no modifying interceptors
   // so the network stack can set Content-Type and other headers normally.
   session.defaultSession.webRequest.onSendHeaders(

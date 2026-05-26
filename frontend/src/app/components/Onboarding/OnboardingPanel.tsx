@@ -447,7 +447,7 @@ const StepCardBody: React.FC<StepCardProps> = ({
           <Box
             component="video"
             src={step.videoSrc}
-            autoPlay
+            autoPlay={typeof navigator === 'undefined' || !navigator.userAgent.includes('Windows')}
             muted
             loop
             playsInline
@@ -569,7 +569,7 @@ const StepCardBody: React.FC<StepCardProps> = ({
               <Box
                 component="video"
                 src={step.videoSrc}
-                autoPlay
+                autoPlay={typeof navigator === 'undefined' || !navigator.userAgent.includes('Windows')}
                 muted
                 loop
                 playsInline

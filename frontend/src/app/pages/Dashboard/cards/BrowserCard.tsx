@@ -73,7 +73,8 @@ const HANDLE_DEFS: { dir: ResizeDir; sx: Record<string, any> }[] = [
   { dir: 'se', sx: { bottom: -EDGE_THICKNESS / 2, right: -EDGE_THICKNESS / 2, width: CORNER_SIZE, height: CORNER_SIZE } },
 ];
 
-const isElectron = navigator.userAgent.includes('Electron');
+// On Windows, force iframe fallback path: the <webview> tag mount segfaults the renderer during commit on Chromium 144 + this Electron 40 CastLabs build. iframe renders blank for sites with X-Frame-Options but does not crash. Mac keeps webview (full browser).
+const isElectron = navigator.userAgent.includes('Electron') && !navigator.userAgent.includes('Windows');
 // eslint-disable-next-line no-console
 console.log('[diag][BrowserCard] isElectron=', isElectron, 'ua=', navigator.userAgent, 'hasOpenswarm=', !!(window as any).openswarm);
 

@@ -18,6 +18,26 @@ import { ForcedToolGroup } from '../types';
 
 type Skill = { id: string; name: string; content: string };
 
+// Editor element type abstraction. On Windows we render a <textarea> instead of a <div contentEditable> to avoid the Chromium 144 + Windows TSF native crash on commit; readers/writers/clearers must route to the right API.
+function isTextareaEl(el: HTMLElement | null): el is HTMLTextAreaElement {
+  return !!el && el.tagName === 'TEXTAREA';
+}
+function readEditorText(el: HTMLElement | null): string {
+  if (!el) return '';
+  if (isTextareaEl(el)) return el.value;
+  return el.textContent || '';
+}
+function readEditorHTML(el: HTMLElement | null): string {
+  if (!el) return '';
+  if (isTextareaEl(el)) return el.value;
+  return el.innerHTML;
+}
+function clearEditor(el: HTMLElement | null): void {
+  if (!el) return;
+  if (isTextareaEl(el)) el.value = '';
+  else el.innerHTML = '';
+}
+
 interface Params {
   editorRef: RefObject<HTMLDivElement>;
   generalFileInputRef: RefObject<HTMLInputElement>;
@@ -104,13 +124,13 @@ export function useEditorHandlers(p: Params) {
     if (justPastedRef.current) {
       justPastedRef.current = false;
       setHasContent(true);
-      scheduleDraftSave(ownerId, () => editorRef.current?.innerHTML ?? '');
+      scheduleDraftSave(ownerId, () => readEditorHTML(editorRef.current));
       return;
     }
     updateHasContent();
     detectTrigger();
     syncAttachedSkills();
-    scheduleDraftSave(ownerId, () => editorRef.current?.innerHTML ?? '');
+    scheduleDraftSave(ownerId, () => readEditorHTML(editorRef.current));
   }, [updateHasContent, detectTrigger, syncAttachedSkills, ownerId]);
 
   const handleEditorClick = useCallback(() => {
@@ -198,7 +218,7 @@ export function useEditorHandlers(p: Params) {
       }
       const editor = editorRef.current;
       if (editor) {
-        editor.innerHTML = '';
+        clearEditor(editor);
         updateHasContent();
       }
       return;
