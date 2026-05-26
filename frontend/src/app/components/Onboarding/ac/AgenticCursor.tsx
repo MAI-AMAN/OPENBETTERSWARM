@@ -6,7 +6,7 @@ import React, {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, useAnimationControls, AnimatePresence } from 'framer-motion';
+import { motion, useAnimationControls, AnimatePresence } from '../_motionWin';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { cursorStore } from './cursorStore';
 import { resolveSelector } from '../selectors';

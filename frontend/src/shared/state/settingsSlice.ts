@@ -115,7 +115,7 @@ const initialState: SettingsState = {
     theme: 'dark',
     new_agent_shortcut: 'Meta+l',
     anthropic_api_key: null,
-    browser_homepage: 'https://www.google.com',
+    browser_homepage: 'https://duckduckgo.com',
     auto_select_mode_on_new_agent: false,
     expand_new_chats_in_dashboard: false,
     auto_reveal_sub_agents: true,

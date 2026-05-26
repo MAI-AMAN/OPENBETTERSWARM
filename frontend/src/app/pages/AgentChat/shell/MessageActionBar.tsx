@@ -44,8 +44,6 @@ const MessageActionBar: React.FC<Props> = ({
   onBranch,
   branchNav,
 }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][MessageActionBar:render]', 'role=', role);
   const c = useClaudeTokens();
   const [copied, setCopied] = useState(false);
 

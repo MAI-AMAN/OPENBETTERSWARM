@@ -75,8 +75,6 @@ const HANDLE_DEFS: { dir: ResizeDir; sx: Record<string, any> }[] = [
 
 // On Windows, force iframe fallback path: the <webview> tag mount segfaults the renderer during commit on Chromium 144 + this Electron 40 CastLabs build. iframe renders blank for sites with X-Frame-Options but does not crash. Mac keeps webview (full browser).
 const isElectron = navigator.userAgent.includes('Electron') && !navigator.userAgent.includes('Windows');
-// eslint-disable-next-line no-console
-console.log('[diag][BrowserCard] isElectron=', isElectron, 'ua=', navigator.userAgent, 'hasOpenswarm=', !!(window as any).openswarm);
 
 const chromeUserAgent = navigator.userAgent
   .replace(/\s*Electron\/\S+/, '')
@@ -127,8 +125,6 @@ const BrowserCard: React.FC<Props> = ({
   isSelected = false, isHighlighted = false, multiDragDelta, onCardSelect, onDragStart, onDragMove, onDragEnd,
   cardZOrder = 0, onDoubleClick, onBringToFront,
 }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][BrowserCard:render]', browserId, 'tabs=', tabs && tabs.length);
   const c = useClaudeTokens();
   const dispatch = useAppDispatch();
   const scrollOverlayRef = useOverlayScrollPassthrough(isSelected);
@@ -1123,34 +1119,11 @@ const BrowserCard: React.FC<Props> = ({
               style={{ width: '100%', height: '100%', border: 'none' }}
               title="Browser"
               referrerPolicy="no-referrer-when-downgrade"
-              onLoad={() => {
-                // eslint-disable-next-line no-console
-                console.log('[diag][iframe:onLoad]', activeUrl);
-              }}
               onError={(e) => {
                 // eslint-disable-next-line no-console
                 console.error('[diag][iframe:onError]', activeUrl, (e as any)?.message || e);
               }}
             />
-            <Box
-              sx={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                bgcolor: `${c.status.warningBg}`,
-                borderTop: `1px solid ${c.status.warning}`,
-                px: 1.5,
-                py: 0.5,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
-              }}
-            >
-              <Typography sx={{ fontSize: '0.68rem', color: c.status.warning }}>
-                iframe mode: some sites may not load. Use the Electron build for full browser support.
-              </Typography>
-            </Box>
           </Box>
         )}
 

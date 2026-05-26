@@ -28,12 +28,6 @@ interface Props {
 export const ModeControl: React.FC<Props> = ({
   c, menuPaperProps, modeConf, modesArr, mode, onModeChange, iconMap, modeAnchor, setModeAnchor, setModelAnchor, allModelFlat, model,
 }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ModeControl:render]', 'mode=', mode);
-  React.useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[diag][ModeControl:committed]');
-  });
   return (
     <>
       <Box

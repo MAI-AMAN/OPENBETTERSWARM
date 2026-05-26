@@ -9,8 +9,6 @@ import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 
 /** /context drawer: shows session MCPs, ctx%, cache hits, compaction. Opened via window CustomEvent from ChatInput's slash handler. */
 export default function ContextDrawer() {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ContextDrawer:render]');
   const c = useClaudeTokens();
   const [openFor, setOpenFor] = useState<string | null>(null);
   const session = useAppSelector((state) => (openFor ? state.agents.sessions[openFor] : undefined));

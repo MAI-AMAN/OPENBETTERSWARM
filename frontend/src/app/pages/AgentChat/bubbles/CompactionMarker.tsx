@@ -6,8 +6,6 @@ import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 
 /** Chip marking where auto-compaction collapsed older turns, so the transcript doesn't just appear to skip. */
 const CompactionMarker: React.FC<{ collapsedCount: number }> = ({ collapsedCount }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][CompactionMarker:render]', 'collapsed=', collapsedCount);
   const c = useClaudeTokens();
   const label = collapsedCount > 0
     ? `${collapsedCount} earlier turn${collapsedCount === 1 ? '' : 's'} summarized`

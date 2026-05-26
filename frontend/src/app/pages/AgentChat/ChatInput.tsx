@@ -43,8 +43,6 @@ interface Props {
 }
 
 const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, onModeChange, model, onModelChange, provider, onProviderChange, isRunning, onStop, autoRunMode, contextEstimate, embedded, autoFocus, sessionId, queueLength = 0, thinkingLevel = 'auto', onThinkingLevelChange }, ref) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ChatInput:render]', sessionId, 'mode=', mode, 'isRunning=', isRunning);
   const c = useClaudeTokens();
   const editorRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);

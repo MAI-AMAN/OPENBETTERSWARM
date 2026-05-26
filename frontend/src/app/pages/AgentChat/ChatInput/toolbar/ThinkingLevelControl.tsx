@@ -23,12 +23,6 @@ interface Props {
 export const ThinkingLevelControl: React.FC<Props> = ({
   c, model, allModelFlat, thinkingLevel, onThinkingLevelChange, thinkingAnchor, setThinkingAnchor, menuPaperProps,
 }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ThinkingLevelControl:render]', 'model=', model, 'level=', thinkingLevel);
-  React.useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[diag][ThinkingLevelControl:committed]');
-  });
   const currentModel = allModelFlat.find((m: any) => m.value === model) as any;
   if (!currentModel?.reasoning || !onThinkingLevelChange) return null;
   const levels: Array<{ value: ThinkingLevel; label: string; desc: string }> = [

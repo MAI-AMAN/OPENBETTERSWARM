@@ -159,8 +159,6 @@ interface AgentChatProps {
 }
 
 const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose, embedded, autoFocus, isGlowing, onDismissGlow, initialContextPaths, onBranch }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][AgentChat] render', { sessionIdProp, embedded });
   const c = useClaudeTokens();
   const STATUS_STYLES: Record<string, { color: string; bg: string }> = {
     running: { color: c.status.success, bg: c.status.successBg },
@@ -835,9 +833,6 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
 
   const isActive = session.status === 'running' || session.status === 'waiting_approval' || session.status === 'draft';
   const statusStyle = STATUS_STYLES[session.status] || { color: c.text.tertiary, bg: c.bg.secondary };
-
-  // eslint-disable-next-line no-console
-  console.log('[diag][AgentChat:before-jsx]', id, 'status=', session.status, 'isActive=', isActive);
 
   return (
     <Box sx={{ display: 'flex', height: '100%' }}>

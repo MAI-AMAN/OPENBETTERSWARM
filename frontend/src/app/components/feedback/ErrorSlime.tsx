@@ -2,8 +2,6 @@ import React from 'react';
 
 /** Slime illustration with X eyes and red badge for errors/warnings. */
 export const ErrorSlime: React.FC<{ size?: number }> = ({ size = 22 }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ErrorSlime:render]', 'size=', size);
   return (
   <svg width={size} height={size} viewBox="0 0 28 28" fill="none" style={{ flexShrink: 0 }}>
     <path

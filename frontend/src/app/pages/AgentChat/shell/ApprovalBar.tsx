@@ -899,8 +899,6 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
 };
 
 const ApprovalBar: React.FC<Props> = (props) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ApprovalBar:render]', props.request && props.request.tool_name);
   if (props.request.tool_name === 'AskUserQuestion') {
     return <QuestionForm request={props.request} onApprove={props.onApprove} onDeny={props.onDeny} />;
   }

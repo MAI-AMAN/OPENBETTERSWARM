@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useState, useRef, Suspense, lazy } from 'react';
+import React, { useMemo, useEffect, useState, useRef, Suspense } from 'react';
 import { Provider } from 'react-redux';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { ThemeProvider as MuiThemeProvider, createTheme, CssBaseline } from '@mui/material';
@@ -21,58 +21,19 @@ import AppShell from './components/Layout/AppShell';
 import DashboardSelection from './pages/DashboardSelection/DashboardSelection';
 import ErrorBoundary from './components/feedback/ErrorBoundary';
 import { setPanelMode, disableOnboardingAfterCrash } from '@/shared/state/onboardingProgressSlice';
-// Wrap every lazy() so each chunk load (request, success, failure) emits a diag line. Chunk-split race against React commit is one of the candidate causes of the packaged-only segfault, so this surfaces if a chunk failed to load in the moment leading up to a crash.
-function diagLazy<T extends React.ComponentType<any>>(name: string, loader: () => Promise<{ default: T } | T>): React.LazyExoticComponent<T> {
-  return lazy(() => {
-    // eslint-disable-next-line no-console
-    console.log('[diag][lazy:requested]', name);
-    return Promise.resolve()
-      .then(loader)
-      .then((mod: any) => {
-        // eslint-disable-next-line no-console
-        console.log('[diag][lazy:loaded]', name);
-        return mod && 'default' in mod ? mod : { default: mod };
-      })
-      .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error('[diag][lazy:failed]', name, err && err.message, err && err.stack);
-        throw err;
-      });
-  });
-}
 
-const Skills = diagLazy('Skills', () => import('./pages/Skills/Skills'));
-const Tools = diagLazy('Tools', () => import('./pages/Tools/Tools'));
-const Modes = diagLazy('Modes', () => import('./pages/Modes/Modes'));
-const Views = diagLazy('Views', () => import('./pages/Views/Views'));
-const Customization = diagLazy('Customization', () => import('./pages/Customization/Customization'));
-const Analytics = diagLazy('Analytics', () => import('./pages/Analytics/Analytics'));
-const OnboardingRoot = diagLazy('OnboardingRoot', () =>
+const Skills = React.lazy(() => import('./pages/Skills/Skills'));
+const Tools = React.lazy(() => import('./pages/Tools/Tools'));
+const Modes = React.lazy(() => import('./pages/Modes/Modes'));
+const Views = React.lazy(() => import('./pages/Views/Views'));
+const Customization = React.lazy(() => import('./pages/Customization/Customization'));
+const Analytics = React.lazy(() => import('./pages/Analytics/Analytics'));
+const OnboardingRoot = React.lazy(() =>
   import('./components/Onboarding').then((m) => ({ default: m.OnboardingRoot })),
 );
-const SignInGate = diagLazy('SignInGate', () => import('./components/overlays/SignInGate'));
+const SignInGate = React.lazy(() => import('./components/overlays/SignInGate'));
 
 if (typeof window !== 'undefined') {
-  // Boot-time env snapshot targets candidates #2 (React prod mode) and #3 (tree-shaking removed side-effectful import): we log NODE_ENV, React version, presence of Emotion's cache stylesheet, and any pre-existing emotion/MUI globals so a post-crash trace shows whether the runtime env matched what the bundle expected.
-  try {
-    // eslint-disable-next-line no-console
-    console.log('[diag][env] NODE_ENV=', (typeof process !== 'undefined' && process.env && process.env.NODE_ENV) || 'undefined',
-      'React=', (React as any).version,
-      'origin=', window.location.origin,
-      'href=', window.location.href);
-    setTimeout(() => {
-      try {
-        const emotionStyles = document.querySelectorAll('style[data-emotion]');
-        const muiStyles = document.querySelectorAll('style[data-styled],style[data-mui]');
-        // eslint-disable-next-line no-console
-        console.log('[diag][env] emotion_styles=', emotionStyles.length, 'mui_styles=', muiStyles.length, 'all_styles=', document.styleSheets.length);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('[diag][env] style probe failed:', err && (err as Error).message);
-      }
-    }, 100);
-  } catch { /* never let the diag block crash */ }
-
   // Diagnostic global error capture. The packaged bundle has no source maps, so without these handlers the only thing that reaches main-process stderr is "Uncaught TypeError: ... (bundle.js:2)" with zero stack context. Forward error.stack and Redux action.type when available so we can pinpoint the offender across the chat-spawn / workflow rendering paths even in minified prod.
   window.addEventListener('error', (e) => {
     try {

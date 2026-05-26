@@ -70,8 +70,6 @@ interface Props {
 }
 
 const ToolGroupBubble: React.FC<Props> = React.memo(({ group, isSessionRunning = false, meta, sessionId }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ToolGroupBubble:render]', group && group.id, 'mcp=', !!(group && group.mcpServer), 'items=', group && group.items && group.items.length);
   const c = useClaudeTokens();
   const isMcp = !!group.mcpServer;
   const [expanded, setExpanded] = useState(isMcp);

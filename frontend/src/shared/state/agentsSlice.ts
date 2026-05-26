@@ -291,19 +291,13 @@ export const fetchSession = createAsyncThunk(
 export const launchAndSendFirstMessage = createAsyncThunk(
   'agents/launchAndSendFirstMessage',
   async ({ draftId, config, prompt, mode, model, provider, images, contextPaths, forcedTools, attachedSkills, selectedBrowserIds }: LaunchAndSendPayload) => {
-    // eslint-disable-next-line no-console
-    console.log('[diag][thunk] launchAndSendFirstMessage START draft=', draftId, 'mode=', mode, 'model=', model, 'provider=', provider);
     const launchRes = await fetch(`${AGENTS_API}/launch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
     });
-    // eslint-disable-next-line no-console
-    console.log('[diag][thunk] launch fetch ok=', launchRes.ok, 'status=', launchRes.status);
     const launchData = await launchRes.json();
     const session = launchData.session as AgentSession;
-    // eslint-disable-next-line no-console
-    console.log('[diag][thunk] launch parsed, sessionId=', session && session.id);
 
     await fetch(`${AGENTS_API}/sessions/${session.id}/message`, {
       method: 'POST',
@@ -476,15 +470,9 @@ export const searchHistory = createAsyncThunk(
 export const resumeSession = createAsyncThunk(
   'agents/resumeSession',
   async ({ sessionId }: { sessionId: string }) => {
-    // eslint-disable-next-line no-console
-    console.log('[diag][thunk] resumeSession START', sessionId);
     try {
       const res = await fetch(`${AGENTS_API}/sessions/${sessionId}/resume`, { method: 'POST' });
-      // eslint-disable-next-line no-console
-      console.log('[diag][thunk] resumeSession fetch ok=', res.ok, 'status=', res.status);
       const data = await res.json();
-      // eslint-disable-next-line no-console
-      console.log('[diag][thunk] resumeSession parsed, keys=', Object.keys(data || {}).join(','));
       return data.session as AgentSession;
     } catch (e: any) {
       // eslint-disable-next-line no-console

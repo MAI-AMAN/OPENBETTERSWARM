@@ -12,8 +12,6 @@ interface Props {
 
 /** Leaf subscriber for one session's streaming entry; isolates re-renders so AgentChat doesn't churn per character. */
 const StreamingBubble: React.FC<Props> = ({ sessionId, activeBranchId, turnLabel, onStreamGrew }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][StreamingBubble:render]', sessionId, 'branch=', activeBranchId);
   const streamingMessage = useStreamingMessage(sessionId);
   const typedContent = streamingMessage?.content ?? '';
   // RAF-coalesce so onStreamGrew fires once per frame regardless of token rate.

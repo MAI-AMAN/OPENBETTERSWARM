@@ -47,8 +47,6 @@ interface ToolCallBubbleProps {
 
 const ToolCallBubble: React.FC<ToolCallBubbleProps> = React.memo(
   ({ call, result = null, isPending = false, isStreaming = false, mcpCompact = false, sessionId }) => {
-    // eslint-disable-next-line no-console
-    console.log('[diag][ToolCallBubble:render]', call && call.id, 'name=', call && call.name);
     ensureToolCallKeyframes();
 
     const c = useClaudeTokens();

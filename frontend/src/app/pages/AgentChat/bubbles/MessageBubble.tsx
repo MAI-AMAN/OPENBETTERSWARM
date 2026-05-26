@@ -844,8 +844,6 @@ interface Props {
 }
 
 const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, onSaveEdit, onCancelEdit, isStreaming, dynamicTurnLabel }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][MessageBubble:render]', message && message.id, 'role=', message && message.role, 'streaming=', isStreaming);
   const c = useClaudeTokens();
   const dispatch = useAppDispatch();
   const [editText, setEditText] = useState('');

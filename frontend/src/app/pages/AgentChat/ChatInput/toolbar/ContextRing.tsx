@@ -4,8 +4,6 @@ import Tooltip from '@mui/material/Tooltip';
 import { formatTokenCount } from '../helpers';
 
 export const ContextRing: React.FC<{ used: number; limit: number; accentColor: string; trackColor: string }> = ({ used, limit, accentColor, trackColor }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ContextRing:render]', 'used=', used, 'limit=', limit);
   if (used === 0) return null;
   const pct = Math.min((used / limit) * 100, 100);
   const size = 20;

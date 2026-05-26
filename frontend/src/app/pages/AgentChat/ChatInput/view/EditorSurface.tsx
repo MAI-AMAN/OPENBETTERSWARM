@@ -25,8 +25,6 @@ export const EditorSurface: React.FC<Props> = ({
   c, editorRef, disabled, hasContent, hasAttachments, autoRunMode, isRunning, queueLength,
   placeholderLabel, onInput, onClick, onKeyDown, onPaste,
 }) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][EditorSurface:render]', 'disabled=', disabled, 'hasContent=', hasContent, 'isWin=', IS_WIN);
   const placeholderText = disabled
     ? 'Agent is working...'
     : autoRunMode

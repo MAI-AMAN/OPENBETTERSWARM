@@ -44,12 +44,6 @@ interface Props {
 }
 
 export const ModelPickerMenu: React.FC<Props> = (props) => {
-  // eslint-disable-next-line no-console
-  console.log('[diag][ModelPickerMenu:render]', 'model=', props.model, 'open=', !!props.modelAnchor);
-  React.useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[diag][ModelPickerMenu:committed]');
-  });
   const {
     c, menuPaperProps, modelAnchor, setModelAnchor, model, onModelChange, onProviderChange,
     modelSearchRef, modelSearch, setModelSearch, pushRecentModel, pushRecentSearch,
