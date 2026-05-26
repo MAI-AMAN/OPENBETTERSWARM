@@ -18,6 +18,25 @@ FRONTEND_DIR_ABSPATH="$(dirname "$RUN_FRONTEND_ABSPATH")"
 
 cd "$FRONTEND_DIR_ABSPATH"
 
+# Put the bundled Node on PATH so `npm`, `node`, and the vite child
+# processes all resolve even on a machine with no system Node. The
+# packaged Electron shell exports OPENSWARM_NODE_PATH (e.g.
+# .../node/x64/node.exe on Windows, .../node/<arch>/bin/node on POSIX);
+# its directory holds node + the npm/npx shims. Dev leaves it unset and
+# falls back to system Node on PATH.
+NPM="npm"
+if [[ -n "${OPENSWARM_NODE_PATH:-}" && -x "${OPENSWARM_NODE_PATH}" ]]; then
+    NODE_DIR="$(dirname "$OPENSWARM_NODE_PATH")"
+    export PATH="$NODE_DIR:$PATH"
+    # Windows bundles npm.cmd next to node.exe; POSIX bundles an `npm` shim
+    # in the same bin/ dir. Prefer the colocated one, else trust PATH.
+    if [[ -f "$NODE_DIR/npm.cmd" ]]; then
+        NPM="$NODE_DIR/npm.cmd"
+    elif [[ -x "$NODE_DIR/npm" ]]; then
+        NPM="$NODE_DIR/npm"
+    fi
+fi
+
 # Fast path: the seeder usually symlinks node_modules to a shared warm
 # cache (~/.openswarm/cache/webapp_template_node_modules/<hash>), so the
 # dependency install has already been done once and we can skip straight
@@ -28,11 +47,23 @@ if [ -d node_modules ] && [ -n "$(ls -A node_modules 2>/dev/null)" ]; then
     echo "Dependencies already present — skipping install."
 else
     echo "Installing dependencies..."
-    npm install --prefer-offline --no-audit --no-fund
+    "$NPM" install --prefer-offline --no-audit --no-fund
 fi
 
 echo "Building with development mode..."
-npm run dev
+# Prefer `npm run dev` (honors package.json script + flags). But the
+# packaged build ships node.exe WITHOUT npm, so on a machine with no
+# system npm we fall back to invoking vite directly through the bundled
+# node — node_modules is already populated (warm-cache symlink or seed),
+# so vite's bin is present and this needs no package manager at all.
+if command -v "$NPM" &>/dev/null || [[ "$NPM" != "npm" ]]; then
+    "$NPM" run dev
+elif [[ -n "${OPENSWARM_NODE_PATH:-}" && -x "${OPENSWARM_NODE_PATH}" && -f node_modules/vite/bin/vite.js ]]; then
+    echo "npm not found; running vite directly via bundled node."
+    "$OPENSWARM_NODE_PATH" node_modules/vite/bin/vite.js
+else
+    "$NPM" run dev
+fi
 
 # exit back to the dir that we were in before
 cd -

@@ -6,10 +6,49 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import threading
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_npm() -> list[str] | None:
+    """Resolve an invokable npm command. Windows ships npm as npm.cmd (a
+    batch shim), which Python's subprocess won't find via a bare "npm";
+    and the packaged Electron build bundles only node.exe (no npm) but
+    exports OPENSWARM_NODE_PATH, so we also probe node's own bundled
+    npm-cli.js. Returns an argv prefix, or None when npm is genuinely
+    absent (caller treats warm-cache as a skippable optimization)."""
+    node_path = os.environ.get("OPENSWARM_NODE_PATH")
+    if node_path and os.path.exists(node_path):
+        node_dir = os.path.dirname(node_path)
+        for shim in ("npm.cmd", "npm"):
+            cand = os.path.join(node_dir, shim)
+            if os.path.exists(cand):
+                return [cand]
+        # node.exe with no sibling npm: invoke npm-cli.js directly via node.
+        for rel in (
+            os.path.join("node_modules", "npm", "bin", "npm-cli.js"),
+            os.path.join(node_dir, "node_modules", "npm", "bin", "npm-cli.js"),
+        ):
+            cli = rel if os.path.isabs(rel) else os.path.join(node_dir, rel)
+            if os.path.exists(cli):
+                return [node_path, cli]
+    for name in ("npm.cmd", "npm") if sys.platform == "win32" else ("npm",):
+        found = shutil.which(name)
+        if found:
+            return [found]
+    return None
+
+
+def _resolve_python() -> str:
+    """The interpreter to build warm/workspace venvs with. sys.executable
+    is the running backend's python (bundled standalone in the packaged
+    build, system python in dev) and is always valid, sidestepping the
+    Windows `python3` Microsoft-Store alias shim that shutil.which finds
+    first and which exits non-zero with 'Python was not found'."""
+    return sys.executable
 
 # Absolute path to the bundled skill source. Surfaced as a constant so the
 # skills subsystem can register it as a built-in skill (copy into
@@ -265,17 +304,33 @@ def _ensure_warm_cache() -> str | None:
             tmpl_lock = os.path.join(WEBAPP_TEMPLATE_DIR, "frontend", "package-lock.json")
             shutil.copyfile(tmpl_pkg, os.path.join(cache_dir, "package.json"))
             base_flags = ["--prefer-offline", "--no-audit", "--no-fund", "--loglevel=error"]
+            npm = _resolve_npm()
+            if npm is None:
+                logger.info("webapp-template: no npm available; skipping warm cache (workspace will install on first run)")
+                return None
             if os.path.exists(tmpl_lock):
                 shutil.copyfile(tmpl_lock, os.path.join(cache_dir, "package-lock.json"))
-                cmd = ["npm", "ci", *base_flags]
+                cmd = [*npm, "ci", *base_flags]
             else:
                 # No lockfile yet; `npm install` resolves the tree and
                 # writes one into the cache dir for future use.
-                cmd = ["npm", "install", *base_flags]
+                cmd = [*npm, "install", *base_flags]
             logger.info("webapp-template: warming node_modules cache at %s", cache_dir)
             result = subprocess.run(
                 cmd, cwd=cache_dir, capture_output=True, text=True, timeout=600
             )
+            # --prefer-offline reuses npm's metadata cache, which can be
+            # stale: if a pinned transitive (e.g. a @babel/* helper) was
+            # published after the cache snapshot, resolution fails ETARGET
+            # even though the registry has it. Retry once online (drops
+            # --prefer-offline) so a partially-stale cache self-heals
+            # instead of dead-ending the whole App Builder frontend.
+            if result.returncode != 0 and "ETARGET" in (result.stderr or ""):
+                online_cmd = [c for c in cmd if c != "--prefer-offline"]
+                logger.info("webapp-template: warm-cache offline pass hit ETARGET; retrying online")
+                result = subprocess.run(
+                    online_cmd, cwd=cache_dir, capture_output=True, text=True, timeout=600
+                )
             if result.returncode != 0:
                 logger.warning(
                     "webapp-template warm-cache install failed (rc=%s): %s",
@@ -378,18 +433,7 @@ def _ensure_warm_python_venv() -> str | None:
             # `python.exe`. On macOS/Linux the versioned candidates
             # match first so we don't accidentally pick a system
             # Python 2.x via the bare name.
-            py = None
-            candidates = (
-                "python3.13", "python3.12", "python3.11", "python3.10",
-                "python3", "python",
-            )
-            for candidate in candidates:
-                if shutil.which(candidate):
-                    py = candidate
-                    break
-            if py is None:
-                logger.warning("webapp-template warm-venv: no python on PATH")
-                return None
+            py = _resolve_python()
 
             # Wipe any half-populated venv from a previous crashed run.
             if os.path.isdir(venv_dir):
