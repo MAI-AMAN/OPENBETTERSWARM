@@ -54,6 +54,8 @@ interface MultiChoiceState {
 const SPRING = { type: 'spring' as const, stiffness: 260, damping: 26 };
 
 const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
+  // Windows ablation: the AgenticCursor uses a portaled Framer Motion infinite-loop scale animation with drop-shadow filters that is the prime suspect for the onboarding panel commit-phase 0xC0000005 crash; disable the visual cursor on Windows but keep the imperative handle (so the AC runtime can no-op its move/click ops without breaking the step machine).
+  const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
   const c = useClaudeTokens();
   const controls = useAnimationControls();
   const posRef = useRef({ x: 0, y: 0 });
@@ -257,7 +259,8 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
           transformOrigin: 'top left',
         }}
       >
-        {visible && (
+        {visible && !isWindows && (
+          // Windows ablation: this portaled Framer Motion infinite-loop scale + drop-shadow node is the prime suspect for the onboarding panel commit-phase 0xC0000005 segfault on Chromium 144; suppressing the visual ring on Windows leaves the imperative cursor handle intact so the AC step runtime keeps functioning headlessly.
           <motion.div
             animate={{
               scale: [1, 1.04, 1],
@@ -269,7 +272,6 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
             }}
             style={{
               transform: 'translate(-2px, -2px)',
-              // Tight inner ring + soft outer halo reads on light AND dark canvases.
               filter: `drop-shadow(0 0 6px ${c.accent.primary}cc) drop-shadow(0 0 14px ${c.accent.primary}55)`,
             }}
           >
