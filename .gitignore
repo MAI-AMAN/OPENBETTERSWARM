@@ -13,7 +13,9 @@ electron/dist/
 electron/python-env/
 electron/build-staging/
 electron/node_modules/
-electron/package-lock.json
+# electron/package-lock.json is intentionally COMMITTED (tracked): the build
+# runs `npm ci`, which needs the lockfile in-repo. Do not re-add this ignore.
+electron/build-info.json
 
 # Router is fetched from npm at build time into electron/build-staging/router.
 # No local router/ directory is tracked.

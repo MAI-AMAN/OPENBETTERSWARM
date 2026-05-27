@@ -3,7 +3,9 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
+# package-lock.json is intentionally COMMITTED: the build runs `npm ci`, which
+# refuses to run without a lockfile and installs it exactly. Ignoring it broke
+# clean/CI builds (no lock to ci from). Do not re-add this ignore.
 yarn.lock
 
 # Build outputs
