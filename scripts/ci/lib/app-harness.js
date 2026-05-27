@@ -86,6 +86,39 @@ function healthCode(port, timeoutMs = 3000) {
   });
 }
 
+// Authenticated JSON call to the running backend, the same way the app calls it.
+// Returns { status, json, text }; status 0 means the request never completed.
+function apiRequest(port, { method = 'GET', path = '/', token = '', body = null, timeoutMs = 30000 } = {}) {
+  return new Promise((resolve) => {
+    const data = body != null ? Buffer.from(JSON.stringify(body)) : null;
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = data.length; }
+    const req = http.request({ host: '127.0.0.1', port, path, method, headers }, (res) => {
+      let buf = '';
+      res.on('data', (c) => { buf += c; });
+      res.on('end', () => { let json = null; try { json = JSON.parse(buf); } catch { /* non-json */ } resolve({ status: res.statusCode, json, text: buf }); });
+    });
+    req.on('error', () => resolve({ status: 0, json: null, text: '' }));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve({ status: 0, json: null, text: '' }); });
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+// Find an already-running app to reuse (so we exercise the user's logged-in
+// creds) by reading the token off disk and the port out of the last backend.log,
+// then confirming it actually answers. Returns { port, token } or null.
+async function attachToRunning() {
+  const token = readFileSafe(authTokenPath()).trim();
+  const m = readFileSafe(backendLogPath()).match(/Backend ready on port (\d+)/g);
+  if (!token || !m) return null;
+  const port = Number(m[m.length - 1].match(/(\d+)/)[1]);   // last = most recent launch
+  if (!port) return null;
+  const code = await healthCode(port);
+  return code === 200 ? { port, token } : null;
+}
+
 function parseProvenanceSha(log) {
   const m = log.match(/\[provenance\] OpenSwarm \S+ sha=([0-9a-f]+)/);
   return m ? m[1] : null;
@@ -138,6 +171,8 @@ module.exports = {
   spawnApp,
   killApp,
   healthCode,
+  apiRequest,
+  attachToRunning,
   parseProvenanceSha,
   parsePerfMarks,
   launchAndWait,
