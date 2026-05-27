@@ -1,20 +1,32 @@
 name: E2E (packaged app, mac + win)
 
-# Builds the UNSIGNED packaged app on each OS, then drives it with Playwright
-# (e2e/). This is the cross-platform "does the real artifact actually boot and
-# serve" gate. Signing/notarization + release upload are handled separately by
-# release-windows.yml / release-macos.yml.
+# Builds the UNSIGNED packaged app on each OS, then runs the FULL deterministic
+# gate against the real artifact plus the Playwright smoke. Signing/notarization +
+# release upload are handled separately by release-windows.yml / release-macos.yml.
 #
-# Windows-10 note: GitHub retired the windows-2019 (Win10-1809-kernel) hosted
-# image, and there is no Win10-client hosted runner, so true Win10 CI coverage
-# requires a SELF-HOSTED Win10 box. The e2e-win10 job below activates the moment
-# you register a runner labeled [self-hosted, windows, win10] and set the repo
-# variable WIN10_SELF_HOSTED=true; until then it's skipped (never hangs).
+# The gate, per leg:
+#   1. selftest-gate.js  - "test the tests": mutation-checks the gate's own logic
+#      so a weakened guard fails loudly (runs first, no build needed).
+#   2. build the packaged app.
+#   3. verify-all.js     - boot/paint/serve/provenance + signature state +
+#      resilience (locked-port, double-launch) + network/auth/9router. Provenance
+#      goes GREEN here because the build is AT the checked-out commit.
+#   4. mcp/selftest.js   - proves the Playwright "GUI hand" can launch + drive +
+#      read the real app.
+#   5. playwright npm test - the renderer-level smoke.
+#   6. (windows) verify-installer --destructive - the runner is a CLEAN box with no
+#      prior install, so the real install -> verify -> uninstall cycle is safe here
+#      (it refuses to run where an install already exists).
+#
+# Matrix: windows-latest (Win Server 2022) + macos-13 (Intel x64) + macos-14
+# (Apple Silicon) for arch+OS-version span, pinned for reproducibility. GitHub
+# retired windows-2019 and ships no Win10 client image, so true Win10 coverage
+# needs the SELF-HOSTED e2e-win10 job (activates when a runner labeled
+# [self-hosted, windows, win10] exists and repo var WIN10_SELF_HOSTED=true).
 
 on:
   push:
     branches: [eric/lock]
-    # Don't spend a full cross-OS build on docs-only changes.
     paths-ignore: ['**.md', 'docs/**', '.gitleaksignore']
   pull_request:
   workflow_dispatch:
@@ -27,15 +39,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # windows-latest = Win Server 2022 (NT 10.0.20348). macos-latest = the DMG.
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-13, macos-14]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
-      # Unsigned build is fine for E2E; skip codesign/notarize discovery.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      # Placeholder OAuth values just satisfy the build script's required-env
-      # check; the Google MCP isn't exercised by these tests.
       GOOGLE_OAUTH_CLIENT_ID: 'e2e-placeholder.apps.googleusercontent.com'
       GOOGLE_OAUTH_CLIENT_SECRET: 'e2e-placeholder-secret'
     steps:
@@ -47,6 +55,12 @@ jobs:
         with:
           python-version: '3.13'
 
+      # Test the tests first: cheap, pure, no build. If a guard stopped
+      # discriminating good from broken, fail before spending a build.
+      - name: Gate selftest (mutation)
+        shell: bash
+        run: node scripts/ci/selftest-gate.js
+
       - name: Build packaged app (Windows)
         if: startsWith(matrix.os, 'windows')
         shell: pwsh
@@ -57,6 +71,10 @@ jobs:
         shell: bash
         run: bash scripts/build-app.sh
 
+      - name: Deterministic gate (verify-all)
+        shell: bash
+        run: node scripts/ci/verify-all.js
+
       - name: Install e2e deps
         shell: bash
         working-directory: e2e
@@ -64,10 +82,20 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: npm ci
 
-      - name: Run E2E
+      - name: GUI hand selftest (MCP)
+        shell: bash
+        working-directory: e2e
+        run: node mcp/selftest.js
+
+      - name: Run E2E (Playwright)
         shell: bash
         working-directory: e2e
         run: npm test
+
+      - name: Installer cycle (Windows, clean runner)
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: node scripts/ci/verify-installer.js --destructive
 
       - name: Upload E2E results
         if: always()
@@ -79,7 +107,7 @@ jobs:
           retention-days: 14
 
   # Real Windows 10 coverage. Skipped unless a self-hosted Win10 runner exists
-  # and WIN10_SELF_HOSTED=true (repo variable). Mirrors the Windows steps above.
+  # and WIN10_SELF_HOSTED=true (repo variable). Mirrors the windows steps above.
   e2e-win10:
     if: ${{ vars.WIN10_SELF_HOSTED == 'true' }}
     runs-on: [self-hosted, windows, win10]
@@ -96,16 +124,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Gate selftest (mutation)
+        shell: bash
+        run: node scripts/ci/selftest-gate.js
       - name: Build packaged app (Windows)
         shell: pwsh
         run: pwsh -NoProfile -File scripts/build-app-win.ps1
+      - name: Deterministic gate (verify-all)
+        shell: bash
+        run: node scripts/ci/verify-all.js
       - name: Install e2e deps
         shell: bash
         working-directory: e2e
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: npm ci
-      - name: Run E2E
+      - name: GUI hand selftest (MCP)
+        shell: bash
+        working-directory: e2e
+        run: node mcp/selftest.js
+      - name: Run E2E (Playwright)
         shell: bash
         working-directory: e2e
         run: npm test
+      - name: Installer cycle (clean runner)
+        shell: pwsh
+        run: node scripts/ci/verify-installer.js --destructive
