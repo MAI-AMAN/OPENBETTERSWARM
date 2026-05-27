@@ -132,6 +132,19 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { throw "build-app-win.ps1 failed ($LASTEXITCODE)" }
 
+      # SmartScreen gate: after electron-builder + the Azure sign hook run, prove
+      # the bits we are about to ship are ACTUALLY Authenticode-Valid. An unsigned
+      # installer trips SmartScreen on every user's first launch, so a release that
+      # silently didn't sign (missing secrets, hook skip) must fail here, not ship.
+      # verify-signature.js --require-signed exits non-zero unless Status == Valid.
+      - name: Verify the shipped artifact is signed
+        shell: pwsh
+        run: |
+          node scripts/ci/verify-signature.js --require-signed --target electron/dist/win-unpacked/OpenSwarm.exe
+          if ($LASTEXITCODE -ne 0) { throw "inner OpenSwarm.exe is not validly signed" }
+          node scripts/ci/verify-signature.js --require-signed --target electron/dist/OpenSwarm-Setup-x64.exe
+          if ($LASTEXITCODE -ne 0) { throw "OpenSwarm-Setup-x64.exe (installer) is not validly signed" }
+
       - name: Upload artifact (non-publish runs)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'true'
         uses: actions/upload-artifact@v4

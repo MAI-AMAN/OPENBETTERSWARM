@@ -93,6 +93,19 @@ jobs:
             bash scripts/build-app.sh --sign
           fi
 
+      # Gatekeeper gate: after build-app.sh signs + notarizes, prove the shipped
+      # .app is codesign-valid (--deep --strict), Gatekeeper-accepted (spctl
+      # --assess), and carries a stapled notarization ticket. An app that built but
+      # didn't notarize launches to a Gatekeeper block on every user's Mac, so that
+      # must fail the release here. --require-signed exits non-zero unless all hold.
+      # NOTE: like the rest of this workflow, this mac path is unverified locally
+      # (no Mac on hand); first exercise it via workflow_dispatch publish=false.
+      - name: Verify the shipped app is signed + notarized
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ci/verify-signature.js --require-signed
+
       - name: Upload artifact (non-publish runs)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'true'
         uses: actions/upload-artifact@v4
