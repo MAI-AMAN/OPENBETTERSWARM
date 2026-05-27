@@ -71,6 +71,42 @@ Recommended order so neither platform's users skip a version:
 3. Verify both `latest.yml` and `latest-mac.yml` exist on the release and their
    versions match before the release leaves draft.
 
+## Auto-update verification (before promoting)
+
+The auto-updater (electron-updater) checks GitHub Releases on launch and every
+4h, downloads in the background, installs on quit, and can roll back
+(`allowDowngrade`). Two layers verify it:
+
+- Automated (feed integrity): `promotion-gate.yml` runs
+  `scripts/release/verify-release.js` when a release is published, confirming
+  both feeds exist, agree on version with each other and the tag, and that every
+  referenced asset resolves (HEAD 200). A missing or mismatched feed fails it.
+- Manual (the real cycle), once per release on each OS: install the PREVIOUS
+  stable, launch it, and confirm the new release is detected, downloads, installs
+  on quit, and relaunches on the new version (Settings -> About -> Build sha flips
+  to the new commit). Then confirm rollback. This needs two SIGNED releases on the
+  real feed, so local unsigned builds and single-commit CI cannot exercise it; it
+  is a human gate.
+
+## Staged rollout (gated on fleet health)
+
+Do not flip a new release to 100% of users at once. electron-updater honors a
+`stagingPercentage` field in the published `latest.yml` / `latest-mac.yml`: only
+that fraction of machines (bucketed by a stable per-install hash) take the update.
+
+1. Publish as normal; the promotion gate + signed-artifact verify (`release-*.yml`)
+   + the cross-OS `verify-all` matrix (`e2e.yml`) must all be green first.
+2. Add `stagingPercentage: 10` to the release's `latest.yml` (and `latest-mac.yml`).
+3. Watch the boot-outcome beacons (the fleet self-report; the desktop posts a
+   boot event through `/api/service` after each launch): confirm the new sha is
+   booting on real machines with no spike in boot-failure or crash beacons.
+4. Widen (25 -> 50 -> 100, or remove the field) only while beacons stay healthy.
+   If failures appear, stop; the un-updated majority is still on the known-good
+   prior version, and `allowDowngrade` lets you point upgraders back.
+
+This is the closest thing to certainty across all hardware: a bad build reaches a
+small slice, reports itself, and never reaches the rest.
+
 ## Tag protection (immutable releases)
 
 Release tags must never move once cut — a moved tag silently re-points the
