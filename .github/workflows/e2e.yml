@@ -1,0 +1,68 @@
+name: E2E (packaged app, mac + win)
+
+# Builds the UNSIGNED packaged app on each OS, then drives it with Playwright
+# (e2e/). This is the cross-platform "does the real artifact actually boot and
+# serve" gate. Signing/notarization + release upload are handled separately by
+# release-windows.yml / release-macos.yml.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      # Unsigned build is fine for E2E; skip codesign/notarize discovery.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # Placeholder OAuth values just satisfy the build script's required-env
+      # check; the Google MCP isn't exercised by these tests.
+      GOOGLE_OAUTH_CLIENT_ID: 'e2e-placeholder.apps.googleusercontent.com'
+      GOOGLE_OAUTH_CLIENT_SECRET: 'e2e-placeholder-secret'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.18.1'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Build packaged app (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/build-app-win.ps1
+
+      - name: Build packaged app (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: bash scripts/build-app.sh
+
+      - name: Install e2e deps
+        shell: bash
+        working-directory: e2e
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Run E2E
+        shell: bash
+        working-directory: e2e
+        run: npm test
+
+      - name: Upload E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results-${{ matrix.os }}
+          path: e2e/results.json
+          if-no-files-found: ignore
+          retention-days: 14
