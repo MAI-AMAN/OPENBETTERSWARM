@@ -29,11 +29,16 @@ function main() {
     // Pure-logic gates run first - cheap, no build needed, fail fast.
     ['deps fully pinned (reproducible backend builds)', 'verify-deps-pinned.js', []],
     ['no build-host paths leaked into the artifact', 'verify-host-leakage.js', appArg],
+    ['bundled python runs (--version + import smoke)', 'verify-python-health.js', appArg],
+    ['MCP bundles answer initialize over stdio', 'verify-mcp-bundles.js', appArg],
+    ['update feed sha512 matches files on disk', 'verify-update-feed.js', []],
     // App-launching gates.
     ['boot / paint / serve / provenance', 'verify-packaged-app.js', appArg],
     ['code-signing state', 'verify-signature.js', [...(args.app ? ['--target', args.app] : []), ...(args.requireSigned ? ['--require-signed'] : [])]],
     ['resilience (locked-port + multi-instance)', 'verify-resilience.js', appArg],
     ['network / auth / 9router', 'verify-network.js', [...appArg, ...(args.strict ? ['--strict'] : [])]],
+    ['9router actually routes (functional GET /api/providers)', 'verify-9router-functional.js', appArg],
+    ['clean-profile invariant (CI-only; wipes data dir)', 'verify-clean-profile.js', appArg],
     ['boot beacon + preflight', 'verify-boot-beacon.js', appArg],
     ['real agent turn (opt-in: OPENSWARM_E2E_AGENT=1)', 'verify-agent-turn.js', appArg],
   ];
