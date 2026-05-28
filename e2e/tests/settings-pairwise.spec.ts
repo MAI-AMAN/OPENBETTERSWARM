@@ -35,6 +35,7 @@ const PARAMS: Params = {
 };
 
 const EXHAUSTIVE = process.env.OPENSWARM_E2E_EXHAUSTIVE === '1';
+const THROUGH_BACKEND = process.env.OPENSWARM_E2E_THROUGH_BACKEND === '1';
 const ROWS = EXHAUSTIVE ? cartesian(PARAMS) : pairwise(PARAMS);
 
 test.describe.configure({ mode: 'serial' });
@@ -62,25 +63,38 @@ test.describe(`settings ${EXHAUSTIVE ? 'cartesian' : 'pairwise'} (${ROWS.length}
     if (!EXHAUSTIVE) expect(ROWS.length).toBeLessThan(Object.values(PARAMS).reduce((a, vs) => a * vs.length, 1));
   });
 
-  // Apply a row directly via the Redux dispatch path the Settings UI uses so we
-  // don't have to drive N toggles by click. This is the "test the apply" half;
-  // the "verify the apply landed" half then reads the resulting state.
+  // Apply a row. Two paths:
+  //   default: dispatch settings/update/fulfilled directly - hermetic, fast
+  //   THROUGH_BACKEND=1: drive the real PUT /api/settings round-trip so the
+  //     server's pydantic validation, write-lock, and slice-shape contract
+  //     are all exercised. Slower but catches the class where local apply
+  //     works but the server would reject the payload.
   async function applyRow(row: Record<string, unknown>) {
-    await page.evaluate((rowJson) => {
+    await page.evaluate(async ({ rowJson, throughBackend }) => {
       const r = JSON.parse(rowJson);
       const store = (window as any).__OPENSWARM_STORE__;
       if (!store) throw new Error('Redux store not exposed; __OPENSWARM_E2E__ flag did not take effect');
       const current = store.getState().settings.data;
       const next = { ...current };
       for (const k of Object.keys(r)) if (k !== 'theme') next[k] = r[k];
-      // settings/update/fulfilled is Redux Toolkit's auto-generated action name
-      // for the updateSettings thunk; dispatching it directly updates local
-      // state without making the PUT round-trip (we keep the test hermetic).
-      store.dispatch({ type: 'settings/update/fulfilled', payload: next });
-      if (r.theme) {
-        try { localStorage.setItem('self-swarm-theme-mode', r.theme); } catch {}
+      if (throughBackend) {
+        // Real PUT round-trip via the same auth path the renderer uses.
+        const port: number = (window as any).openswarm?.getBackendPort?.();
+        const token: string = await ((window as any).openswarm?.getAuthToken?.() ?? Promise.resolve(''));
+        const res = await fetch(`http://127.0.0.1:${port}/api/settings/`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify(next),
+        });
+        if (!res.ok) throw new Error(`PUT /api/settings returned ${res.status}`);
+        const body = await res.json();
+        const persisted = body.settings || body;
+        store.dispatch({ type: 'settings/update/fulfilled', payload: persisted });
+      } else {
+        store.dispatch({ type: 'settings/update/fulfilled', payload: next });
       }
-    }, JSON.stringify(row));
+      if (r.theme) { try { localStorage.setItem('self-swarm-theme-mode', r.theme); } catch {} }
+    }, { rowJson: JSON.stringify(row), throughBackend: THROUGH_BACKEND });
     await page.waitForTimeout(150);
   }
 
