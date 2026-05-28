@@ -41,6 +41,8 @@ openswarm-cloud
 .claude/
 # Local-only operator helpers (never commit)
 scripts/set-fly-*.sh
+# Local-only background dev-team state/docs (personal, never commit)
+docs/ops/
 
 # Python bytecode (regenerates on every import)
 __pycache__/
