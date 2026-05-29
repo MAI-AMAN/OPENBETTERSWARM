@@ -47,7 +47,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '20.18.1' }
       - name: Fetch latest preflight-tunings from dogfood
-        env: { GH_TOKEN: ${{ github.token }} }
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -e
