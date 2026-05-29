@@ -28,14 +28,24 @@ function hostPatterns() {
     patterns.push(homeWin.replace(/\\/g, '\\\\'));
     patterns.push(homeWin.replace(/\\/g, '/'));
   }
-  // POSIX-style: any /Users/<dev> or /home/<dev> from the build machine.
-  if (homePosix) patterns.push(homePosix);
+  // POSIX-style: any /Users/<dev> or /home/<dev> from the build machine - but
+  // skip the GENERIC CI home (/Users/runner, /home/runner). It is too broad: it
+  // matches third-party packages' own embedded paths (e.g. 9router's Rust deps
+  // ship /Users/runner/.cargo from the package publisher's CI), which are NOT a
+  // leak of THIS build host. The /Users/runner/work workspace pattern below is
+  // the precise CI build-path detector; the bare home is for a real dev box.
+  if (homePosix && !/^\/(Users|home)\/runner\/?$/.test(homePosix)) patterns.push(homePosix);
   // Source-map sentinels often containing dev-only roots.
-  patterns.push('/Users/runner/work');   // GH Actions macos runner home
+  patterns.push('/Users/runner/work');   // GH Actions macos runner work dir
   patterns.push('D:\\a\\openswarm');     // GH Actions windows runner work dir
   patterns.push('/home/runner/work');    // GH Actions linux runner work dir
-  // Belt-and-braces: literal username regardless of platform.
-  patterns.push(os.userInfo().username);
+  // Belt-and-braces: literal username - but skip generic CI/shared accounts whose
+  // names are common English words. GitHub runners are literally "runner", which
+  // collides with the word everywhere (asyncio "runner is not initialized",
+  // jest-runner, "Browser sub-agent runner") and buries real leaks in noise; the
+  // home + work-dir patterns already catch a genuine leak from those accounts.
+  const uname = os.userInfo().username;
+  if (uname && !/^(runner|runneradmin|user|admin|administrator|root|ubuntu)$/i.test(uname)) patterns.push(uname);
   return Array.from(new Set(patterns.filter((p) => p && p.length > 4)));
 }
 
