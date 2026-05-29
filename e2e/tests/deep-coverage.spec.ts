@@ -5,8 +5,8 @@ import os from 'os';
 import path from 'path';
 
 // Deep interactive coverage: drives every reachable user-facing surface on the
-// packaged app and asserts no renderer crashes per step. Runs on every CI push
-// against the matrix (windows-latest + macos-13 + macos-14). Replaces the "I
+// packaged app and asserts no renderer crashes per step. Runs on every gated CI
+// push against the Windows leg (macOS legs were removed). Replaces the "I
 // physically click everything" manual gap with a hermetic automated one that
 // has no foreground-lock contention because CI runners have no competing app.
 
