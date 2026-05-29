@@ -20,12 +20,25 @@ function sh(cmd) {
 }
 
 // Windows: Authenticode status + signer subject via Get-AuthenticodeSignature.
+// Azure Trusted Signing uses fresh short-lived certs, so Get-AuthenticodeSignature
+// reports "Unknown" on a CI runner (chain/revocation can't validate in-context)
+// even when the file IS properly signed. So when a signer cert is present but the
+// quick status isn't "Valid", we defer to `signtool verify /pa`, the canonical
+// Authenticode verifier. A genuinely unsigned file (no signer) still fails the gate.
 function inspectWindows(target) {
   const ps = `$ErrorActionPreference='SilentlyContinue'; $s = Get-AuthenticodeSignature -LiteralPath '${target}'; '{0}|{1}' -f $s.Status, ($s.SignerCertificate.Subject)`;
   const r = sh(`powershell -NoProfile -Command "${ps.replace(/"/g, '\\"')}"`);
-  const [status, subject] = (r.out || '').split('|');
-  const signed = (status || '').trim() === 'Valid';
-  return { signed, status: (status || 'Unknown').trim(), signer: (subject || '').trim() };
+  const [statusRaw, subject] = (r.out || '').split('|');
+  const status = (statusRaw || 'Unknown').trim();
+  const signer = (subject || '').trim();
+
+  if (status === 'Valid') return { signed: true, status, signer };
+  if (signer && status === 'Unknown') {
+    const signtool = process.env.SIGNTOOL_PATH || 'signtool';
+    const v = sh(`"${signtool}" verify /pa /v "${target}"`);
+    return { signed: v.ok, status: `${status} (signtool verify /pa: ${v.ok ? 'pass' : 'fail'})`, signer };
+  }
+  return { signed: false, status, signer };
 }
 
 // macOS: codesign validity + Gatekeeper assessment + notarization staple.
