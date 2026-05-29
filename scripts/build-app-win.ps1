@@ -465,6 +465,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "electron-builder failed" }
 } finally { Pop-Location }
 
+# NOTE: the bundled 9Router's node_modules (which electron-builder 26 drops from
+# extraResources) is restored by the build/after-pack.js afterPack hook, which
+# runs inside electron-builder BEFORE code-signing so the copied files are sealed
+# by the signature. See that file for the why.
+
 Remove-Item -Recurse -Force $Staging -ErrorAction SilentlyContinue
 
 Write-Host ""

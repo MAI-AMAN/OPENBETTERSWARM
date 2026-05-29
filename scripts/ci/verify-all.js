@@ -35,6 +35,8 @@ function main() {
     ['packaging parity (Win+Mac stage the same dirs)', 'verify-packaging-parity.js', []],
     ['deps fully pinned (reproducible backend builds)', 'verify-deps-pinned.js', []],
     ['no build-host paths leaked into the artifact', 'verify-host-leakage.js', appArg],
+    ['locale paks shipped (empty --lang -> Blink null-deref crash)', 'verify-locale-paks.js', appArg],
+    ['9router deps shipped (else subscription service hangs)', 'verify-router-deps.js', appArg],
     ['bundled python runs (--version + import smoke)', 'verify-python-health.js', appArg],
     ['MCP bundles answer initialize over stdio', 'verify-mcp-bundles.js', appArg],
     ['update feed sha512 matches files on disk', 'verify-update-feed.js', []],

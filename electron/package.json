@@ -23,13 +23,16 @@
   "devDependencies": {
     "@electron/notarize": "3.1.1",
     "cross-env": "7.0.3",
-    "electron": "castlabs/electron-releases#v42.0.0+wvcus",
-    "electron-builder": "25.1.8"
+    "electron": "github:castlabs/electron-releases#v42.0.0+wvcus",
+    "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.clusterlabs.openswarm",
     "productName": "OpenSwarm",
-    "electronLanguages": ["en"],
+    "afterPack": "./build/after-pack.js",
+    "electronLanguages": [
+      "en-US"
+    ],
     "electronDownload": {
       "mirror": "https://github.com/castlabs/electron-releases/releases/download/v"
     },
@@ -69,13 +72,18 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "OpenSwarm-Setup-${arch}.${ext}",
-      "sign": "./build/sign-windows.js",
-      "signingHashAlgorithms": ["sha256"],
-      "signDlls": false
+      "signtoolOptions": {
+        "sign": "./build/sign-windows.js",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
     },
     "nsis": {
       "oneClick": true,
@@ -123,7 +131,9 @@
         "from": "build-staging/router",
         "to": "router",
         "filter": [
-          "**/*"
+          "**/*",
+          "**/.*",
+          "**/.*/**"
         ]
       },
       {
