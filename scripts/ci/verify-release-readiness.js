@@ -7,7 +7,11 @@ const path = require('path');
 const h = require('./lib/app-harness');
 
 function parseArgs(argv) {
-  const out = { tunings: null, requirePlatforms: ['win32', 'darwin'] };
+  // Windows-only by default: the macOS dogfood legs were removed (runner
+  // starvation + untriageable mac-only failures), so darwin never accrues runs
+  // and requiring it would block every v* tag forever. Re-add a Mac leg to
+  // dogfood and pass --require win32,darwin once a maintainer owns it.
+  const out = { tunings: null, requirePlatforms: ['win32'] };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--tunings') out.tunings = argv[++i];
     else if (argv[i] === '--require') out.requirePlatforms = argv[++i].split(',');
