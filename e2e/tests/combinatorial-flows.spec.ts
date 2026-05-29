@@ -55,6 +55,19 @@ test.describe('combinatorial user flows', () => {
     await el.click({ timeout: 8_000 });
     return el;
   };
+  // The bottom dashboard toolbar (New Agent / Add note / Add App / Browser) only
+  // mounts when a dashboard is active; a clean CI profile has none, so create one
+  // via the sidebar "+". Idempotent: returns early if the toolbar is already up.
+  const ensureDashboardActive = async () => {
+    const toggle = page.locator('[data-onboarding="sidebar-toggle"]');
+    if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click({ timeout: 5_000 }).catch(() => {});
+    await clickMust(page.locator('[data-onboarding="sidebar-dashboards"]'), 'sidebar dashboards');
+    if (await page.getByRole('button', { name: 'Add note' }).isVisible().catch(() => false)) return;
+    const createBtn = page.locator('[data-onboarding="sidebar-dashboards"] button').first();
+    if (await createBtn.count()) await createBtn.click({ timeout: 5_000 }).catch(() => {});
+    await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/dashboard\//);
+    await expect(page.getByRole('button', { name: 'Add note' }), 'dashboard toolbar never mounted').toBeVisible({ timeout: 10_000 });
+  };
   const errorsSince = (mark: number) => errors.slice(mark).filter((e) => !CONSOLE_WHITELIST.some((rx) => rx.test(e.text)));
   const assertNoNew = (mark: number, label: string) => {
     const now = rendererCrashes();
@@ -290,6 +303,7 @@ test.describe('combinatorial user flows', () => {
 
   test('dashboard toolbar: Add note + Add App + History each mount their surfaces', async () => {
     const mark = errors.length;
+    await ensureDashboardActive();
     await clickMust(page.getByRole('button', { name: 'Add note' }), 'toolbar Add note');
     assertNoNew(mark, 'Add note mount');
 

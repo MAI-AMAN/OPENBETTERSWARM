@@ -139,7 +139,20 @@ test.describe('deep interactive coverage', () => {
   });
 
   test('Dashboard canvas opens', async ({}, info) => {
-    await safeClick(page.getByText('Getting Started', { exact: true }), 'Getting Started dashboard');
+    // A clean CI profile has no "Getting Started" (or any) dashboard, so open an
+    // existing one if present, else create one via the sidebar "+" so the canvas
+    // actually mounts instead of failing on a missing seed dashboard.
+    const seed = page.getByText('Getting Started', { exact: true });
+    if (await seed.count()) {
+      await seed.first().click({ timeout: 5000 });
+    } else {
+      const toggle = page.locator('[data-onboarding="sidebar-toggle"]');
+      if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click({ timeout: 5000 }).catch(() => {});
+      await page.locator('[data-onboarding="sidebar-dashboards"]').click({ timeout: 5000 }).catch(() => {});
+      const createBtn = page.locator('[data-onboarding="sidebar-dashboards"] button').first();
+      if (await createBtn.count()) await createBtn.click({ timeout: 5000 }).catch(() => {});
+      await expect.poll(() => page.url(), { timeout: 8000 }).toMatch(/\/dashboard\//);
+    }
     await page.waitForTimeout(2000);
     await page.screenshot({ path: info.outputPath('dashboard-canvas.png') });
     noNewCrashes('dashboard canvas open');
