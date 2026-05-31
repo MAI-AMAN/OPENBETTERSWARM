@@ -79,10 +79,15 @@ if ! "$PYTHON_BIN" -m pip --version &>/dev/null; then
     "$PYTHON_BIN" -m ensurepip --upgrade
 fi
 
-# Install backend dependencies
-echo "Installing backend dependencies..."
+# Install backend dependencies from the fully-pinned, hash-locked file so the
+# shipped python-env is byte-for-byte reproducible (pillar 3). requirements.txt
+# is the human-edited source; regenerate the lock after editing it with:
+#   uv pip compile backend/requirements.txt --python-version 3.13 \
+#       --generate-hashes --output-file backend/requirements.lock
+# --require-hashes is implied because every entry carries a hash.
+echo "Installing backend dependencies (from requirements.lock)..."
 "$PYTHON_BIN" -m pip install --upgrade pip
-"$PYTHON_BIN" -m pip install -r "$PROJECT_ROOT/backend/requirements.txt"
+"$PYTHON_BIN" -m pip install -r "$PROJECT_ROOT/backend/requirements.lock"
 
 # Install the debugger module
 echo "Installing debugger module..."
@@ -128,6 +133,9 @@ rm -rf "$PYTHON_ENV_DIR/lib/python3.13/tkinter"
 rm -rf "$PYTHON_ENV_DIR/lib/python3.13/ensurepip"
 # Educational drawing examples that ship with stdlib — never imported.
 rm -rf "$PYTHON_ENV_DIR/lib/python3.13/turtledemo"
+# turtle itself: a Tk-based graphics module. It imports tkinter (stripped
+# above), so it's already non-functional here, and the backend never uses it.
+rm -rf "$PYTHON_ENV_DIR/lib/python3.13/turtle.py"
 # Man pages / desktop-integration files — embedded Python doesn't read these.
 rm -rf "$PYTHON_ENV_DIR/share"
 # pip itself + launcher shims. Verified the packaged backend never invokes
@@ -199,6 +207,14 @@ find "$SP" -path '*.dist-info/WHEEL'          -delete 2>/dev/null
 find "$SP" -path '*.dist-info/top_level.txt'  -delete 2>/dev/null
 find "$SP" -path '*.dist-info/entry_points.txt' -delete 2>/dev/null
 
+# ----- type stubs + build leftovers (more files off Defender's plate) -----
+# .pyi stubs are read only by type-checkers, never by the running interpreter.
+find "$PYTHON_ENV_DIR" -name '*.pyi' -delete 2>/dev/null || true
+# Unix build artifacts: the static lib + config Makefiles exist only to compile
+# C extensions / embed Python; the running interpreter never reads them.
+rm -rf "$PYTHON_ENV_DIR"/lib/python3.13/config-3.13-* 2>/dev/null || true
+find "$PYTHON_ENV_DIR" -name 'libpython*.a' -delete 2>/dev/null || true
+
 # Pre-compile bytecode so cold backend startup skips the parse+compile
 # step on every imported .py. Worth ~5-10s on Windows under Defender
 # (parsing Python source is parser-bound; loading .pyc is just bytes).
@@ -208,8 +224,12 @@ find "$SP" -path '*.dist-info/entry_points.txt' -delete 2>/dev/null
 # version-shim packages); a non-zero exit here would rather be visible
 # than silent so we don't `|| true` the whole thing — but missing .pyc
 # is non-fatal at runtime, so a hard fail isn't warranted either.
+# invalidation-mode unchecked-hash: default timestamp mode ties each .pyc to its
+# source mtime, which installers rewrite on extract, silently invalidating every
+# .pyc so Python recompiles from source on every launch. unchecked-hash is mtime-
+# independent (correct for a frozen bundle), so the precompiled .pyc actually get used.
 echo "Pre-compiling bytecode..."
-"$PYTHON_BIN" -m compileall -q -j 4 "$PYTHON_ENV_DIR/lib" || \
+"$PYTHON_BIN" -m compileall -q -j 4 --invalidation-mode unchecked-hash "$PYTHON_ENV_DIR/lib" || \
     echo "WARNING: some files failed to compile; runtime will fall back to in-memory compile."
 
 # ----- macOS: hide bundled python from the Dock -----

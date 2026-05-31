@@ -28,6 +28,11 @@ import { upsertOutput } from '../state/outputsSlice';
 import { getAuthToken } from '../config';
 import { notifyAgentCompletion } from '../notifications';
 
+// Phase 0 boot instrumentation: one-shot flag so we report the first streamed
+// agent token to Electron main exactly once per app launch. Module scope (not
+// instance) because multiple WebSocketManagers exist (one per session WS).
+let firstAgentResponseMarked = false;
+
 // Thin wrapper around getAuthToken so the connect() call site stays
 // synchronous. If the token isn't cached yet, returns '' and the WS
 // handshake will 4401 , onclose catches that and refreshes the token
@@ -177,6 +182,14 @@ class WebSocketManager {
   // ONE React render per animation frame, so removing the pacing layer
   // doesn't reintroduce the parallel-agent re-render storm.
   private dispatchDelta(sessionId: string, messageId: string, delta: string) {
+    // Phase 0 boot instrumentation: the first streamed agent token is the
+    // "app is actually useful" milestone. Report it once to the Electron main
+    // process, which owns the timing log. Guarded by a module-level flag so
+    // this is a single no-op branch on every subsequent token.
+    if (!firstAgentResponseMarked) {
+      firstAgentResponseMarked = true;
+      try { (window as any).openswarm?.markFirstAgentResponse?.(); } catch { /* not in Electron */ }
+    }
     store.dispatch(streamDelta({ sessionId, messageId, delta }));
   }
 

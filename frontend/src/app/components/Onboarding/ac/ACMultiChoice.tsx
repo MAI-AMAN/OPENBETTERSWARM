@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Box, Typography, ButtonBase } from '@mui/material';
-import { motion } from 'framer-motion';
+import { motion } from '../_motionWin';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { useCursorPosition } from './cursorStore';
 import type { ACMultiChoiceOption } from '../steps/types';

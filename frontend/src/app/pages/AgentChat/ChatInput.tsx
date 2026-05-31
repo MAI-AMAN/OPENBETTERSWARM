@@ -103,13 +103,17 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
   useImperativeHandle(ref, () => ({
     getConfig: () => {
       const editor = editorRef.current;
-      const prompt = editor ? serializeEditorContent(editor, attachedSkillsRef.current).trim() : '';
+      const prompt = editor
+        ? (editor.tagName === 'TEXTAREA'
+            ? (editor as unknown as HTMLTextAreaElement).value.trim()
+            : serializeEditorContent(editor, attachedSkillsRef.current).trim())
+        : '';
       return { prompt, contextPaths, forcedTools };
     },
     setContent: (prompt: string, newContextPaths?: ContextPath[], newForcedTools?: ForcedToolGroup[]) => {
       const editor = editorRef.current;
       if (editor) {
-        editor.textContent = prompt;
+        if (editor.tagName === 'TEXTAREA') (editor as unknown as HTMLTextAreaElement).value = prompt; else editor.textContent = prompt;
         setHasContent(!!prompt);
       }
       if (newContextPaths) setContextPaths(newContextPaths);
@@ -122,7 +126,9 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
     if (!editor || disabled) return;
     if (summarizingPath) return;
     if (oversizeQueue.length > 0) return;
-    const serialized = serializeEditorContent(editor, attachedSkillsRef.current);
+    const serialized = editor.tagName === 'TEXTAREA'
+      ? (editor as unknown as HTMLTextAreaElement).value
+      : serializeEditorContent(editor, attachedSkillsRef.current);
     let trimmed = serialized.trim();
     if (!trimmed) return;
 
@@ -142,7 +148,7 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
       const cmd = trimmed.split(/\s+/)[0].toLowerCase();
       const handled = await handleSlashCommand(cmd, sessionId);
       if (handled) {
-        editor.innerHTML = '';
+        if (editor.tagName === 'TEXTAREA') (editor as unknown as HTMLTextAreaElement).value = ''; else editor.innerHTML = '';
         deleteDraft(ownerId);
         setHasContent(false);
         return;
@@ -170,7 +176,7 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
       sendSkills,
       browserIds.length > 0 ? browserIds : undefined,
     );
-    editor.innerHTML = '';
+    if (editor.tagName === 'TEXTAREA') (editor as unknown as HTMLTextAreaElement).value = ''; else editor.innerHTML = '';
     deleteDraft(ownerId);
     for (const img of images) {
       if (img.preview?.startsWith('blob:')) {

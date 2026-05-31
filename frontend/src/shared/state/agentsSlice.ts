@@ -470,9 +470,15 @@ export const searchHistory = createAsyncThunk(
 export const resumeSession = createAsyncThunk(
   'agents/resumeSession',
   async ({ sessionId }: { sessionId: string }) => {
-    const res = await fetch(`${AGENTS_API}/sessions/${sessionId}/resume`, { method: 'POST' });
-    const data = await res.json();
-    return data.session as AgentSession;
+    try {
+      const res = await fetch(`${AGENTS_API}/sessions/${sessionId}/resume`, { method: 'POST' });
+      const data = await res.json();
+      return data.session as AgentSession;
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error('[diag][thunk] resumeSession THREW', e && e.message);
+      throw e;
+    }
   }
 );
 

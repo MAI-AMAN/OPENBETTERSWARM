@@ -75,6 +75,10 @@ class AppSettings(BaseModel):
     # Server-validated identity from /api/auth/signin-activate; user_email above is the self-reported onboarding value.
     user_id: Optional[str] = None
     signin_method: Optional[Literal["google", "stripe", "email"]] = None
+    # Runtime preflight (electron/preflight.js). Default-on; users opt out via this flag, env var OPENSWARM_DISABLE_PREFLIGHT=1, or the cloud-side cohort rollout knocking preflight_rollout_pct down.
+    preflight_enabled: bool = True
+    # 0-100; the cohort gate compares (hash(installation_id) % 100) < pct. 100 = everyone, 0 = nobody, used as the kill switch if a staged rollout finds a false-positive spike.
+    preflight_rollout_pct: int = 100
 
 
 class CustomProvider(BaseModel):

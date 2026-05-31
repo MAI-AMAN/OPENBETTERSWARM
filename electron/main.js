@@ -1,5 +1,41 @@
-const { app, components, BrowserWindow, ipcMain, shell, session } = require('electron');
-// Platform-split auto-updater: electron-updater on Mac (full-featured: allowPrerelease, allowDowngrade, progress), Electron's built-in autoUpdater on Windows (required for Squirrel.Windows target; electron-updater dropped Squirrel support).
+const { app, components, BrowserWindow, ipcMain, shell, session, dialog, crashReporter } = require('electron');
+
+// E2E flag: when OPENSWARM_E2E=1, append a Chromium command-line switch the
+// renderer reads at startup to set window.__OPENSWARM_E2E__ = true BEFORE any
+// page script parses, so the production-build store-on-window gate fires
+// deterministically. Normal user launches never set the env var so this is a
+// no-op for them; only Playwright's electron.launch({env}) flips it on.
+if (process.env.OPENSWARM_E2E === '1') {
+  try { app.commandLine.appendSwitch('openswarm-e2e', '1'); } catch {}
+}
+
+// Local-only crash reporter. Captures native renderer crashes that escape JS-level error handlers and don't otherwise surface in Crashpad. uploadToServer=false keeps minidumps on disk under %APPDATA%/OpenSwarm/Crashpad so we can inspect them post-mortem without sending anywhere.
+try {
+  crashReporter.start({
+    productName: 'OpenSwarm',
+    companyName: 'OpenSwarm',
+    submitURL: 'https://localhost.invalid',
+    uploadToServer: false,
+    ignoreSystemCrashHandler: false,
+  });
+} catch (err) {
+  console.warn('[crashReporter] start failed:', err && err.message);
+}
+
+// Capture every main-process throw we can. Without these, a throw inside an IPC handler or BrowserWindow event listener can die silently and look indistinguishable from a renderer crash in the trace.
+process.on('uncaughtException', (err) => {
+  console.error('[diag][main:uncaughtException]', err && err.stack || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[diag][main:unhandledRejection]', reason && reason.stack || reason);
+});
+
+// child-process-gone fires for GPU/utility/renderer process deaths. The GPU one is especially useful: a GPU crash forces the renderer to recover its compositor, and that recovery can itself crash on Windows.
+app.on('child-process-gone', (_event, details) => {
+  console.error('[diag][main:child-process-gone]', JSON.stringify(details));
+});
+// Platform-split auto-updater: electron-updater on Mac (full-featured), Electron's
+// built-in autoUpdater on Windows (Squirrel.Windows target; electron-updater dropped Squirrel).
 let autoUpdater;
 let isSquirrelUpdater = false;
 try {
@@ -18,8 +54,203 @@ const getPort = require('get-port');
 const http = require('http');
 const affiliateTracking = require('./affiliateTracking');
 
-// Defender warmup helper. Touches bundled exes so Windows scans them now instead of on first launch.
-function _squirrelPrewarmTouch() {
+// Squirrel makes the APP create its own shortcuts: on --squirrel-install it must
+// call Update.exe --createShortcut and exit, else the user finds only Setup.exe
+// and no app to click. NSIS never passes these args, so it's a no-op there. The
+// prewarm-touch the old Squirrel build did here is omitted: it hung silent installs.
+function _squirrelUpdate(args) {
+  try {
+    const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
+    execFileSync(updateExe, [...args, path.basename(process.execPath)], { timeout: 20000, stdio: 'ignore', windowsHide: true });
+  } catch (_) {}
+}
+(function handleSquirrelEvents() {
+  if (process.platform !== 'win32' || process.argv.length < 2) return;
+  const sq = process.argv[1];
+  if (sq === '--squirrel-install' || sq === '--squirrel-updated') { _squirrelUpdate(['--createShortcut']); process.exit(0); }
+  if (sq === '--squirrel-uninstall') { _squirrelUpdate(['--removeShortcut']); process.exit(0); }
+  if (sq === '--squirrel-obsolete') { process.exit(0); }
+})();
+
+// NSIS->Squirrel migration cleanup. The first time this Squirrel build runs after
+// an existing NSIS OpenSwarm was updated into it, silently uninstall that legacy
+// NSIS copy so the user isn't left with two installs + two shortcuts. Found via
+// the HKCU Uninstall entry whose UninstallString is the NSIS uninstaller (NOT
+// Squirrel's Update.exe). Deferred to quit so the NSIS uninstaller's taskkill of
+// OpenSwarm.exe can't kill this live session (same exe name). Best-effort +
+// detached: a failure just leaves the old install (never bricks); NSIS
+// deleteAppDataOnUninstall=false keeps the user's data across the swap.
+function _removeLegacyNsisInstall() {
+  if (process.platform !== 'win32') return;
+  const ps =
+    "$ErrorActionPreference='SilentlyContinue';" +
+    "$e = Get-ChildItem 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall' |" +
+    " ForEach-Object { Get-ItemProperty $_.PSPath } |" +
+    " Where-Object { $_.DisplayName -like 'OpenSwarm*' -and $_.UninstallString -and ($_.UninstallString -notmatch 'Update\\.exe') } |" +
+    " Select-Object -First 1;" +
+    "if ($e) { if ($e.QuietUninstallString) { $u = $e.QuietUninstallString } else { $u = $e.UninstallString + ' /S' };" +
+    " Start-Process -FilePath cmd.exe -ArgumentList '/c', $u -WindowStyle Hidden }";
+  try {
+    spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  } catch (_) {}
+}
+if (process.platform === 'win32' && process.argv.includes('--squirrel-firstrun')) {
+  try { app.once('before-quit', _removeLegacyNsisInstall); } catch (_) {}
+}
+
+// Phase 0 boot instrumentation. Records four ordered milestones as parseable
+// lines so the packaged-build timing test (and any future perf-regression
+// gate) can read them straight out of backend.log without a separate file.
+// Format is load-bearing: `[perf] <name> t=<ms-since-launch>` one per line.
+// APP_LAUNCH_T is captured at module load so t=0 is genuinely process start.
+const APP_LAUNCH_T = Date.now();
+const _perfSeen = new Set();
+const _perfValues = {};   // name -> ms; read by the boot beacon below.
+function perfMark(name) {
+  // One-shot per milestone: first-paint etc. can re-fire on crash-recovery
+  // window recreation, but the baseline we care about is the cold boot.
+  if (_perfSeen.has(name)) return;
+  _perfSeen.add(name);
+  const t = Date.now() - APP_LAUNCH_T;
+  _perfValues[name] = t;
+  try { console.log(`[perf] ${name} t=${t}`); } catch (_) {}
+}
+
+// Preflight: log the usual "works on mine, not theirs" causes (python is already covered by the exists-log + spawn handler; this adds the rest). Log-only, guarded, no PII (lengths/flags, never paths).
+let _preflightInfo = {};
+let _preflightVerdict = null;
+
+// Comprehensive preflight (electron/preflight.js): fans out checks under hard per-check timeouts, emits a [preflight2] verdict line, defers cache write until BOTH preflight finished AND backend-http-ready so a mid-boot kill cannot poison the next launch's cached verdict. Kill switch via OPENSWARM_DISABLE_PREFLIGHT=1.
+let _preflightPendingCache = null;
+// Cheap deterministic hash of installation_id into [0,99]; used by the cohort gate so the same install always falls in the same bucket regardless of when it boots.
+function installIdBucket(id) {
+  if (!id) return 0;
+  let h = 5381; for (let i = 0; i < id.length; i++) { h = ((h << 5) + h + id.charCodeAt(i)) >>> 0; }
+  return h % 100;
+}
+
+function runComprehensivePreflight() {
+  if (process.env.OPENSWARM_DISABLE_PREFLIGHT === '1') { console.log('[preflight2] skipped (OPENSWARM_DISABLE_PREFLIGHT=1)'); return; }
+  // Honor settings.preflight_enabled and cohort gate. Read sync from settings.json
+  // since the backend isn't up yet; missing/unreadable file just means "use defaults".
+  try {
+    const settingsPath = path.join(app.getPath('userData'), 'data', 'settings', 'settings.json');
+    const raw = fs.readFileSync(settingsPath, 'utf8');
+    const s = JSON.parse(raw);
+    if (s && s.preflight_enabled === false) { console.log('[preflight2] skipped (settings.preflight_enabled=false)'); return; }
+    const pct = (s && typeof s.preflight_rollout_pct === 'number') ? s.preflight_rollout_pct : 100;
+    if (pct < 100) {
+      const bucket = installIdBucket(s && s.installation_id);
+      if (bucket >= pct) { console.log(`[preflight2] skipped (cohort gate: bucket ${bucket} >= ${pct}%)`); return; }
+    }
+  } catch { /* no settings yet = first launch = run with defaults */ }
+  let pf;
+  try { pf = require('./preflight'); } catch (e) { console.log(`[preflight2] module load failed: ${e && e.message}`); return; }
+  let dataDir;
+  try { dataDir = path.join(app.getPath('userData'), 'data'); } catch { dataDir = null; }
+  const version = (() => { try { return app.getVersion(); } catch { return '0.0.0'; } })();
+  if (dataDir) { try { pf.pruneOldCaches(pf.defaultEnv(), dataDir, version); } catch {} }
+  const cached = dataDir ? pf.readCache(pf.defaultEnv(), dataDir, version) : null;
+  if (cached) { console.log(`[preflight2] cached verdict=${cached.verdict} (skipping fresh probes)`); _preflightVerdict = cached; return; }
+  pf.run(pf.defaultEnv(), { dataDir, gpu: { app } }).then((result) => {
+    _preflightVerdict = result;
+    const reasons = result.results.filter((r) => r.status !== 'ok').map((r) => `${r.name}:${r.status}(${r.reason})`).join('; ');
+    console.log(`[preflight2] verdict=${result.verdict} totalMs=${result.totalMs} ${reasons || 'all-checks-ok'}`);
+    if (dataDir && result.verdict === 'ok') {
+      _preflightPendingCache = { pf, dataDir, version, result };
+      maybeCommitPreflightCache();
+    }
+  }).catch((e) => { console.log(`[preflight2] threw: ${e && e.message}`); });
+}
+
+// Only write the cache once backend-http-ready has fired, so a kill in the
+// window between preflight-finish and backend-actually-serving cannot leave a
+// "verdict=ok" token that masks a real boot break on the next launch.
+function maybeCommitPreflightCache() {
+  if (!_preflightPendingCache) return;
+  if (_perfValues['backend-http-ready'] == null) return;
+  const { pf, dataDir, version, result } = _preflightPendingCache;
+  _preflightPendingCache = null;
+  try { pf.writeCache(pf.defaultEnv(), dataDir, version, result); console.log(`[preflight2] cache committed for v${version}`); }
+  catch (e) { console.log(`[preflight2] cache write failed: ${e && e.message}`); }
+}
+
+function logPreflight(backendPort) {
+  const info = {};
+  const probe = (label, fn) => { try { info[label] = fn(); } catch (_) { info[label] = 'ERR'; } };
+  try {
+    const userData = app.getPath('userData');
+    probe('userDataWritable', () => { const t = path.join(userData, '.preflight'); fs.writeFileSync(t, 'x'); fs.unlinkSync(t); return true; });
+    probe('userDataAscii', () => /^[\x00-\x7F]*$/.test(userData));
+    probe('userDataLen', () => userData.length);
+    probe('oneDriveProfile', () => /onedrive/i.test(userData));
+    probe('portInPreferredRange', () => backendPort >= 8324 && backendPort <= 8424);
+    probe('freeDiskMB', () => Math.round((fs.statfsSync(userData).bavail * fs.statfsSync(userData).bsize) / 1048576));
+    if (isPackaged) for (const bit of ['router', 'node', 'app.asar', 'frontend', 'backend', 'python-env']) probe(bit, () => fs.existsSync(getResourcePath(bit)));
+    _preflightInfo = info;
+    console.log(`[preflight] ${Object.entries(info).map(([k, v]) => `${k}=${v}`).join(' | ')}`);
+  } catch (_) { /* never break boot */ }
+}
+
+// Count local Crashpad minidumps so the beacon can flag a crashy build (the cloud diffs by install_id over time).
+function countCrashDumps() {
+  try {
+    const base = path.join(app.getPath('userData'), 'Crashpad');
+    if (!fs.existsSync(base)) return 0;
+    let n = 0;
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.dmp$/i.test(e.name)) n++;
+      }
+    };
+    walk(base);
+    return n;
+  } catch (_) { return -1; }
+}
+
+// Fleet self-report: POST a compact boot outcome to the LOCAL backend, which forwards it via the existing service client (opt-out honored). No PII. Fire-and-forget, guarded.
+function sendBootBeacon() {
+  try {
+    if (!isPackaged || !backendPort) return;
+    const bi = getBuildInfo();
+    const body = JSON.stringify({
+      surface: 'boot',
+      action: 'ready',
+      props: {
+        sha: bi.shortSha, channel: bi.channel, version: app.getVersion(),
+        os: process.platform, arch: process.arch,
+        perf: _perfValues, preflight: _preflightInfo, preflight2: _preflightVerdict ? { verdict: _preflightVerdict.verdict, totalMs: _preflightVerdict.totalMs, names: (_preflightVerdict.results || []).map((r) => `${r.name}:${r.status}`) } : null, crash_dumps: countCrashDumps(),
+      },
+    });
+    const req = http.request({
+      hostname: '127.0.0.1', port: backendPort, path: '/api/service/event', method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+      },
+      timeout: 4000,
+    }, (res) => { res.on('data', () => {}); res.on('end', () => {}); });
+    req.on('error', () => {});
+    req.on('timeout', () => { try { req.destroy(); } catch (_) {} });
+    req.write(body);
+    req.end();
+  } catch (_) { /* beacon must never affect the app */ }
+}
+
+// Fire the beacon once first-paint AND backend-http-ready have both landed (the POST needs the backend listening); a touch later so it stays off the critical path.
+let _beaconScheduled = false;
+function maybeSendBootBeacon() {
+  if (_beaconScheduled) return;
+  if (_perfValues['first-paint'] == null || _perfValues['backend-http-ready'] == null) return;
+  _beaconScheduled = true;
+  setTimeout(() => sendBootBeacon(), 1500);
+}
+
+// Defender warmup: NSIS runs us with --prewarm right after install so Windows scans the bundled binaries while the user is already watching the installer instead of staring at a slow first launch.
+if (process.argv.includes('--prewarm') && process.platform === 'win32') {
   const touchExe = (rel) => {
     const full = path.join(process.resourcesPath, rel);
     try {
@@ -31,42 +262,8 @@ function _squirrelPrewarmTouch() {
   touchExe(path.join('python-env', 'python.exe'));
   touchExe(path.join('node', 'x64', 'node.exe'));
   touchExe(path.join('node', 'arm64', 'node.exe'));
-}
-
-// Legacy NSIS prewarm path (kept for any user still on 1.1.40 stable NSIS install).
-if (process.argv.includes('--prewarm') && process.platform === 'win32') {
-  _squirrelPrewarmTouch();
   process.exit(0);
 }
-
-// Squirrel hands shortcut creation to the app: when we intercept --squirrel-*
-// ourselves, Update.exe won't make the Start Menu / Desktop icons unless we ask
-// it to. Skip this and the user only ever sees Setup.exe, no app to click.
-function _squirrelUpdate(args) {
-  try {
-    const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
-    const exeName = path.basename(process.execPath);
-    execFileSync(updateExe, [...args, exeName], { timeout: 20000, stdio: 'ignore', windowsHide: true });
-  } catch (_) {}
-}
-
-// Squirrel.Windows lifecycle: app is invoked with --squirrel-* args during install/update/uninstall. Handle and exit fast; --squirrel-firstrun is the only one we let fall through to normal boot.
-(function handleSquirrelEvents() {
-  if (process.platform !== 'win32' || process.argv.length < 2) return;
-  const sq = process.argv[1];
-  if (sq === '--squirrel-install' || sq === '--squirrel-updated') {
-    _squirrelUpdate(['--createShortcut']);
-    _squirrelPrewarmTouch();
-    process.exit(0);
-  }
-  if (sq === '--squirrel-uninstall') {
-    _squirrelUpdate(['--removeShortcut']);
-    process.exit(0);
-  }
-  if (sq === '--squirrel-obsolete') {
-    process.exit(0);
-  }
-})();
 
 // Prevent duplicate instances. Without this, double-clicking the app icon
 // (or macOS auto-launch + manual launch overlapping) spawns two independent
@@ -142,9 +339,7 @@ app.on('open-url', (event, url) => {
 });
 
 app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling');
-app.commandLine.appendSwitch('ignore-gpu-blocklist');
-app.commandLine.appendSwitch('enable-gpu-rasterization');
-app.commandLine.appendSwitch('enable-zero-copy');
+// disableHardwareAcceleration() was tried as a fallback but did not stop the 0xC0000005 crashes, confirming the segfault is not GPU-side. Dev mode (http origin) never crashed, packaged (file:// origin) always crashed, so the embedded localhost HTTP server (see startFrontendServer below) is the real fix and we keep GPU acceleration on.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 let mainWindow = null;
@@ -162,6 +357,76 @@ let isQuittingFromSplash = false;  // guards against double-quit during error sh
 let rendererCrashTimes = [];       // timestamps of recent render-process-gone events; caps the auto-reload retry storm
 const recentBackendStderr = [];   // ring buffer (last ~60 lines) for splash error UI
 let splashDataUrlCache = null;
+// Set to true around `new BrowserWindow()` for the top-level main window so the popup-UA spoofer in app.on('web-contents-created') doesn't accidentally rewrite the main window's UA. The web-contents-created event fires synchronously inside the BrowserWindow constructor, before mainWindow assignment returns; without this flag, the previous identity check (contents !== mainWindow.webContents) is racy across recreateMainWindow() because mainWindow still points to the OLD window during construction of the NEW one.
+let isCreatingMainWindow = false;
+
+// Embedded HTTP server that serves the packaged frontend bundle. The previous loadFile(...) path used file:// which on Windows Electron 40 CastLabs triggered a STATUS_ACCESS_VIOLATION (0xC0000005) renderer crash on every chat / dashboard mount; dev mode using http://localhost:3000 never crashed. Serving over http://127.0.0.1:<random> from the same in-process Node http server keeps the same packaged asset layout, costs no measurable perf (in-process loopback), and avoids the file:// quirk that Chromium 144 segfaults on.
+let frontendServerPort = null;
+async function startFrontendServer() {
+  const frontendDir = path.join(process.resourcesPath, 'frontend');
+  const mimeTypes = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.mjs': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.map': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.wasm': 'application/wasm',
+  };
+  const server = http.createServer((req, res) => {
+    try {
+      let pathname = decodeURIComponent((req.url || '/').split('?')[0]);
+      if (pathname === '/' || pathname === '') pathname = '/index.html';
+      const resolved = path.normalize(path.join(frontendDir, pathname));
+      // Defense-in-depth path-traversal guard; loopback-only listener already prevents external access but a misparsed URL must not escape the frontend dir.
+      if (!resolved.startsWith(frontendDir + path.sep) && resolved !== path.join(frontendDir, 'index.html')) {
+        res.writeHead(403); res.end(); return;
+      }
+      fs.readFile(resolved, (err, data) => {
+        if (err) {
+          // SPA fallback: unknown paths return index.html so client-side routing works even if some code uses BrowserRouter instead of HashRouter.
+          fs.readFile(path.join(frontendDir, 'index.html'), (err2, indexData) => {
+            if (err2) { res.writeHead(404); res.end(); return; }
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(indexData);
+          });
+          return;
+        }
+        const ext = path.extname(resolved).toLowerCase();
+        res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+        res.end(data);
+      });
+    } catch (err) {
+      console.error('[frontend-server] request handler threw:', err && err.message);
+      try { res.writeHead(500); res.end(); } catch (_) {}
+    }
+  });
+  return new Promise((resolve, reject) => {
+    server.on('error', (err) => {
+      console.error('[frontend-server] failed to start:', err && err.message);
+      reject(err);
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      frontendServerPort = typeof addr === 'object' && addr ? addr.port : null;
+      console.log(`[frontend-server] listening on 127.0.0.1:${frontendServerPort}`);
+      resolve(frontendServerPort);
+    });
+  });
+}
 
 const isPackaged = app.isPackaged;
 const isDev = process.env.ELECTRON_DEV === '1';
@@ -434,6 +699,12 @@ function waitForBackend(port, opts = {}) {
           finish(reject, new Error(`Backend process exited with code ${code} during startup`));
         }
       });
+      // spawn 'error' (missing/quarantined/wrong-arch python.exe) never fires
+      // 'exit', so without this the health poll loops forever and the splash
+      // hangs. Reject so the caller surfaces the failure UI instead.
+      proc.once('error', (err) => {
+        finish(reject, new Error(`Backend failed to spawn: ${err && err.message || err}`));
+      });
     }
 
     function check() {
@@ -478,7 +749,16 @@ function waitForBackend(port, opts = {}) {
 // 8324-range — the renderer reads the port via IPC, no hardcoded assumption.
 async function pickBackendPort() {
   const PREFERRED_TIMEOUT_MS = 3000;
-  const preferred = getPort({ port: getPort.makeRange(8324, 8424) });
+  // host:'127.0.0.1' is load-bearing. The backend binds uvicorn --host
+  // 127.0.0.1, but get-port defaults to probing 0.0.0.0, and on Windows a
+  // 0.0.0.0:PORT probe SUCCEEDS even when another process already holds
+  // 127.0.0.1:PORT (loopback). So without this, get-port hands back e.g.
+  // 8324 as "free" while something else owns 127.0.0.1:8324, the backend
+  // then fails its 127.0.0.1 bind with WinError 10048 and exits, and the
+  // app shows "backend crashed". Probing the same interface uvicorn binds
+  // makes get-port skip the occupied port. (POSIX already rejects the
+  // mismatched 0.0.0.0 probe, so this is a no-op correctness win on Mac.)
+  const preferred = getPort({ port: getPort.makeRange(8324, 8424), host: '127.0.0.1' });
   let timeoutHandle;
   const timeout = new Promise((resolve) => {
     timeoutHandle = setTimeout(() => resolve(null), PREFERRED_TIMEOUT_MS);
@@ -487,7 +767,7 @@ async function pickBackendPort() {
   clearTimeout(timeoutHandle);
   if (winner !== null) return winner;
   console.warn(`[boot] getPort.makeRange(8324,8424) stalled past ${PREFERRED_TIMEOUT_MS}ms — falling back to OS-assigned port`);
-  return await getPort({ port: 0 });
+  return await getPort({ port: 0, host: '127.0.0.1' });
 }
 
 async function startBackend() {
@@ -572,7 +852,26 @@ async function startBackend() {
     env.PYTHONPATH = [projectRoot, debuggerDir, pythonEnvSitePackages].join(path.delimiter);
   }
 
-  console.log(`Starting backend: ${pythonPath} on port ${backendPort}`);
+  openBackendLog();
+  // app-launch is the first milestone that can reach backend.log, since the
+  // console tee is installed by openBackendLog() just above. APP_LAUNCH_T
+  // (module load) remains the t=0 reference, so this t is real elapsed.
+  perfMark('app-launch');
+  // Provenance: name the exact commit + version at the top of every boot trace,
+  // so a user-submitted backend.log instantly says what shipped. Emitted here
+  // (not in whenReady) because openBackendLog() above just installed the console
+  // tee; logging earlier would miss the persistent file.
+  const _bi = getBuildInfo();
+  console.log(`[provenance] OpenSwarm ${app.getVersion()} sha=${_bi.shortSha} channel=${_bi.channel} builtAt=${_bi.builtAt || 'n/a'}`);
+  logPreflight(backendPort);
+  runComprehensivePreflight();
+  // Record what we're about to launch and whether the interpreter is even
+  // present. If AV quarantined python.exe or the wrong-arch bundle shipped,
+  // exists=false (or spawn 'error' below) names the cause that otherwise
+  // produces a silent "backend crashed" with no stdout/stderr at all.
+  let pythonExists = false;
+  try { pythonExists = fs.existsSync(pythonPath); } catch (_) {}
+  console.log(`Starting backend: ${pythonPath} (exists=${pythonExists}) on port ${backendPort}`);
   console.log(`Project root: ${projectRoot}`);
 
   backendProcess = spawn(
@@ -606,6 +905,20 @@ async function startBackend() {
     while (recentBackendStderr.length > 60) recentBackendStderr.shift();
   });
 
+  // spawn() fires 'error' (not 'exit', not stdout/stderr) when the binary is
+  // missing, AV-quarantined, blocked, or the wrong arch (ENOEXEC). This is the
+  // most common silent cross-machine failure; without this handler it produced
+  // an unhandled emitter error and an empty log. Surface it in both the log and
+  // the splash error buffer so "View logs" actually explains the crash.
+  backendProcess.on('error', (err) => {
+    const msg = `\n[electron] backend spawn FAILED: ${err && err.code ? err.code + ' ' : ''}${err && err.message || err}\n` +
+      `  python path: ${pythonPath} (exists=${pythonExists})\n` +
+      `  arch: ${process.arch}, platform: ${process.platform}\n`;
+    console.error(msg);
+    recentBackendStderr.push(msg);
+    while (recentBackendStderr.length > 60) recentBackendStderr.shift();
+  });
+
   backendProcess.on('exit', (code) => {
     console.log(`Backend exited with code ${code}`);
     if (code !== 0 && code !== null && mainWindow) {
@@ -617,7 +930,10 @@ async function startBackend() {
 
   emitSplashStatus('Starting backend…');
   await waitForBackend(backendPort, { process: backendProcess });
+  perfMark('backend-http-ready');
   console.log(`Backend ready on port ${backendPort}`);
+  maybeCommitPreflightCache();
+  maybeSendBootBeacon();
 
   // Backend writes a per-install auth token file at startup. Read it
   // here so the renderer can include it in WS URLs (`?token=...`) and
@@ -664,6 +980,54 @@ function getAuthTokenFilePath() {
   return path.join(__dirname, '..', 'backend', 'data', 'auth.token');
 }
 
+// Persistent backend log on disk. Until now the bundled-Python stdout/stderr
+// only went to the Electron process streams, which a packaged Windows app
+// has no console for, so a user whose backend failed on their machine had
+// nothing to send us. This file is the one artifact that names the actual
+// cause (UnicodeDecodeError, EADDRINUSE, missing DLL, AV quarantine) of the
+// "works on my laptop, not theirs" failures. Lives next to auth.token.
+function getBackendLogPath() {
+  return path.join(path.dirname(getAuthTokenFilePath()), 'backend.log');
+}
+
+let backendLogStream = null;
+let _consoleTeed = false;
+function openBackendLog() {
+  try {
+    const logPath = getBackendLogPath();
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    // Size-based rotation: keep one previous file so the log can't grow
+    // unbounded across long-running sessions. 5MB is plenty for a boot trace.
+    try {
+      if (fs.existsSync(logPath) && fs.statSync(logPath).size > 5 * 1024 * 1024) {
+        fs.renameSync(logPath, logPath + '.1');
+      }
+    } catch (_) {}
+    backendLogStream = fs.createWriteStream(logPath, { flags: 'a' });
+    backendLogStream.write(`\n===== launch ${new Date().toISOString()} (app ${app.getVersion()}, ${process.platform}/${process.arch}) =====\n`);
+    installConsoleTee();
+  } catch (err) {
+    console.warn('[backend-log] could not open log file:', err && err.message);
+    backendLogStream = null;
+  }
+}
+// Tee the whole main-process stdout/stderr into the log file, not just the
+// Python child's streams. A packaged Windows GUI app has no console, so
+// otherwise every main-process console.log/error (boot failures, frontend
+// server errors, renderer-forwarded crashes, the spawn-error handler) is lost.
+// Patched once; reads the current backendLogStream so it survives restarts.
+function installConsoleTee() {
+  if (_consoleTeed) return;
+  _consoleTeed = true;
+  for (const name of ['stdout', 'stderr']) {
+    const orig = process[name].write.bind(process[name]);
+    process[name].write = (chunk, ...rest) => {
+      try { if (backendLogStream) backendLogStream.write(chunk); } catch (_) {}
+      return orig(chunk, ...rest);
+    };
+  }
+}
+
 async function loadAuthToken() {
   const tokenPath = getAuthTokenFilePath();
   // Retry up to 20 × 100ms = 2s in case backend is still writing the
@@ -684,6 +1048,8 @@ async function loadAuthToken() {
 }
 
 function createWindow() {
+  isCreatingMainWindow = true;
+  console.log('[diag][main] createWindow start');
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -703,12 +1069,19 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webviewTag: true,
+      // E2E: additionalArguments lands in the renderer process.argv, which the
+      // preload reads to expose the Redux store deterministically. No-op for
+      // normal launches (env var unset).
+      ...(process.env.OPENSWARM_E2E === '1' ? { additionalArguments: ['--openswarm-e2e=1'] } : {}),
     },
   });
 
   if (isDev) {
     mainWindow.loadURL(`http://localhost:3000`);
+  } else if (frontendServerPort) {
+    mainWindow.loadURL(`http://127.0.0.1:${frontendServerPort}/index.html`);
   } else {
+    // Fallback only if the embedded server failed to start; the file:// path is known to segfault on Windows CastLabs Electron 40 but it is better than a white screen.
     const frontendPath = getResourcePath('frontend', 'index.html');
     mainWindow.loadFile(frontendPath);
   }
@@ -741,6 +1114,8 @@ function createWindow() {
   // the window existed (cold-launch via openswarm://). pendingDeepLink may
   // be a string (legacy) OR a {channel, url} object (v1.0.26+ OAuth claims).
   mainWindow.webContents.once('did-finish-load', () => {
+    perfMark('first-paint');
+    maybeSendBootBeacon();
     if (pendingDeepLink) {
       if (typeof pendingDeepLink === 'string') {
         mainWindow.webContents.send('openswarm:auth-url', pendingDeepLink);
@@ -751,32 +1126,31 @@ function createWindow() {
     }
   });
 
+  // Identity-checked: on crash recovery we recreate the window, which means BOTH the old and new BrowserWindow are alive briefly. The OLD window's closed handler must not clobber the NEW mainWindow reference when the old finally destroys.
+  const thisWindow = mainWindow;
   mainWindow.on('closed', () => {
-    mainWindow = null;
+    if (mainWindow === thisWindow) mainWindow = null;
   });
 
-  // Renderer process death (GPU/native/OOM crash) is invisible to React error
-  // boundaries: the whole content process is gone, so JS never runs to catch
-  // anything. Without this the window just sits blank forever. Reload to
-  // recover, but cap retries so a deterministic crash-on-load can't pin the CPU
-  // in an infinite reload storm; after the cap we leave it so the splash/quit
-  // path can take over rather than thrash.
+  // Renderer process death (GPU/native/OOM crash) is invisible to React error boundaries since the whole content process is gone. We RECREATE the window rather than reload(): the Electron 40 CastLabs build hits NOTREACHED in base/observer_list.h on reload after a renderer crash (some session/webview observer is re-registered against a list that disallows duplicates), aborting the entire main process with exit 3. A fresh BrowserWindow side-steps that. Crashes capped at 3 in 60s; after the cap we surface a native dialog so the user picks Reload vs Quit themselves rather than thrashing.
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, err) => {
+    console.error('[diag][main:preload-error]', preloadPath, err && err.stack || err);
+  });
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     const reason = details && details.reason;
     if (reason === 'clean-exit') return;
-    // Don't fight the shutdown: the renderer dying mid-quit-drain is expected, reloading it then would resurrect a window we're trying to close.
+    // Renderer dying mid-quit-drain is expected; recreating then would resurrect a window we're trying to close.
     if (drainingForQuit) return;
-    console.error('[main] renderer process gone:', reason);
+    console.error('[main] renderer process gone:', JSON.stringify(details));
     const now = Date.now();
     rendererCrashTimes = rendererCrashTimes.filter((t) => now - t < 60_000);
     if (rendererCrashTimes.length >= 3) {
-      console.error('[main] renderer crashed 3x in 60s — not auto-reloading again');
+      console.error('[main] renderer crashed 3x in 60s, showing recovery dialog');
+      showCrashRecoveryOverlay();
       return;
     }
     rendererCrashTimes.push(now);
-    try {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
-    } catch (_) {}
+    recreateMainWindow();
   });
 
   // Window-blur / window-focus tracking — analytics signal for "user
@@ -799,18 +1173,146 @@ function createWindow() {
   };
   mainWindow.on('blur', () => sendFocusEvent('blur'));
   mainWindow.on('focus', () => sendFocusEvent('focus'));
+
+  // Forward renderer console output to main stderr so packaged-build diagnostics survive without DevTools open.
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    const tag = ['LOG', 'INFO', 'WARN', 'ERROR'][level] || 'LOG';
+    const src = sourceId ? sourceId.split('/').pop() : '';
+    console.log(`[renderer:${tag}] ${message}${src ? ` (${src}:${line})` : ''}`);
+  });
+
+  isCreatingMainWindow = false;
+  console.log('[diag][main] createWindow end, ua=', mainWindow.webContents.getUserAgent());
+}
+
+// Crash recovery path A: tear down the dead BrowserWindow and stand up a fresh one. Used by the render-process-gone handler under the 3-in-60s cap.
+//
+// Why createWindow first, destroy old after:
+//   - If we destroy old before creating new, mainWindow goes null. Electron fires window-all-closed → app.quit() runs in the gap and we lose the process before the new window exists.
+//   - createWindow() assigns mainWindow = newWindow synchronously, so the window list never drops to zero.
+//
+// Why setImmediate for the destroy:
+//   - We're INSIDE the old window's render-process-gone handler. Destroying its BrowserWindow from inside its own event callback works in current Electron but is fragile across version bumps; deferring one tick is free insurance.
+function recreateMainWindow() {
+  console.log('[diag][main] recreateMainWindow START, crashesInWindow=', rendererCrashTimes.length);
+  const oldWindow = mainWindow;
+  mainWindowReady = false;
+  try {
+    createWindow();
+  } catch (err) {
+    console.error('[diag][main] recreateMainWindow: createWindow failed:', err && err.message);
+    return;
+  }
+  console.log('[diag][main] recreateMainWindow created fresh window, ua=', mainWindow && mainWindow.webContents.getUserAgent());
+  const freshWindow = (mainWindow && mainWindow !== oldWindow) ? mainWindow : null;
+  if (freshWindow) {
+    freshWindow.once('ready-to-show', () => {
+      try {
+        freshWindow.show();
+        freshWindow.focus();
+        mainWindowReady = true;
+      } catch (_) {}
+    });
+    // After recreate the splash is long gone, so we can't rely on the boot path's swapToMain. Re-attach the update-notif listener that app.whenReady installed on the original webContents; the new webContents has no listeners yet.
+    if (!isDev) {
+      freshWindow.webContents.on('did-finish-load', () => {
+        if (cachedUpdateStatus.status === 'available') {
+          sendToRenderer('update-available', cachedUpdateStatus.info);
+        } else if (cachedUpdateStatus.status === 'downloaded') {
+          sendToRenderer('update-downloaded', cachedUpdateStatus.info);
+        }
+      });
+    }
+  }
+  setImmediate(() => {
+    if (oldWindow && !oldWindow.isDestroyed()) {
+      try { oldWindow.destroy(); } catch (_) {}
+    }
+  });
+}
+
+// Crash recovery path B: the cap-exceeded fallback. Native dialog (not a BrowserWindow) so we cannot trigger the same observer-double-add DCHECK that motivated this whole change. User-driven Reload runs in a clean call stack outside the render-process-gone handler.
+async function showCrashRecoveryOverlay() {
+  try {
+    const result = await dialog.showMessageBox({
+      type: 'error',
+      title: 'OpenSwarm needs to reload',
+      message: 'OpenSwarm had repeated UI errors and stopped auto-recovering.',
+      detail: 'Reload to try again, or quit if this keeps happening.',
+      buttons: ['Reload', 'Quit'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (result.response === 0) {
+      rendererCrashTimes = [];
+      recreateMainWindow();
+    } else {
+      app.quit();
+    }
+  } catch (err) {
+    console.error('[main] showCrashRecoveryOverlay failed:', err && err.message);
+    app.quit();
+  }
 }
 
 function sendToRenderer(channel, ...args) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, ...args);
+    try {
+      mainWindow.webContents.send(channel, ...args);
+    } catch (err) {
+      // webContents.send throws after the renderer dies but before mainWindow.isDestroyed() returns true (race during recreate). Swallow so the blur/focus listener cannot become a secondary crash source.
+      console.warn('[sendToRenderer] send failed for', channel, ':', err && err.message);
+    }
   }
+}
+
+// Maps a raw electron-updater error to a short, human message. The raw error
+// is always logged separately for debugging; users only ever see this. No
+// em/en dashes per repo style.
+function friendlyUpdateError(err) {
+  const raw = ((err && err.message) || String(err) || '').toLowerCase();
+  // Experimental on, but there is no pre-release to fetch: the provider 404s
+  // looking for the pre-release channel feed. This is the screenshot case.
+  if (autoUpdater && autoUpdater.allowPrerelease &&
+      /404|not found|cannot find|no published|latest.*\.yml/.test(raw)) {
+    return 'No experimental builds available right now. You are on the latest version.';
+  }
+  if (/net::|enotfound|etimedout|econnrefused|getaddrinfo|network/.test(raw)) {
+    return 'Could not reach the update server. Check your connection and try again.';
+  }
+  return 'Update check failed. Please try again later.';
+}
+
+// Phase 2 provenance: which exact commit produced this build. The build
+// scripts write electron/build-info.json (gitignored, regenerated each build)
+// next to main.js, so it ships inside the asar. In dev there is no such file,
+// so we fall back to a live `git rev-parse` and tag it dev. Cached after first
+// read; never throws (a missing/garbled file just yields 'unknown').
+let _buildInfoCache = null;
+function getBuildInfo() {
+  if (_buildInfoCache) return _buildInfoCache;
+  let info = { sha: 'unknown', shortSha: 'unknown', builtAt: null, channel: 'unknown' };
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.sha) info = parsed;
+  } catch (_) {
+    // Dev fallback: resolve the working-tree HEAD so `npm start` still reports something useful.
+    try {
+      const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __dirname, timeout: 2000 }).toString().trim();
+      if (sha) info = { sha, shortSha: sha.slice(0, 12), builtAt: null, channel: 'dev' };
+    } catch (_) { /* not a git checkout either; keep 'unknown' */ }
+  }
+  _buildInfoCache = info;
+  return info;
 }
 
 function setupAutoUpdater() {
   if (!autoUpdater) return;
   if (isSquirrelUpdater) {
-    // Squirrel.Windows: setFeedURL to GH Releases /latest/download/ so Squirrel fetches RELEASES from there. allowPrerelease/allowDowngrade not supported by built-in autoUpdater; experimental users on Windows get only the latest stable until we wire a separate Squirrel feed for prereleases.
+    // Squirrel.Windows fetches its RELEASES feed from GH /latest/download/. The
+    // built-in autoUpdater has no autoDownload/allowPrerelease/allowDowngrade knobs.
     try {
       autoUpdater.setFeedURL({ url: 'https://github.com/openswarm-ai/openswarm/releases/latest/download/' });
     } catch (err) {
@@ -829,16 +1331,21 @@ function setupAutoUpdater() {
     autoUpdater.allowDowngrade = true;
   }
 
+  // electron-updater (Mac) passes an info object ({version,...}); the built-in
+  // Windows autoUpdater (Squirrel) fires update-available/-not-available with NO
+  // args and update-downloaded with positional (event, releaseNotes, releaseName,
+  // releaseDate, updateURL). Normalize so these handlers work for both.
   autoUpdater.on('update-available', (info) => {
-    console.log(`Update available: ${info.version}`);
-    cachedUpdateStatus = { status: 'available', info, error: null };
-    sendToRenderer('update-available', info);
+    const norm = info && info.version ? info : { version: '' };
+    console.log(`Update available: ${norm.version || '(version not reported by Squirrel)'}`);
+    cachedUpdateStatus = { status: 'available', info: norm, error: null };
+    sendToRenderer('update-available', norm);
   });
 
   autoUpdater.on('update-not-available', (info) => {
     console.log('App is up to date');
-    cachedUpdateStatus = { status: 'not-available', info, error: null };
-    sendToRenderer('update-not-available', info);
+    cachedUpdateStatus = { status: 'not-available', info: info || {}, error: null };
+    sendToRenderer('update-not-available', info || {});
   });
 
   autoUpdater.on('download-progress', (progress) => {
@@ -846,29 +1353,48 @@ function setupAutoUpdater() {
     sendToRenderer('download-progress', progress);
   });
 
-  autoUpdater.on('update-downloaded', (info) => {
-    console.log(`Update downloaded: ${info.version}`);
-    cachedUpdateStatus = { status: 'downloaded', info, error: null };
-    sendToRenderer('update-downloaded', info);
+  autoUpdater.on('update-downloaded', (info, releaseNotes, releaseName) => {
+    const version = (info && info.version) || releaseName || '';
+    console.log(`Update downloaded: ${version || '(ready to install)'}`);
+    const norm = info && info.version ? info : { version };
+    cachedUpdateStatus = { status: 'downloaded', info: norm, error: null };
+    sendToRenderer('update-downloaded', norm);
   });
 
   autoUpdater.on('error', (err) => {
+    // Squirrel throws "AutoUpdater process ... is already running" when a check or
+    // download is already in flight (e.g. the user clicked Check twice). Benign.
+    if (/already running/i.test((err && err.message) || '')) {
+      console.log('[updater] check already in progress; ignoring duplicate trigger');
+      return;
+    }
+    // Raw electron-updater errors are verbose (full URL, HTTP status, stack,
+    // sometimes an HTML body). Keep the raw text in the log for debugging, but
+    // never show it to the user. The common case is "Experimental updates is on
+    // but no pre-release exists": the GitHub provider 404s hunting a pre-release
+    // feed, which is not a real failure, just "nothing newer to install".
     console.error('Auto-update error:', err);
-    cachedUpdateStatus = { status: 'error', info: null, error: err?.message || String(err) };
-    sendToRenderer('update-error', err?.message || String(err));
+    const friendly = friendlyUpdateError(err);
+    cachedUpdateStatus = { status: 'error', info: null, error: friendly };
+    sendToRenderer('update-error', friendly);
   });
 
-  autoUpdater.checkForUpdates().catch((err) => {
-    console.log('Update check skipped:', err.message);
-  });
+  // electron-updater's checkForUpdates() returns a promise; the built-in Windows
+  // autoUpdater (Squirrel) returns nothing and reports via events, so a bare
+  // .catch() on it throws. Guard the call so both updaters work.
+  const _runUpdateCheck = (label) => {
+    try {
+      const p = autoUpdater.checkForUpdates();
+      if (p && typeof p.catch === 'function') p.catch((err) => console.log(`${label}:`, err && err.message));
+    } catch (err) {
+      console.log(`${label} threw:`, err && err.message);
+    }
+  };
+  _runUpdateCheck('Update check skipped');
 
   // Always-on users (lid never closes) miss the once-at-startup check
   // above. Re-check every 4h; coalesces if a download is already cached.
-  setInterval(() => {
-    autoUpdater.checkForUpdates().catch((err) => {
-      console.log('Periodic update check failed:', err.message);
-    });
-  }, 4 * 60 * 60 * 1000);
+  setInterval(() => _runUpdateCheck('Periodic update check failed'), 4 * 60 * 60 * 1000);
 }
 
 function killBackend() {
@@ -896,6 +1422,10 @@ function killBackend() {
       }, 3000);
     }
     backendProcess = null;
+  }
+  if (backendLogStream) {
+    try { backendLogStream.end(`[electron] backend killed ${new Date().toISOString()}\n`); } catch (_) {}
+    backendLogStream = null;
   }
 }
 
@@ -929,6 +1459,27 @@ app.whenReady().then(async () => {
     ];
     return allowed.includes(permission);
   });
+
+  // Strip X-Frame-Options and CSP frame-ancestors directives on iframe subframe loads so the Windows BrowserCard iframe fallback (used because <webview> tag commit segfaults on Chromium 144 + this Electron 40 CastLabs build) can render sites that normally refuse to be embedded. Scoped to types:['sub_frame'] so OAuth popups, the main app frame, deep-link redirects, and DRM license fetches keep their security headers intact. urls filter limits to http/https so file:// loads of the bundled frontend are untouched.
+  session.defaultSession.webRequest.onHeadersReceived(
+    // Electron's webRequest type name for iframes is 'subFrame' (camelCase), not the Chrome-extension 'sub_frame' — passing the wrong name throws "Invalid type sub_frame" synchronously which becomes an unhandledRejection and prevents the app from booting.
+    { urls: ['http://*/*', 'https://*/*'], types: ['subFrame'] },
+    (details, callback) => {
+      const headers = { ...(details.responseHeaders || {}) };
+      for (const k of Object.keys(headers)) {
+        const lk = k.toLowerCase();
+        if (lk === 'x-frame-options') {
+          delete headers[k];
+        } else if (lk === 'content-security-policy' || lk === 'content-security-policy-report-only') {
+          const cleaned = (headers[k] || [])
+            .map((v) => v.split(';').filter((d) => !/^\s*frame-ancestors\b/i.test(d)).join(';').trim())
+            .filter(Boolean);
+          if (cleaned.length) headers[k] = cleaned; else delete headers[k];
+        }
+      }
+      callback({ responseHeaders: headers });
+    },
+  );
 
   // Read-only logging for DRM license requests — no modifying interceptors
   // so the network stack can set Content-Type and other headers normally.
@@ -989,6 +1540,9 @@ app.whenReady().then(async () => {
       backendPort = parseInt(process.env.OPENSWARM_PORT || '8324', 10);
       console.log(`Dev mode: using existing backend on port ${backendPort}`);
       emitSplashStatus('Connecting to dev backend…');
+      // Load the token before marking ready, same as prod, so renderer
+      // fetches get a real token instead of '' (else they 401).
+      await loadAuthToken();
       markBackendReady();
     } else {
       // Kick off backend without awaiting so the window can paint while Python is still cold-starting. Renderer fetches lazy-await markBackendReady() via the get-auth-token IPC; splash status updates still fire from inside startBackend.
@@ -997,6 +1551,14 @@ app.whenReady().then(async () => {
         console.error('[boot] backend startup failed:', err && err.message);
         emitSplashStatus({ text: 'Backend failed to start', level: 'error', logs: recentBackendStderr.slice(-20).join('') });
       });
+    }
+    // Start the embedded frontend HTTP server before createWindow so loadURL has a real port. Only relevant in packaged mode; in dev, frontend lives on webpack-dev-server :3000.
+    if (!isDev) {
+      try {
+        await startFrontendServer();
+      } catch (err) {
+        console.error('[boot] frontend server failed to start, falling back to file://:', err && err.message);
+      }
     }
     emitSplashStatus('Almost ready…');
     createWindow();
@@ -1102,9 +1664,11 @@ app.on('web-contents-created', (_event, contents) => {
   // skipped — they render user-visited sites and must advertise the real UA.
   if (
     contents.getType() === 'window' &&
+    !isCreatingMainWindow &&
     mainWindow &&
     contents !== mainWindow.webContents
   ) {
+    console.log('[diag][main] spoofing UA for popup webContents id=', contents.id);
     const OAUTH_POPUP_UA = process.platform === 'win32'
       ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
         '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -1320,7 +1884,15 @@ app.on('web-contents-created', (_event, contents) => {
 });
 
 app.on('window-all-closed', () => {
-  if (!isDev) killBackend();
+  // Intentionally NOT killBackend() here. before-quit POSTs /shutdown-all
+  // so the backend reaps App Builder child processes (bundled node/vite,
+  // uvicorn) while it is still alive; will-quit kills the backend after.
+  // Killing it here first (on Windows that is taskkill /F, which skips
+  // uvicorn's graceful stop_all) orphans those children, and an orphaned
+  // vite node.exe keeps a lock on its own image at
+  // resources\node\x64\node.exe, blocking the next NSIS upgrade with
+  // "OpenSwarm cannot be closed". Mac's SIGTERM happened to run stop_all,
+  // which is why this never reproduced there.
   app.quit();
 });
 
@@ -1357,8 +1929,13 @@ app.on('before-quit', async (event) => {
   if (drainingForQuit) return;
   event.preventDefault();
   drainingForQuit = true;
+  // 10s, not 2s: stop_all() reaps runtimes in parallel but each can take up
+  // to ~8s on Windows (taskkill /T /F up to 5s + a 3s SIGTERM grace). At 2s
+  // the backend got hard-killed mid-reap, orphaning the vite node.exe. The
+  // ceiling is only reached when an App Builder app is actually running and
+  // slow to die; with none active stop_all returns instantly.
   try {
-    await postShutdownAllApps(2000);
+    await postShutdownAllApps(10000);
   } catch (_) {}
   app.quit();
 });
@@ -1388,18 +1965,40 @@ ipcMain.on('splash:action', (_event, action) => {
     app.relaunch();
     app.exit(0);
   } else if (action === 'open-logs') {
-    // No backend log file is written to disk today; the next-best thing
-    // is opening the OpenSwarm data dir, where the user can see the
-    // auth.token file and any future log artifacts. Surfacing the dir
-    // also lets advanced users self-serve (clear data, etc).
+    // Reveal the backend log so a user hitting a boot failure on their
+    // machine can hand us the one file that names the cause. Falls back to
+    // the data dir if the log was never created (e.g. spawn never reached).
     try {
-      const dataDir = path.dirname(getAuthTokenFilePath());
-      shell.openPath(dataDir).catch(() => {});
+      const logPath = getBackendLogPath();
+      if (fs.existsSync(logPath)) {
+        shell.showItemInFolder(logPath);
+      } else {
+        shell.openPath(path.dirname(getAuthTokenFilePath())).catch(() => {});
+      }
     } catch (_) {}
   }
 });
 
+// Log every IPC handle entry so the trace shows which main-process call the renderer was making in the seconds before death.
+const _origHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, handler) => {
+  return _origHandle(channel, async (...args) => {
+    console.log('[diag][ipc.handle]', channel);
+    try {
+      return await handler(...args);
+    } catch (err) {
+      console.error('[diag][ipc.handle:throw]', channel, err && err.stack || err);
+      throw err;
+    }
+  });
+};
+
 ipcMain.handle('get-backend-port', () => backendPort);
+// Sync mirrors so preload.js can expose window.openswarm synchronously (no await), closing the race where React renders before the async exposure resolves and window.openswarm is briefly undefined. backendPort is assigned in app.whenReady before any BrowserWindow is created, so it is always set by the time preload runs.
+ipcMain.on('get-backend-port-sync', (event) => { event.returnValue = backendPort; });
+ipcMain.on('get-webview-preload-path-sync', (event) => {
+  event.returnValue = `file://${path.join(__dirname, 'webview-preload.js')}`;
+});
 ipcMain.handle('get-auth-token', async () => {
   // Wait for backend if it's still cold-starting; this is the lazy-backend gate that lets the window open while Python is warming up.
   if (!backendReady) await backendReadyPromise;
@@ -1414,7 +2013,16 @@ ipcMain.handle('get-auth-token', async () => {
   } catch (_) {}
   return authToken;
 });
+// Phase 0: renderer fires this once, when it renders the first streamed token
+// of the first agent response. Main owns the timing log (backend.log), so the
+// renderer reports the event and we stamp it against the same APP_LAUNCH_T as
+// the other milestones. Idempotent via perfMark's one-shot guard.
+ipcMain.on('perf:first-agent-response', () => perfMark('first-agent-response'));
+
 ipcMain.handle('get-app-version', () => app.getVersion());
+// Phase 2 provenance: the renderer's About panel shows the commit this build
+// was cut from, so a screenshot is enough to identify the exact code shipped.
+ipcMain.handle('get-build-info', () => getBuildInfo());
 ipcMain.handle('get-webview-preload-path', () => {
   return `file://${path.join(__dirname, 'webview-preload.js')}`;
 });
@@ -1427,6 +2035,12 @@ ipcMain.handle('check-for-updates', async () => {
     return { success: false, error: 'Not packaged' };
   }
   try {
+    // Built-in Windows autoUpdater (Squirrel) returns nothing and reports via
+    // update-available / update-not-available events, so don't expect a result.
+    if (isSquirrelUpdater) {
+      autoUpdater.checkForUpdates();
+      return { success: true };
+    }
     const result = await autoUpdater.checkForUpdates();
     if (!result) {
       sendToRenderer('update-error', 'Unable to check for updates.');
@@ -1452,7 +2066,7 @@ ipcMain.handle('download-update', async () => {
 
 ipcMain.handle('set-allow-prerelease', async (_e, value) => {
   if (!autoUpdater) return { success: false, error: 'Updater not available' };
-  // Squirrel built-in autoUpdater has no allowPrerelease; experimental channel on Windows is a TODO once we wire a separate Squirrel feed URL.
+  // Built-in autoUpdater has no allowPrerelease; experimental channel on Windows is a TODO once we wire a separate Squirrel prerelease feed.
   if (isSquirrelUpdater) return { success: false, error: 'Experimental channel not yet supported on Windows Squirrel target' };
   const next = Boolean(value);
   if (autoUpdater.allowPrerelease === next) return { success: true, changed: false };
@@ -1466,14 +2080,11 @@ ipcMain.handle('set-allow-prerelease', async (_e, value) => {
   return { success: true, changed: true };
 });
 
-ipcMain.handle('install-update', () => {
+ipcMain.handle('install-update', async () => {
   if (!autoUpdater) return;
-  // Built-in autoUpdater on Windows takes no args; electron-updater on Mac takes (isSilent, isForceRunAfter).
-  if (isSquirrelUpdater) {
-    autoUpdater.quitAndInstall();
-  } else {
-    autoUpdater.quitAndInstall(false, true);
-  }
+  // Built-in autoUpdater (Windows) takes no args; electron-updater (Mac) takes (isSilent, isForceRunAfter).
+  if (isSquirrelUpdater) { autoUpdater.quitAndInstall(); return; }
+  autoUpdater.quitAndInstall(false, true);
 });
 
 ipcMain.handle('capture-page', async (event, rect) => {

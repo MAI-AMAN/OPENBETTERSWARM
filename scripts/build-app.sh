@@ -82,10 +82,16 @@ NEED_UV=false
 [[ ! -f "$UV_BIN_DIR/uv"  ]] && NEED_UV=true
 [[ ! -f "$UV_BIN_DIR/uvx" ]] && NEED_UV=true
 if $NEED_UV; then
-    echo "[0] Downloading uv + uvx binaries (universal arm64+x64)..."
+    # Pinned uv version. "latest" used to mean a fresh uv could appear in any
+    # build with zero warning, breaking reproducibility (pillar 3). Override
+    # with UV_VERSION when deliberately bumping; keep Windows
+    # (build-app-win.ps1) in lockstep. 0.11.16 is what "latest" resolved to
+    # when this was pinned.
+    UV_VERSION="${UV_VERSION:-0.11.16}"
+    echo "[0] Downloading uv + uvx $UV_VERSION binaries (universal arm64+x64)..."
     TMPDIR_UV=$(mktemp -d)
-    curl -sL "https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz" | tar xz -C "$TMPDIR_UV"
-    curl -sL "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-apple-darwin.tar.gz"  | tar xz -C "$TMPDIR_UV"
+    curl -sL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-aarch64-apple-darwin.tar.gz" | tar xz -C "$TMPDIR_UV"
+    curl -sL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-apple-darwin.tar.gz"  | tar xz -C "$TMPDIR_UV"
     lipo -create "$TMPDIR_UV/uv-aarch64-apple-darwin/uv"  "$TMPDIR_UV/uv-x86_64-apple-darwin/uv"  -output "$UV_BIN_DIR/uv"
     lipo -create "$TMPDIR_UV/uv-aarch64-apple-darwin/uvx" "$TMPDIR_UV/uv-x86_64-apple-darwin/uvx" -output "$UV_BIN_DIR/uvx"
     chmod +x "$UV_BIN_DIR/uv" "$UV_BIN_DIR/uvx"
@@ -240,7 +246,10 @@ echo ""
 # Step 1: Build frontend
 echo "[1/4] Building frontend..."
 cd "$PROJECT_ROOT/frontend"
-npm install
+# npm ci (not install): installs exactly what package-lock.json pins, never
+# silently mutates the lock, and fails loudly on any drift. Reproducible builds
+# (pillar 3) depend on the lock being boss.
+npm ci
 npm run build
 
 if [[ ! -f "$PROJECT_ROOT/frontend/dist/index.html" ]]; then
@@ -392,28 +401,14 @@ rsync -a \
 # would strip it. The top-level backend/.env is still excluded (it's
 # (re)generated at the production .env step below).
 
-# Production .env: OAuth helper base URL + Google client_id and client_secret.
-# v1.0.29 moved the *OAuth flow* (auth-code exchange + refresh) to the Fly
-# cloud-proxy, so the OAuth flow itself no longer reads client_secret on the
-# desktop. But the bundled google_workspace_mcp Python package still requires
-# CLIENT_SECRET at startup to do its own token refresh per Google API call
-# (see backend/apps/tools_lib/tools_lib.py for the deferred-fix note).
-# Until we fork or replace that MCP in v1.0.30, the secret still ships here.
+# Production .env: just the OAuth helper base URL. Google client_id/secret are no
+# longer shipped: nothing in backend/ or frontend/ reads GOOGLE_OAUTH_CLIENT_{ID,
+# SECRET} at runtime, so we don't bake a secret into the packaged app.
 SHIP_OAUTH_BASE_URL="${OPENSWARM_OAUTH_BASE_URL_OVERRIDE:-https://api.openswarm.com}"
-GOOGLE_CLIENT_ID_SHIP="${GOOGLE_OAUTH_CLIENT_ID:-}"
-GOOGLE_CLIENT_SECRET_SHIP="${GOOGLE_OAUTH_CLIENT_SECRET:-}"
-if [[ -z "$GOOGLE_CLIENT_ID_SHIP" || -z "$GOOGLE_CLIENT_SECRET_SHIP" ]]; then
-    echo "ERROR: GOOGLE_OAUTH_CLIENT_ID/SECRET missing in $ENV_FILE — required for Google MCP."
-    exit 1
-fi
 mkdir -p "$STAGING_DIR/backend"
 cat > "$STAGING_DIR/backend/.env" <<EOF
-# OAuth helper base URL + Google OAuth credentials.
-# OAuth flow itself is cloud-proxied; client_secret is here only because the
-# bundled google_workspace_mcp requires it. v1.0.30 plans to remove this.
+# OAuth helper base URL.
 OPENSWARM_OAUTH_BASE_URL=${SHIP_OAUTH_BASE_URL}
-GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_CLIENT_ID_SHIP}
-GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET_SHIP}
 EOF
 echo "Staged production .env"
 
@@ -446,10 +441,22 @@ printf '\033[1;42;97m%s\033[0m\n' "  It is now safe to modify your codebase."
 printf '\033[1;42;97m%s\033[0m\n' "========================================"
 echo ""
 
+# Provenance stamp: record the exact commit this artifact was built from.
+# electron/build-info.json ships inside the asar; main.js reads it for the
+# startup [provenance] log line and the About panel. Gitignored + regenerated.
+BUILD_SHA=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+BUILD_VERSION=$(node -e "console.log(require('$PROJECT_ROOT/electron/package.json').version)")
+BUILD_CHANNEL=stable; [[ "$BUILD_VERSION" == *-* ]] && BUILD_CHANNEL=experimental
+cat > "$PROJECT_ROOT/electron/build-info.json" <<EOF
+{"sha":"$BUILD_SHA","shortSha":"${BUILD_SHA:0:12}","builtAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","channel":"$BUILD_CHANNEL","version":"$BUILD_VERSION"}
+EOF
+echo "Stamped build-info.json: sha=${BUILD_SHA:0:12} channel=$BUILD_CHANNEL"
+
 # Step 5: Package with electron-builder
 echo "[5/5] Packaging with electron-builder..."
 cd "$PROJECT_ROOT/electron"
-npm install
+# npm ci: lockfile-exact, no drift. See frontend note above.
+npm ci
 
 # Node's default ~4 GB heap OOMs while codesign'ing the .app on dual-arch
 # publish runs (the .app is ~4.8 GB and electron-builder walks every file

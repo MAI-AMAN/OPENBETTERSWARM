@@ -1070,6 +1070,32 @@ class AgentManager:
                 mcp_registry_ctx,
             )
 
+            # Pin the agent's notion of "now" to the host wall clock + zone
+            # so it can answer day-of-week questions without hallucinating.
+            try:
+                from zoneinfo import ZoneInfo
+                # Best-effort IANA name for the host. Mirrors apps/service/client.py.
+                tz_name = os.environ.get("OPENSWARM_TIMEZONE", "").strip()
+                if not tz_name:
+                    try:
+                        from tzlocal import get_localzone_name  # type: ignore
+                        tz_name = get_localzone_name() or ""
+                    except Exception:
+                        tz_name = ""
+                tz_name = tz_name or "UTC"
+                now_local = datetime.now(ZoneInfo(tz_name))
+                tz_abbr = now_local.strftime("%Z") or tz_name
+                time_ctx = (
+                    "<current_time>\n"
+                    f"Today is {now_local.strftime('%A, %B %-d, %Y')}.\n"
+                    f"Local time: {now_local.strftime('%-I:%M %p')} {tz_abbr} ({tz_name}).\n"
+                    "Use this as ground truth for any date/time/day-of-week question.\n"
+                    "</current_time>"
+                )
+                composed_prompt = (composed_prompt + "\n\n" + time_ctx) if composed_prompt else time_ctx
+            except Exception:
+                pass
+
             if session.mode == "view-builder":
                 # Read the LIVE skill content rather than a frozen-at-import
                 # constant. The skill is registered as a built-in skill at

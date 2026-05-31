@@ -1,6 +1,6 @@
 import { useMemo, type RefObject } from 'react';
 import type { CardPosition, BrowserCardPosition } from '@/shared/state/dashboardLayoutSlice';
-import { EXPANDED_CARD_MIN_H, GRID_GAP } from '@/shared/state/dashboardLayoutSlice';
+import { EXPANDED_CARD_MIN_H } from '@/shared/state/dashboardLayoutSlice';
 import type { AgentSession } from '@/shared/state/agentsSlice';
 
 const ELBOW_RADIUS = 16;

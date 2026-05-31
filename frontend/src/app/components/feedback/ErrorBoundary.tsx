@@ -39,7 +39,8 @@ class ErrorBoundary extends React.Component<Props, State> {
     } catch {}
     try { this.props.onError?.(error, info); } catch {}
     if (typeof console !== 'undefined' && console.error) {
-      console.error('[ErrorBoundary]', error, info);
+      // [diag] prefix so the packaged-build stderr monitor picks this up alongside other diag traces (the renderer-side crash we are hunting does not always reach window.onerror, so an in-React-tree throw needs its own visible breadcrumb).
+      console.error('[diag][ErrorBoundary]', this.props.scope || 'unknown', error && error.message, '\nstack:\n', error && error.stack, '\ncomponent_stack:\n', info && info.componentStack);
     }
   }
 

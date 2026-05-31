@@ -4,6 +4,14 @@
 .env.*
 !.env*.example
 .local-stash/
+
+# Playwright e2e artifacts (per-run traces, screenshots, reports, raw results).
+e2e/traces/
+e2e/playwright-report/
+e2e/test-results/
+e2e/results.json
+# Playwright also drops a test-results/ at the repo root when run from here.
+test-results/
 backend/data/**
 !backend/data/outputs/
 !backend/data/outputs/*.json
@@ -13,7 +21,9 @@ electron/dist/
 electron/python-env/
 electron/build-staging/
 electron/node_modules/
-electron/package-lock.json
+# electron/package-lock.json is intentionally COMMITTED (tracked): the build
+# runs `npm ci`, which needs the lockfile in-repo. Do not re-add this ignore.
+electron/build-info.json
 
 # Router is fetched from npm at build time into electron/build-staging/router.
 # No local router/ directory is tracked.
@@ -39,6 +49,8 @@ openswarm-cloud
 .claude/
 # Local-only operator helpers (never commit)
 scripts/set-fly-*.sh
+# Local-only background dev-team state/docs (personal, never commit)
+docs/ops/
 
 # Python bytecode (regenerates on every import)
 __pycache__/

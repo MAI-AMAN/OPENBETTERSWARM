@@ -1,7 +1,8 @@
 import React from 'react';
 
 /** Slime illustration with X eyes and red badge for errors/warnings. */
-export const ErrorSlime: React.FC<{ size?: number }> = ({ size = 22 }) => (
+export const ErrorSlime: React.FC<{ size?: number }> = ({ size = 22 }) => {
+  return (
   <svg width={size} height={size} viewBox="0 0 28 28" fill="none" style={{ flexShrink: 0 }}>
     <path
       d="M4 20 Q4 7 14 7 Q24 7 24 20 Q22 22 19 21.5 Q16 23 14 22 Q12 23 9 21.5 Q6 22 4 20Z"
@@ -16,6 +17,7 @@ export const ErrorSlime: React.FC<{ size?: number }> = ({ size = 22 }) => (
     <circle cx="22" cy="5" r="4" fill="#ef4444" stroke="rgba(0,0,0,0.15)" strokeWidth="0.5" />
     <text x="22" y="6.8" textAnchor="middle" fontSize="5.5" fill="white" fontWeight="bold" fontFamily="sans-serif">!</text>
   </svg>
-);
+  );
+};
 
 export default ErrorSlime;

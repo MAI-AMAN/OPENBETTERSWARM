@@ -22,6 +22,14 @@ export const EditorSurface: React.FC<Props> = ({
   c, editorRef, disabled, hasContent, hasAttachments, autoRunMode, isRunning, queueLength,
   placeholderLabel, onInput, onClick, onKeyDown, onPaste,
 }) => {
+  const placeholderText = disabled
+    ? 'Agent is working...'
+    : autoRunMode
+      ? 'Describe what data to generate…'
+      : isRunning
+        ? (queueLength > 0 ? `${queueLength} queued, type another or wait…` : 'Agent is working, messages will queue…')
+        : placeholderLabel;
+
   return (
     <Box sx={{ px: 1.5, pt: hasAttachments ? 0.5 : 1.25, pb: 0.25, position: 'relative' }}>
       <div
@@ -29,9 +37,7 @@ export const EditorSurface: React.FC<Props> = ({
         data-onboarding="chat-input"
         contentEditable={!disabled}
         suppressContentEditableWarning
-        spellCheck
-        autoCorrect="on"
-        autoCapitalize="sentences"
+        spellCheck={false}
         onInput={onInput}
         onClick={onClick}
         onKeyDown={onKeyDown}
@@ -68,7 +74,7 @@ export const EditorSurface: React.FC<Props> = ({
             userSelect: 'none',
           }}
         >
-          {disabled ? 'Agent is working...' : autoRunMode ? 'Describe what data to generate…' : isRunning ? (queueLength > 0 ? `${queueLength} queued, type another or wait…` : 'Agent is working, messages will queue…') : placeholderLabel}
+          {placeholderText}
         </div>
       )}
     </Box>

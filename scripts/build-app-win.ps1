@@ -10,11 +10,23 @@
 [CmdletBinding()]
 param(
     [switch]$Sign,
-    [switch]$Publish
+    [switch]$Publish,
+    # Fast CI gate path: build only the unpacked win-unpacked\ dir (no NSIS
+    # installer, no LZMA compression of the ~1GB tree - the slowest packaging
+    # phase). verify-all + Playwright drive the unpacked OpenSwarm.exe directly.
+    [switch]$DirOnly,
+    # Phase 7 A/B: build a Squirrel.Windows installer instead of the default
+    # NSIS one, from the SAME staged tree / SAME commit. Opt-in only; NSIS stays
+    # the default and shipped target until Squirrel is proven faster AND its
+    # rollback works on real Win 10/11 machines. EXPERIMENTAL / unverified in CI.
+    [switch]$Squirrel
 )
 
 $ErrorActionPreference = 'Stop'
 if ($Publish) { $Sign = $true }
+# Override only the win target; everything else (signing hook, extraResources,
+# publish config) merges from electron/package.json's build block unchanged.
+$TargetOverride = if ($Squirrel) { @('--config.win.target=squirrel', '--config.squirrelWindows.iconUrl=https://raw.githubusercontent.com/openswarm-ai/openswarm/main/electron/build/icon.ico') } else { @() }
 
 $ScriptDir   = Split-Path -Parent $PSCommandPath
 $ProjectRoot = Split-Path -Parent $ScriptDir
@@ -71,8 +83,13 @@ New-Item -ItemType Directory -Force -Path $UvBinDir | Out-Null
 $NeedUv = -not (Test-Path (Join-Path $UvBinDir 'uv.exe')) -or `
           -not (Test-Path (Join-Path $UvBinDir 'uvx.exe'))
 if ($NeedUv) {
-    Write-Host "[0] Downloading uv + uvx for Windows..."
-    $UvUrl = 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip'
+    # Pinned uv version. "latest" used to mean a fresh uv could appear in any
+    # build with zero warning, breaking reproducibility (pillar 3). Override
+    # with $env:UV_VERSION when deliberately bumping; keep mac (build-app.sh)
+    # in lockstep. 0.11.16 is what "latest" resolved to when this was pinned.
+    $UvVersion = if ($env:UV_VERSION) { $env:UV_VERSION } else { '0.11.16' }
+    Write-Host "[0] Downloading uv + uvx $UvVersion for Windows..."
+    $UvUrl = "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-x86_64-pc-windows-msvc.zip"
     $TmpZip = Join-Path $env:TEMP "uv-win-$([guid]::NewGuid()).zip"
     $TmpExtract = Join-Path $env:TEMP "uv-win-extract-$([guid]::NewGuid())"
     try {
@@ -235,8 +252,11 @@ Write-Host ""
 Write-Host "[1/5] Building frontend..."
 Push-Location (Join-Path $ProjectRoot 'frontend')
 try {
-    & npm install
-    if ($LASTEXITCODE -ne 0) { throw "npm install (frontend) failed" }
+    # npm ci (not install): installs exactly what package-lock.json pins, never
+    # silently mutates the lock, fails loudly on drift. Reproducible builds
+    # (pillar 3) depend on the lock being boss.
+    & npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci (frontend) failed" }
     & npm run build
     if ($LASTEXITCODE -ne 0) { throw "frontend build failed" }
 } finally { Pop-Location }
@@ -329,6 +349,20 @@ function Copy-Excluded($Source, $Dest, $Exclude) {
 Copy-Excluded `
     (Join-Path $ProjectRoot 'backend') (Join-Path $Staging 'backend') `
     @{ Dirs = @('__pycache__','.venv','data','uv-bin','tests'); Files = @('*.pyc','.env','.env.*') }
+# The '.env.*' exclude above is recursive, so it also strips the vendored
+# webapp_template/.env.example that seed_workspace copies into each new app's
+# .env (BACKEND_PORT=NONE). The mac build anchors its exclude to avoid this;
+# here we restore the one file. Without it, Windows-built apps seed with no
+# .env, run.sh takes the backend branch, and the app dies on a missing backend.
+# (seed_workspace also now writes a default .env when this is absent, but
+# shipping it keeps the template snapshot complete and matches mac.)
+$EnvExampleSrc = Join-Path $ProjectRoot 'backend\apps\outputs\webapp_template\.env.example'
+$EnvExampleDst = Join-Path $Staging 'backend\apps\outputs\webapp_template\.env.example'
+if (Test-Path $EnvExampleSrc) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $EnvExampleDst -Parent) | Out-Null
+    Copy-Item -Force $EnvExampleSrc $EnvExampleDst
+    Write-Host "Restored webapp_template/.env.example (stripped by the .env.* exclude)"
+}
 # data: backend/config/paths.py points DATA_ROOT at %APPDATA%/OpenSwarm/data in
 # packaged mode and no code seeds from the bundle, so the entire shipped
 # backend/data/ tree was dead weight (and was leaking the dev machine's
@@ -337,27 +371,18 @@ Copy-Excluded `
 # so extraResources can substitute ${arch} (matches the mac build).
 
 # Production .env: OAuth helper base URL + Google credentials. See
-# scripts/build-app.sh for the rationale; v1.0.29 cloud-proxied the OAuth flow,
-# but the bundled google_workspace_mcp still needs CLIENT_SECRET at startup.
-# v1.0.30 plans to fork or replace that MCP and drop the secret here.
+# Google client_id/secret are no longer shipped: nothing reads them at runtime,
+# so we don't bake a secret into the .env.
 $ShipOauthBaseUrl = if ($env:OPENSWARM_OAUTH_BASE_URL_OVERRIDE) {
     $env:OPENSWARM_OAUTH_BASE_URL_OVERRIDE
 } else {
     'https://api.openswarm.com'
 }
-$GoogleClientIdShip     = $env:GOOGLE_OAUTH_CLIENT_ID
-$GoogleClientSecretShip = $env:GOOGLE_OAUTH_CLIENT_SECRET
-if (-not $GoogleClientIdShip -or -not $GoogleClientSecretShip) {
-    Write-Host "ERROR: GOOGLE_OAUTH_CLIENT_ID/SECRET missing in backend\.env -- required for Google MCP." -ForegroundColor Red
-    exit 1
-}
 $ShipEnvPath = Join-Path $Staging 'backend\.env'
 New-Item -ItemType Directory -Force -Path (Split-Path $ShipEnvPath -Parent) | Out-Null
 @(
-    "# OAuth helper base URL + Google OAuth credentials.",
-    "OPENSWARM_OAUTH_BASE_URL=$ShipOauthBaseUrl",
-    "GOOGLE_OAUTH_CLIENT_ID=$GoogleClientIdShip",
-    "GOOGLE_OAUTH_CLIENT_SECRET=$GoogleClientSecretShip"
+    "# OAuth helper base URL.",
+    "OPENSWARM_OAUTH_BASE_URL=$ShipOauthBaseUrl"
 ) | Set-Content -Path $ShipEnvPath
 Write-Host "Staged production .env"
 
@@ -382,18 +407,44 @@ Write-Host "  Safe to modify your codebase now.     " -BackgroundColor Green -Fo
 Write-Host "========================================" -BackgroundColor Green -ForegroundColor White
 Write-Host ""
 
+# --- Provenance stamp ---
+# Record the exact commit this artifact was built from. electron\build-info.json
+# ships inside the asar; main.js reads it for the startup [provenance] log line
+# and the About panel. Gitignored + regenerated each build.
+$BuildSha = (git -C $ProjectRoot rev-parse HEAD 2>$null)
+if (-not $BuildSha) { $BuildSha = 'unknown' }
+$BuildVersion = (Get-Content -Raw (Join-Path $ProjectRoot 'electron\package.json') | ConvertFrom-Json).version
+$BuildChannel = if ($BuildVersion -match '-') { 'experimental' } else { 'stable' }
+$BuildShortSha = if ($BuildSha.Length -ge 12) { $BuildSha.Substring(0, 12) } else { $BuildSha }
+$BuildInfo = [ordered]@{
+    sha      = $BuildSha
+    shortSha = $BuildShortSha
+    builtAt  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    channel  = $BuildChannel
+    version  = $BuildVersion
+}
+$BuildInfo | ConvertTo-Json -Compress | Set-Content -Path (Join-Path $ProjectRoot 'electron\build-info.json') -Encoding utf8
+Write-Host "Stamped build-info.json: sha=$BuildShortSha channel=$BuildChannel"
+
 # --- Step 5: Package with electron-builder ---
 Write-Host "[5/5] Packaging with electron-builder..."
 Push-Location (Join-Path $ProjectRoot 'electron')
 try {
-    & npm install
-    if ($LASTEXITCODE -ne 0) { throw "npm install (electron) failed" }
+    # npm ci: lockfile-exact, no drift. See frontend note above.
+    & npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci (electron) failed" }
 
     if (-not $Sign) {
         $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
     }
 
-    if ($Publish) {
+    if ($DirOnly) {
+        # Unpacked-only build for the fast CI gate. afterPack (router node_modules)
+        # and locale-pak filtering still run during the pack phase, so the produced
+        # win-unpacked\OpenSwarm.exe is fully functional; only the NSIS installer +
+        # update feed are skipped (verify-update-feed skips cleanly when absent).
+        & npx electron-builder --win --x64 --dir $TargetOverride --publish never
+    } elseif ($Publish) {
         # Safety check: warn if the matching Mac release isn't on GitHub yet.
         # Mac and Windows publishes don't conflict (different asset names,
         # different latest*.yml manifests), but a Windows-only release means
@@ -417,12 +468,17 @@ try {
             Write-Host "  -> Continuing in 8s. Press Ctrl+C to abort." -ForegroundColor Yellow
             Start-Sleep -Seconds 8
         }
-        & npx electron-builder --win --x64 --publish always
+        & npx electron-builder --win --x64 $TargetOverride --publish always
     } else {
-        & npx electron-builder --win --x64 --publish never
+        & npx electron-builder --win --x64 $TargetOverride --publish never
     }
     if ($LASTEXITCODE -ne 0) { throw "electron-builder failed" }
 } finally { Pop-Location }
+
+# NOTE: the bundled 9Router's node_modules (which electron-builder 26 drops from
+# extraResources) is restored by the build/after-pack.js afterPack hook, which
+# runs inside electron-builder BEFORE code-signing so the copied files are sealed
+# by the signature. See that file for the why.
 
 Remove-Item -Recurse -Force $Staging -ErrorAction SilentlyContinue
 

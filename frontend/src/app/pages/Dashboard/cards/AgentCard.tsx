@@ -34,10 +34,7 @@ import { useDashboardActive } from '@/shared/hooks/useDashboardActive';
 import { useOverlayScrollPassthrough } from '../hooks/interaction/useOverlayScrollPassthrough';
 import { useStreamingMessage } from '@/shared/state/streamingSlice';
 import { isCanvasInteractionActive, onCanvasInteractionEnd } from '@/shared/canvasInteractionState';
-
-// ---------------------------------------------------------------------------
-// Helper components & functions (unchanged)
-// ---------------------------------------------------------------------------
+import { getAgentWorkTime, fmtSeconds } from '@/shared/agentWorkTime';
 
 const GoogleServiceIcon: React.FC<{ service: string; size?: number }> = ({ service, size = 16 }) => {
   if (service === 'gmail') {
@@ -74,18 +71,7 @@ const GoogleServiceIcon: React.FC<{ service: string; size?: number }> = ({ servi
   return null;
 };
 
-function fmtSeconds(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
-// Self-ticking elapsed-time renderer. Owns its own 1Hz interval so only
-// this leaf re-renders per second while a session is active; the rest
-// of AgentCard stays put. Memoized on `status` + `messages` so it
-// doesn't re-tick after the session goes terminal.
+/** Self-ticking elapsed-time leaf; owns its 1Hz interval so AgentCard doesn't re-render every second. */
 const ElapsedTimer: React.FC<{
   messages: Array<{ role: string; timestamp: string; elapsed_ms?: number; hidden?: boolean }>;
   status: string;
@@ -98,80 +84,6 @@ const ElapsedTimer: React.FC<{
   }, [status]);
   return <>{fmtSeconds(getAgentWorkTime(messages, status).last)}</>;
 });
-
-function getAgentWorkTime(
-  messages: Array<{ role: string; timestamp: string; elapsed_ms?: number; hidden?: boolean }>,
-  status: string,
-): { total: number; last: number } {
-  // True wall-clock duration: how long the user actually waited, from
-  // their prompt to the LAST assistant/system message of that turn.
-  // Covers thinking + every tool call + assistant text generation +
-  // any subagent/MCP work , anything that consumed user attention.
-  //
-  // This is intentionally NOT the sum of `thinking.elapsed_ms` (which
-  // would cover only reasoning time and miss tool execution). The
-  // thinking pill in the chat already exposes reasoning-only as a
-  // distinct signal; the header timer's job is to answer "how long
-  // did this take?" which is a different question.
-  //
-  // For each user message we find the LAST adjacent assistant/system
-  // message before the next user message , that's the turn boundary.
-  // If the turn is still in flight (last user message has no assistant
-  // reply yet AND session is running/waiting), extrapolate to now so
-  // the timer ticks live.
-  //
-  // Hidden messages (auto-continuation prompts from MCPActivate, etc.)
-  // are skipped , they're system-internal turns the user didn't see
-  // and shouldn't be billed for.
-  const visible = messages.filter((m) => !m.hidden);
-  let totalMs = 0;
-  let lastMs = 0;
-  for (let i = 0; i < visible.length; i++) {
-    const msg = visible[i];
-    if (msg.role !== 'user') continue;
-
-    // Find the bounds of this turn: from this user message to just
-    // before the next user message (or end of array).
-    let nextUserIdx = visible.length;
-    for (let k = i + 1; k < visible.length; k++) {
-      if (visible[k].role === 'user') {
-        nextUserIdx = k;
-        break;
-      }
-    }
-
-    // Last assistant/system message before the next user message =
-    // turn end. Walk backwards from nextUserIdx to find it.
-    let turnEndMs: number | null = null;
-    for (let k = nextUserIdx - 1; k > i; k--) {
-      const r = visible[k].role;
-      if (r === 'assistant' || r === 'system') {
-        turnEndMs = new Date(visible[k].timestamp).getTime();
-        break;
-      }
-    }
-
-    if (turnEndMs == null) {
-      // No assistant reply yet for this turn. If the session is
-      // actively working, extrapolate to now so the header ticks.
-      // Otherwise (terminal session, no reply): contribute 0.
-      if (status === 'running' || status === 'waiting_approval') {
-        turnEndMs = Date.now();
-      } else {
-        continue;
-      }
-    }
-
-    const dur = Math.max(0, turnEndMs - new Date(msg.timestamp).getTime());
-    totalMs += dur;
-    lastMs = dur;
-  }
-
-  return {
-    total: Math.max(0, Math.round(totalMs / 1000)),
-    last: Math.max(0, Math.round(lastMs / 1000)),
-  };
-}
 
 function summarizeToolInput(toolName: string, toolInput: Record<string, any>): string {
   const mcp = parseMcpToolName(toolName);
@@ -221,10 +133,6 @@ function getToolDisplayName(toolName: string): string {
   return toolName;
 }
 
-// ---------------------------------------------------------------------------
-// Resize handle definitions
-// ---------------------------------------------------------------------------
-
 type ResizeDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 const EDGE_THICKNESS = 6;
@@ -251,10 +159,6 @@ const HANDLE_DEFS: { dir: ResizeDir; sx: Record<string, any> }[] = [
   { dir: 'sw', sx: { bottom: -EDGE_THICKNESS / 2, left: -EDGE_THICKNESS / 2, width: CORNER_SIZE, height: CORNER_SIZE } },
   { dir: 'se', sx: { bottom: -EDGE_THICKNESS / 2, right: -EDGE_THICKNESS / 2, width: CORNER_SIZE, height: CORNER_SIZE } },
 ];
-
-// ---------------------------------------------------------------------------
-// AgentCard
-// ---------------------------------------------------------------------------
 
 interface OuterProps {
   sessionId: string;
@@ -316,7 +220,8 @@ const AgentCard: React.FC<Props> = ({
   const isDashboardActive = useDashboardActive();
   const hasApiKey = !!useAppSelector((s) => s.settings.data.anthropic_api_key);
   const modelsByProvider = useAppSelector((s) => s.models.byProvider);
-  // Stored value → curated picker label, with a tidy fallback for unknowns.
+  const expandedSessionIds = useAppSelector((s) => s.agents.expandedSessionIds);
+  // Curated picker label with a tidy fallback for unknowns.
   const friendlyModelLabel = useMemo(() => {
     const value = session.model;
     if (!value) return '';
@@ -333,27 +238,19 @@ const AgentCard: React.FC<Props> = ({
   const scrollOverlayRef = useOverlayScrollPassthrough(isSelected);
 
   const cardBoxRef = useRef<HTMLDivElement>(null);
-  // Capture isDashboardActive in a ref so the ResizeObserver callback always
-  // sees the latest value without forcing the observer to re-attach when the
-  // active state flips.
+  // Ref so ResizeObserver sees latest value without re-attaching when active flips.
   const isDashboardActiveRef = useRef(isDashboardActive);
   useEffect(() => { isDashboardActiveRef.current = isDashboardActive; }, [isDashboardActive]);
   useEffect(() => {
     const el = cardBoxRef.current;
     if (!el || !onMeasuredHeight) return;
-    // Remember the most recent height seen during a suppressed window
-    // (pan/drag/zoom in progress). When the interaction ends, fire it
-    // through so the layout reconciles to the truth right then.
+    // Stash height during pan/drag/zoom; flush on gesture end so layout reconciles.
     let suppressedHeight: number | null = null;
     const ro = new ResizeObserver((entries) => {
       // Short-circuit when dashboard is hidden , observer stays attached so
       // the next resize after returning to the dashboard fires correctly.
       if (!isDashboardActiveRef.current) return;
-      // Short-circuit during active canvas interaction (pan/drag/wheel).
-      // During those gestures we don't care about millimeter-precise card
-      // heights; re-measuring on every streamed character was forcing
-      // Dashboard re-renders mid-pan via setMeasuredHeightsTick. Stash
-      // the latest height instead and flush on gesture end.
+      // Re-measuring per streamed character mid-pan was forcing Dashboard re-renders via setMeasuredHeightsTick.
       if (isCanvasInteractionActive()) {
         for (const entry of entries) suppressedHeight = entry.contentRect.height;
         return;
@@ -372,7 +269,6 @@ const AgentCard: React.FC<Props> = ({
     return () => { ro.disconnect(); unsub(); };
   }, [session.id, onMeasuredHeight]);
 
-  // ---- Glow state (for branched cards) ----
   const glowEntry = useAppSelector((s) => s.dashboardLayout.glowingAgentCards[session.id]);
   const isGlowingRedux = !!glowEntry;
   const glowFading = glowEntry?.fading ?? false;
@@ -404,7 +300,6 @@ const AgentCard: React.FC<Props> = ({
 
   const isDraft = session.status === 'draft';
 
-  // ---- Drag via header (pointer events) ----
   const DRAG_THRESHOLD = 3;
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number; startPanX: number; startPanY: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -426,7 +321,6 @@ const AgentCard: React.FC<Props> = ({
     onDragStart?.(session.id, 'agent');
   }, [cardX, cardY, onDragStart, session.id, getCanvasState]);
 
-  // Recompute localDragPos from latest pointer + pan (shared by move handler and pan-change event)
   const recomputeDragPos = useCallback(() => {
     const ds = dragState.current;
     if (!ds || !didDrag.current) return;
@@ -443,9 +337,7 @@ const AgentCard: React.FC<Props> = ({
     onDragMove?.(dx, dy, clientX, clientY);
   }, [onDragMove, getCanvasState]);
 
-  // When pan changes during an active drag (edge-pan or wheel-zoom-while-
-  // dragging), Dashboard dispatches `openswarm:canvas-pan-changed`. Only
-  // active during a drag so non-dragging cards stay subscribed-to-nothing.
+  // Dashboard dispatches openswarm:canvas-pan-changed during edge-pan/wheel-zoom; only subscribed while dragging.
   useEffect(() => {
     if (!isDragging) return;
     const onPanChange = () => {
@@ -482,7 +374,7 @@ const AgentCard: React.FC<Props> = ({
         dispatch(setCardSize({ sessionId: session.id, width: snapColumn.width, height: cardHeight }));
       }
 
-      // Snap to 24px grid (hold Shift to bypass)
+      // Snap to 24px grid (Shift bypasses).
       if (!e.shiftKey) {
         finalX = Math.round(finalX / 24) * 24;
         finalY = Math.round(finalY / 24) * 24;
@@ -500,7 +392,6 @@ const AgentCard: React.FC<Props> = ({
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
   }, [dispatch, session.id, onDragEnd, snapColumn, cardHeight, getCanvasState]);
 
-  // ---- Unified edge / corner resize ----
   const resizeRef = useRef<{
     dir: ResizeDir;
     startX: number;
@@ -594,14 +485,10 @@ const AgentCard: React.FC<Props> = ({
   };
 
 
-  // Elapsed-time display owns its own 1Hz tick via <ElapsedTimer/> below;
-  // we don't force-re-render the whole 1000+ line AgentCard every second
-  // anymore (each card running × 1Hz = wasted reconciliation budget).
+  // ElapsedTimer owns its own 1Hz tick so AgentCard doesn't re-render every second.
 
   const lastMessage = session.messages[session.messages.length - 1];
-  // Subscribe to this card's own streaming entry from the streaming
-  // slice. Per-character mutations no longer churn the sessions dict,
-  // so other cards stay stable while this one streams.
+  // Subscribe to this card's own streaming entry so per-character mutations don't churn other cards.
   const streamingMessage = useStreamingMessage(session.id);
   const isStreaming = !!streamingMessage;
   const previewContent = isStreaming
@@ -665,14 +552,7 @@ const AgentCard: React.FC<Props> = ({
       data-select-type="agent-card"
       data-select-id={session.id}
       data-select-meta={JSON.stringify({ name: session.name || session.id, status: session.status, model: session.model, mode: session.mode })}
-      // Onboarding tiebreaker: when the user has multiple agent cards open
-      // (e.g. step 5 leaves the YouTube-summary agent on canvas while
-      // step 6 spawns a new orchestrator), per-agent selectors like
-      // chat-input need a way to identify the NEWEST card. Object.values
-      // iteration order in Dashboard.tsx is keyed by session.id and not
-      // monotonic by creation time, so DOM order can't be trusted.
-      // ISO date parses cleanly to ms; missing values fall through to the
-      // last-DOM-node fallback in resolveSelector.
+      // Onboarding tiebreaker: ISO-date sorts the newest card for per-agent selectors; DOM order isn't creation order.
       data-onboarding-spawn-ms={
         session.created_at
           ? new Date(session.created_at).getTime() || undefined
@@ -693,15 +573,7 @@ const AgentCard: React.FC<Props> = ({
         // boxShadows legitimately extend past the card border , `paint`
         // containment would clip those visuals.
         contain: 'layout style',
-        // Promote each card to its own compositor layer so paint
-        // invalidations (hover effects, streaming content updates,
-        // highlight pulses) stay contained to that one card's layer
-        // instead of forcing the canvas's GPU-promoted root layer to
-        // re-paint. The performance trace showed pointer hover events
-        // costing 100-200ms of pure presentation time before this,
-        // because every hover-cross re-painted the entire canvas
-        // composite. Costs ~card_area*4 bytes of GPU memory per card;
-        // trivial on modern hardware for the dashboard's card counts.
+        // Each card gets its own compositor layer; hover-cross used to cost 100-200ms PRESENTATION by re-painting the whole canvas.
         willChange: 'transform',
         width: localResize ? activeW : Math.max(cardWidth, MIN_W),
         height: localResize ? activeH : (expanded ? Math.max(EXPANDED_OVERLAY_H, cardHeight) : 'auto'),
@@ -796,18 +668,13 @@ const AgentCard: React.FC<Props> = ({
           },
         }),
         ...(!isHighlighted && !(isGlowingRedux && !glowFading) && !expanded && !isDragging && !isSelected && {
-          // Hover: borderColor only. Was previously also bumping boxShadow
-          // from .sm to .md, but the trace data showed pointer hover events
-          // costing 120-207ms PRESENTATION because every shadow change
-          // forced a full GPU re-blur of every card on the transformed
-          // canvas layer. Border color is layout-free and ~free to paint.
+          // Hover changes borderColor only; boxShadow changes used to cost 120-207ms PRESENTATION via GPU re-blur.
           '&:hover': {
             borderColor: hasPending ? c.status.warning : c.border.strong,
           },
         }),
       }}
     >
-      {/* Glow overlays for branched cards */}
       {isGlowingRedux && (
         <Box
           className="agent-card-glow-overlays"
@@ -821,7 +688,6 @@ const AgentCard: React.FC<Props> = ({
             transition: `opacity ${GLOW_FADE_MS}ms ease-out`,
           }}
         >
-          {/* Rotating conic gradient border */}
           <Box
             sx={{
               position: 'absolute',
@@ -845,7 +711,6 @@ const AgentCard: React.FC<Props> = ({
               },
             }}
           />
-          {/* Top edge shimmer */}
           <Box
             sx={{
               position: 'absolute',
@@ -862,7 +727,6 @@ const AgentCard: React.FC<Props> = ({
               },
             }}
           />
-          {/* Inner shadow overlay */}
           <Box
             sx={{
               position: 'absolute',
@@ -883,7 +747,6 @@ const AgentCard: React.FC<Props> = ({
         </Box>
       )}
 
-      {/* Resize handles: 4 edges + 4 corners */}
       {HANDLE_DEFS.map(({ dir, sx }) => (
         <Box
           key={dir}
@@ -1009,7 +872,6 @@ const AgentCard: React.FC<Props> = ({
           </Box>
         </Box>
 
-        {/* Metadata row */}
         <Box sx={{
           display: isDraft && !expanded ? 'none' : 'flex',
           gap: 1.5,
@@ -1033,7 +895,6 @@ const AgentCard: React.FC<Props> = ({
         </Box>
       </Box>
 
-      {/* Expanded: inline chat fills remaining space */}
       {expanded && (
         <Box
           onClick={(e) => e.stopPropagation()}
@@ -1061,7 +922,6 @@ const AgentCard: React.FC<Props> = ({
         </Box>
       )}
 
-      {/* Collapsed: preview + approval */}
       {!expanded && (
         <>
           {previewContent && (
@@ -1250,10 +1110,7 @@ const AgentCard: React.FC<Props> = ({
 
 const MemoAgentCard = React.memo(AgentCard);
 
-// Self-subscribing outer: this is what Dashboard renders. Each card reads
-// only its own session + card position from Redux, so a streamDelta to
-// session A no longer disturbs B's props. Dashboard's iteration just hands
-// down sessionId + cross-card UI state (selection, drag, glow).
+/** Self-subscribing wrapper; each card reads only its own session+position so streaming to A doesn't disturb B. */
 const AgentCardOuter: React.FC<OuterProps> = (props) => {
   const session = useAppSelector((s) => s.agents.sessions[props.sessionId]);
   const cardEntry = useAppSelector((s) => s.dashboardLayout.cards[props.sessionId]);

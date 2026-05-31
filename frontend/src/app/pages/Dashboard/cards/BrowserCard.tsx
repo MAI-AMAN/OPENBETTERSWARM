@@ -73,7 +73,8 @@ const HANDLE_DEFS: { dir: ResizeDir; sx: Record<string, any> }[] = [
   { dir: 'se', sx: { bottom: -EDGE_THICKNESS / 2, right: -EDGE_THICKNESS / 2, width: CORNER_SIZE, height: CORNER_SIZE } },
 ];
 
-const isElectron = navigator.userAgent.includes('Electron');
+// On Windows, force iframe fallback path: the <webview> tag mount segfaults the renderer during commit on Chromium 144 + this Electron 40 CastLabs build. iframe renders blank for sites with X-Frame-Options but does not crash. Mac keeps webview (full browser).
+const isElectron = navigator.userAgent.includes('Electron') && !navigator.userAgent.includes('Windows');
 
 const chromeUserAgent = navigator.userAgent
   .replace(/\s*Electron\/\S+/, '')
@@ -1114,29 +1115,15 @@ const BrowserCard: React.FC<Props> = ({
           <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
             <iframe
               src={activeUrl}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              // No sandbox: a restrictive sandbox blocks some sites from rendering, and our renderer is already isolated by Electron's contextIsolation + sub_frame XFO/CSP frame-ancestors strip in main.js. onLoad/onError add definitive instrumentation so we can tell whether the iframe loaded successfully (with empty body from anti-iframe JS) or genuinely failed (network error, CSP block, etc.).
               style={{ width: '100%', height: '100%', border: 'none' }}
               title="Browser"
-            />
-            <Box
-              sx={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                bgcolor: `${c.status.warningBg}`,
-                borderTop: `1px solid ${c.status.warning}`,
-                px: 1.5,
-                py: 0.5,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
+              referrerPolicy="no-referrer-when-downgrade"
+              onError={(e) => {
+                // eslint-disable-next-line no-console
+                console.error('[diag][iframe:onError]', activeUrl, (e as any)?.message || e);
               }}
-            >
-              <Typography sx={{ fontSize: '0.68rem', color: c.status.warning }}>
-                iframe mode: some sites may not load. Use the Electron build for full browser support.
-              </Typography>
-            </Box>
+            />
           </Box>
         )}
 

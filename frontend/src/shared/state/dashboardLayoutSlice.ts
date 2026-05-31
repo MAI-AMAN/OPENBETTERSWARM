@@ -2,12 +2,7 @@ import { createSlice, createAsyncThunk, PayloadAction, createAction } from '@red
 import { launchAndSendFirstMessage } from './agentsSlice';
 import { API_BASE } from '@/shared/config';
 
-// Cross-slice listener: when agentsSlice's fetchSession thunk rejects
-// with a 404/410, the session is gone server-side. We strip the card
-// from layout here so AgentChat doesn't keep re-mounting + re-fetching
-// the same dead id in a loop (the visible "404 spam" in dev logs).
-// Matching the rejected-thunk action type literally avoids a circular
-// import on the thunk's reject metadata.
+// fetchSession 404/410 strips the layout card to stop AgentChat remount-loop. Matched by string to avoid circular import.
 const fetchSessionRejectedAction = createAction<
   { sessionId?: string; status?: number } | undefined
 >('agents/fetchSession/rejected');
@@ -62,9 +57,7 @@ export interface BrowserCardPosition {
   width: number;
   height: number;
   zOrder: number;
-  // Agent session id that spawned this browser. null/undefined for
-  // user-created. Used to auto-remove the browser when its owner agent
-  // reaches a terminal completed/error state.
+  /** Agent session that spawned this browser; auto-removed when its owner reaches terminal state. */
   spawned_by?: string | null;
 }
 
@@ -96,10 +89,7 @@ export interface DashboardLayoutState {
   nextZOrder: number;
   loading: boolean;
   initialized: boolean;
-  // Transient signal: when a new browser card is created via addBrowserCard
-  // (link click, "+ Browser" button, pending URL flow), the reducer sets this
-  // to the new card's id. Dashboard.tsx watches it and pans/zooms the canvas
-  // to center on the new card, then dispatches clearPendingFocusBrowserId.
+  /** Transient: new browser card id; Dashboard pans/zooms to it then clears via clearPendingFocusBrowserId. */
   pendingFocusBrowserId: string | null;
   pendingFocusNoteId: string | null;
 }
@@ -264,7 +254,7 @@ export function findOpenSpotNear(
 ): { x: number; y: number } {
   const cellW = DEFAULT_CARD_W + GRID_GAP;
   const cellH = DEFAULT_CARD_H + GRID_GAP;
-  // Snap the anchor to the nearest grid cell so all cards align cleanly.
+  // Snap the anchor to the nearest grid cell so cards align.
   const baseCol = Math.round((anchorX - GRID_ORIGIN.x) / cellW);
   const baseRow = Math.round((anchorY - GRID_ORIGIN.y) / cellH);
 
@@ -275,7 +265,6 @@ export function findOpenSpotNear(
     return !occupiedRects.some((r) => rectsOverlap(candidate, r));
   };
 
-  // Try the anchor itself first.
   if (cellFree(baseCol, baseRow)) {
     return {
       x: GRID_ORIGIN.x + baseCol * cellW,
@@ -283,18 +272,14 @@ export function findOpenSpotNear(
     };
   }
 
-  // Spiral search: expand rings around the anchor. Each ring r covers
-  // the perimeter of a (2r+1)×(2r+1) square. First free cell wins,
-  // preferring right/down (read order) within each ring for stability.
+  // Spiral by ring perimeter; right/down preference for stability.
   const MAX_RING = 32;
   for (let r = 1; r <= MAX_RING; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
-        // Only perimeter of this ring (interior was scanned in r-1).
         if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
         const col = baseCol + dx;
         const row = baseRow + dy;
-        // Don't place above the grid origin.
         if (col < 0 || row < 0) continue;
         if (cellFree(col, row)) {
           return {
@@ -376,6 +361,25 @@ const dashboardLayoutSlice = createSlice({
       action: PayloadAction<{ id: string; type: 'agent' | 'view' | 'browser' | 'note' }>,
     ) {
       const { id, type } = action.payload;
+      // Compute the current top zOrder across ALL card types so we can
+      // short-circuit when the target is already on top. Without this
+      // guard, every click on a card (which fires onPointerDownCapture +
+      // onClick + onDoubleClick) bumps zOrder and triggers a Redux
+      // mutation. That mutation cascades into a re-render that unmounts
+      // inputs mid-keystroke.
+      let maxZ = 0;
+      let currentZ = 0;
+      const tally = (z: number | undefined) => { if (typeof z === 'number' && z > maxZ) maxZ = z; };
+      for (const c of Object.values(state.cards)) tally(c.zOrder);
+      for (const c of Object.values(state.viewCards)) tally(c.zOrder);
+      for (const c of Object.values(state.browserCards)) tally(c.zOrder);
+      for (const n of Object.values(state.notes)) tally(n.zOrder);
+      if (type === 'agent') currentZ = state.cards[id]?.zOrder ?? 0;
+      else if (type === 'view') currentZ = state.viewCards[id]?.zOrder ?? 0;
+      else if (type === 'note') currentZ = state.notes[id]?.zOrder ?? 0;
+      else currentZ = state.browserCards[id]?.zOrder ?? 0;
+      if (currentZ >= maxZ) return;  // Already on top: no-op.
+
       const z = state.nextZOrder++;
       if (type === 'agent') {
         const card = state.cards[id];
@@ -546,7 +550,6 @@ const dashboardLayoutSlice = createSlice({
         height: DEFAULT_BROWSER_CARD_H,
         zOrder: state.nextZOrder++,
       };
-      // Signal Dashboard.tsx to pan/zoom and highlight this new card.
       state.pendingFocusBrowserId = id;
     },
 
@@ -928,7 +931,6 @@ const dashboardLayoutSlice = createSlice({
         state.notes = action.payload.notes || {};
         state.persistedExpandedSessionIds = action.payload.expandedSessionIds;
 
-        // Ensure all cards have a zOrder and compute nextZOrder from persisted data
         let maxZ = 0;
         for (const c of Object.values(state.cards)) {
           if (!c.zOrder) c.zOrder = 0;
@@ -953,11 +955,7 @@ const dashboardLayoutSlice = createSlice({
         state.initialized = true;
       })
       .addCase(fetchSessionRejectedAction, (state, action) => {
-        // 404/410 means the session is permanently gone from the
-        // backend; remove its card so AgentChat doesn't keep remounting
-        // and re-fetching it in a loop. Same id, same dead path. Other
-        // failure modes (network blip, 500) leave the card in place
-        // because the next fetch may succeed.
+        // 404/410 means permanent; strip the card. Other failure modes leave it (next fetch may succeed).
         const payload = action.payload;
         if (!payload?.sessionId) return;
         if (payload.status !== 404 && payload.status !== 410) return;

@@ -21,23 +21,55 @@ fi
 
 BACKEND_DIR_ABSPATH="$(dirname "$RUN_BACKEND_ABSPATH")"
 
+# Windows (Git Bash / MSYS) reports OSTYPE=msys|cygwin|win32; venv layout
+# is Scripts\ + python.exe, and the bare interpreter is `python` not
+# `python3`. Branch once here so every later path is correct.
+IS_WIN=0
+case "$OSTYPE" in
+    msys*|cygwin*|win32*) IS_WIN=1 ;;
+esac
+
 # --- Find a working Python 3 ---
+# Prefer an explicit path the host passed us (OPENSWARM_PYTHON, set by the
+# packaged Electron shell to the bundled standalone Python so a fresh
+# Windows machine with no system Python still works). Fall back to PATH
+# probing for dev. `python` is first on Windows since python3.x aliases
+# usually don't exist there.
 PYTHON=""
-for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
-    if command -v "$candidate" &>/dev/null && "$candidate" -c "print('ok')" &>/dev/null; then
-        PYTHON="$candidate"
-        break
+if [[ -n "${OPENSWARM_PYTHON:-}" ]] && "${OPENSWARM_PYTHON}" -c "import sys; sys.exit(0 if sys.version_info[0]==3 else 1)" &>/dev/null; then
+    PYTHON="${OPENSWARM_PYTHON}"
+else
+    if [[ "$IS_WIN" == "1" ]]; then
+        CANDIDATES="python python3 python3.13 python3.12 python3.11 python3.10"
+    else
+        CANDIDATES="python3.13 python3.12 python3.11 python3.10 python3 python"
     fi
-done
+    for candidate in $CANDIDATES; do
+        if command -v "$candidate" &>/dev/null && "$candidate" -c "import sys; sys.exit(0 if sys.version_info[0]==3 else 1)" &>/dev/null; then
+            PYTHON="$candidate"
+            break
+        fi
+    done
+fi
 if [[ -z "$PYTHON" ]]; then
     echo "Error: No working Python 3 found."
     exit 1
 fi
-echo "Using Python: $PYTHON ($($PYTHON --version 2>&1))"
+echo "Using Python: $PYTHON ($("$PYTHON" --version 2>&1))"
 
 # --- Create virtual environment if it doesn't exist ---
 VENV_DIR="$BACKEND_DIR_ABSPATH/.venv"
 SENTINEL="$VENV_DIR/.openswarm_installed"
+
+# Resolve the venv interpreter by OS layout instead of `source activate`,
+# whose path (bin/ vs Scripts/) and shell semantics differ across
+# platforms. Calling the venv python directly is portable and avoids the
+# activate-script fork entirely.
+if [[ "$IS_WIN" == "1" ]]; then
+    VENV_PY="$VENV_DIR/Scripts/python.exe"
+else
+    VENV_PY="$VENV_DIR/bin/python"
+fi
 
 # Fast path on every restart: if .venv exists AND we've already
 # installed the workspace's deps once, skip the entire venv-create +
@@ -47,7 +79,6 @@ SENTINEL="$VENV_DIR/.openswarm_installed"
 # and retries.
 if [[ -d "$VENV_DIR" && -f "$SENTINEL" ]]; then
     echo "Dependencies already installed — skipping venv create + pip install."
-    source "$VENV_DIR/bin/activate"
 else
     if [[ ! -d "$VENV_DIR" ]]; then
         echo "Creating virtual environment..."
@@ -57,16 +88,15 @@ else
             exit 1
         fi
     fi
-    source "$VENV_DIR/bin/activate"
 
     # --- Install Python dependencies ---
     echo "Installing dependencies..."
     cd "$BACKEND_DIR_ABSPATH"
     if [[ -n "${OPENSWARM_DEBUGGER_PATH:-}" && -d "$OPENSWARM_DEBUGGER_PATH" ]]; then
         echo "Installing OpenSwarm debugger (swarm_debug) from $OPENSWARM_DEBUGGER_PATH"
-        pip install -e "$OPENSWARM_DEBUGGER_PATH"
+        "$VENV_PY" -m pip install -e "$OPENSWARM_DEBUGGER_PATH"
     fi
-    pip install -e .
+    "$VENV_PY" -m pip install -e .
     if [[ $? -ne 0 ]]; then
         echo "Error: Failed to install Python dependencies."
         exit 1
@@ -84,4 +114,4 @@ fi
 # clean SIGTERM and restarts via this same script.
 echo "Starting backend server on http://0.0.0.0:${BACKEND_PORT:-8324} ..."
 cd "$BACKEND_DIR_ABSPATH/.."
-python -m uvicorn backend.main:app --host 0.0.0.0 --port "${BACKEND_PORT:-8324}"
+"$VENV_PY" -m uvicorn backend.main:app --host 0.0.0.0 --port "${BACKEND_PORT:-8324}"

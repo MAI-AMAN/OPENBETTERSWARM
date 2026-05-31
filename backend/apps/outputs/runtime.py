@@ -3,10 +3,27 @@
 import asyncio
 import logging
 import os
+import shutil
 import sys
 from collections import deque, OrderedDict
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+
+def _resolve_bash() -> str:
+    # Windows: Python's subprocess uses Windows-style PATH resolution and doesn't follow Git Bash's Unix-style entries like /mingw64/bin/..., so a bare "bash" call hits [WinError 2]. shutil.which goes through Windows PATHEXT lookup; fall back to the conventional Git for Windows install path so users without bash in their Windows PATH still work. POSIX: just return "bash" since the kernel finds it via PATH like any other exec.
+    found = shutil.which("bash")
+    if found:
+        return found
+    if sys.platform == "win32":
+        for candidate in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ):
+            if os.path.exists(candidate):
+                return candidate
+    return "bash"
 
 from .runtime_proc import (
     _ERROR_PATTERNS,
@@ -225,7 +242,7 @@ class AppRuntime:
 
         try:
             self.process = await asyncio.create_subprocess_exec(
-                "bash", "run.sh",
+                _resolve_bash(), "run.sh",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.workspace_path,
@@ -364,7 +381,15 @@ class AppRuntime:
         """Inherited env minus the install token. Backend.py can hit our
         REST API back via its own creds if it really needs to, but it
         shouldn't inherit the host process's token by default."""
-        return {k: v for k, v in os.environ.items() if k != "OPENSWARM_AUTH_TOKEN"}
+        env = {k: v for k, v in os.environ.items() if k != "OPENSWARM_AUTH_TOKEN"}
+        # Hand the workspace's backend/run.sh the exact interpreter we're
+        # running on. In the packaged build that's the bundled standalone
+        # Python, so a fresh machine with no system `python3` still works;
+        # in dev it's whatever launched uvicorn. OPENSWARM_NODE_PATH already
+        # rides in via os.environ (set by the Electron shell) for run.sh's
+        # Node resolution.
+        env["OPENSWARM_PYTHON"] = sys.executable
+        return env
 
     async def stop(self) -> None:
         async with self._lock:

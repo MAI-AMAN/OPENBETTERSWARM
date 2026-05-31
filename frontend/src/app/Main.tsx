@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useState, useRef, Suspense, lazy } from 'react';
+import React, { useMemo, useEffect, useState, useRef, Suspense } from 'react';
 import { Provider } from 'react-redux';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { ThemeProvider as MuiThemeProvider, createTheme, CssBaseline } from '@mui/material';
@@ -21,18 +21,34 @@ import AppShell from './components/Layout/AppShell';
 import DashboardSelection from './pages/DashboardSelection/DashboardSelection';
 import ErrorBoundary from './components/feedback/ErrorBoundary';
 import { setPanelMode, disableOnboardingAfterCrash } from '@/shared/state/onboardingProgressSlice';
-const Skills = lazy(() => import('./pages/Skills/Skills'));
-const Tools = lazy(() => import('./pages/Tools/Tools'));
-const Modes = lazy(() => import('./pages/Modes/Modes'));
-const Views = lazy(() => import('./pages/Views/Views'));
-const Customization = lazy(() => import('./pages/Customization/Customization'));
-const Analytics = lazy(() => import('./pages/Analytics/Analytics'));
-const OnboardingRoot = lazy(() =>
+
+const Skills = React.lazy(() => import('./pages/Skills/Skills'));
+const Tools = React.lazy(() => import('./pages/Tools/Tools'));
+const Modes = React.lazy(() => import('./pages/Modes/Modes'));
+const Views = React.lazy(() => import('./pages/Views/Views'));
+const Customization = React.lazy(() => import('./pages/Customization/Customization'));
+const Analytics = React.lazy(() => import('./pages/Analytics/Analytics'));
+const OnboardingRoot = React.lazy(() =>
   import('./components/Onboarding').then((m) => ({ default: m.OnboardingRoot })),
 );
-const SignInGate = lazy(() => import('./components/overlays/SignInGate'));
+const SignInGate = React.lazy(() => import('./components/overlays/SignInGate'));
 
 if (typeof window !== 'undefined') {
+  // Diagnostic global error capture. The packaged bundle has no source maps, so without these handlers the only thing that reaches main-process stderr is "Uncaught TypeError: ... (bundle.js:2)" with zero stack context. Forward error.stack and Redux action.type when available so we can pinpoint the offender across the chat-spawn / workflow rendering paths even in minified prod.
+  window.addEventListener('error', (e) => {
+    try {
+      // eslint-disable-next-line no-console
+      console.error('[diag][window.error]', e.message, '@', e.filename, ':', e.lineno, ':', e.colno, '\nstack:\n', e.error && (e.error as Error).stack);
+    } catch { /* never let the handler itself throw */ }
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    try {
+      const reason = (e as PromiseRejectionEvent).reason;
+      // eslint-disable-next-line no-console
+      console.error('[diag][window.unhandledrejection]', reason && reason.message, '\nstack:\n', reason && reason.stack);
+    } catch { /* never let the handler itself throw */ }
+  });
+
   (window as any).__openswarmPrefetchRoute = (path: string) => {
     switch (path) {
       case '/skills': void import('./pages/Skills/Skills'); return;

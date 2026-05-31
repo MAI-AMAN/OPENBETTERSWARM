@@ -1,6 +1,6 @@
 {
   "name": "openswarm",
-  "version": "1.1.43",
+  "version": "1.1.71",
   "description": "OpenSwarm — AI Agent Orchestrator",
   "author": "openswarm-ai",
   "main": "main.js",
@@ -17,19 +17,23 @@
     "test": "node --test affiliateTracking.test.js"
   },
   "dependencies": {
-    "electron-updater": "^6.3.0",
-    "get-port": "^5.1.1"
+    "electron-updater": "6.8.3",
+    "get-port": "5.1.1"
   },
   "devDependencies": {
-    "@electron/notarize": "^3.1.1",
-    "cross-env": "^7.0.3",
-    "electron": "castlabs/electron-releases#v40.7.0+wvcus",
-    "electron-builder": "^25.1.0"
+    "@electron/notarize": "3.1.1",
+    "cross-env": "7.0.3",
+    "electron": "github:castlabs/electron-releases#v42.0.0+wvcus",
+    "electron-builder": "^26.8.1",
+    "electron-builder-squirrel-windows": "^26.8.1"
   },
   "build": {
     "appId": "com.clusterlabs.openswarm",
     "productName": "OpenSwarm",
-    "electronLanguages": ["en"],
+    "afterPack": "./build/after-pack.js",
+    "electronLanguages": [
+      "en-US"
+    ],
     "electronDownload": {
       "mirror": "https://github.com/castlabs/electron-releases/releases/download/v"
     },
@@ -51,6 +55,7 @@
     "dmg": {
       "artifactName": "OpenSwarm-${arch}.${ext}",
       "title": "OpenSwarm ${version}",
+      "size": "5000000K",
       "contents": [
         {
           "x": 130,
@@ -69,16 +74,32 @@
       "target": [
         {
           "target": "squirrel",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "OpenSwarm-Setup-${arch}.${ext}",
-      "sign": "./build/sign-windows.js",
-      "signingHashAlgorithms": ["sha256"],
-      "signDlls": false
+      "signtoolOptions": {
+        "sign": "./build/sign-windows.js",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
     },
     "squirrelWindows": {
       "iconUrl": "https://raw.githubusercontent.com/openswarm-ai/openswarm/main/electron/build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OpenSwarm",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "OpenSwarm-Setup-${arch}.${ext}",
+      "include": "build/installer-recovery.nsh"
     },
     "extraResources": [
       {
@@ -115,7 +136,9 @@
         "from": "build-staging/router",
         "to": "router",
         "filter": [
-          "**/*"
+          "**/*",
+          "**/.*",
+          "**/.*/**"
         ]
       },
       {

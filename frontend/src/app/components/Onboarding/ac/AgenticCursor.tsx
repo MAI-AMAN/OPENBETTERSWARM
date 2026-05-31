@@ -6,9 +6,9 @@ import React, {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, useAnimationControls, AnimatePresence } from 'framer-motion';
+import { motion, useAnimationControls, AnimatePresence } from '../_motionWin';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
-import { cursorStore } from './cursorStore';
+import { cursorStore, useCursorPosition } from './cursorStore';
 import { resolveSelector } from '../selectors';
 import ACPopup from './ACPopup';
 import ACMultiChoice from './ACMultiChoice';
@@ -53,9 +53,19 @@ interface MultiChoiceState {
 // Snappy 260/26 spring; calm comes from popup cadence + 3s dwell, not cursor delay.
 const SPRING = { type: 'spring' as const, stiffness: 260, damping: 26 };
 
+// On Windows the motionWin shim strips Framer Motion's animate prop, so controls.set({x,y}) never moves the wrapper. We bypass by reading the same store the popups read and applying style.transform directly; Mac is unaffected since Framer's own transform writes win the cascade.
+const IS_WIN = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+
+// Windows fallback-ease duration. Mirrors the CSS `transform 420ms` transition
+// on the cursor wrapper below; on Windows the Director holds for this (plus a
+// small settle margin) after a moveTo/fadeOut so the CSS ease actually plays
+// before the next step's instant write lands.
+const WIN_EASE_MS = 420;
+
 const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
   const c = useClaudeTokens();
   const controls = useAnimationControls();
+  const storePos = useCursorPosition();
   const posRef = useRef({ x: 0, y: 0 });
   const [visible, setVisible] = useState(false);
   const [popup, setPopup] = useState<PopupState | null>(null);
@@ -63,10 +73,10 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
 
   const trackerRef = useRef<{ stop: () => void } | null>(null);
 
-  // Mirrored into cursorStore so popups follow without re-running through Framer's animation pipeline.
-  const writePos = (x: number, y: number, vis = true) => {
+  // Mirrored into cursorStore so popups follow without re-running through Framer's animation pipeline. `instant` controls the Windows CSS-transition fallback: true = snap (tracking), false = ease (moveTo/fadeOut). No-op on Mac.
+  const writePos = (x: number, y: number, vis = true, instant = true) => {
     posRef.current = { x, y };
-    cursorStore.set({ x, y, visible: vis });
+    cursorStore.set({ x, y, visible: vis, instant });
   };
 
   const stopTrackingInternal = () => {
@@ -96,17 +106,45 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
     async moveTo(x, y, transition) {
       // Stop prior tracker so it doesn't snap the cursor back to its old anchor mid-animation.
       stopTrackingInternal();
+      if (IS_WIN) {
+        // Windows has no Framer runtime (controls.start is a no-op); the visual
+        // hop is the CSS transition on the wrapper, driven by cursorStore.
+        // TWO-STEP so Chromium actually animates: (1) commit the eased
+        // transition at the CURRENT position (cursorStore now flushes an
+        // instant-change), let it paint, then (2) move. Changing transform in
+        // the same recalc that flips transition none->420ms makes Chromium
+        // apply the move instantly (teleport). Then HOLD for the ease so the
+        // Director doesn't begin the next step mid-glide.
+        writePos(posRef.current.x, posRef.current.y, true, false);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        writePos(x, y, true, false);
+        await new Promise((r) => setTimeout(r, WIN_EASE_MS + 30));
+        return;
+      }
+      // Mac path, byte-identical to the pre-Windows version: Framer's spring drives the popup via onUpdate during the animation, then writePos confirms the final position.
       await controls.start({
         x,
         y,
         transition: transition ?? SPRING,
       });
-      writePos(x, y, true);
+      writePos(x, y, true, false);
     },
     async fadeOut(to) {
       stopTrackingInternal();
+      if (IS_WIN) {
+        // Glide to the exit point via the same two-step arm as moveTo so the
+        // CSS ease actually runs, then hide. The opacity fade has no Framer
+        // runtime on Windows, so the cursor just disappears once it eases to `to`.
+        writePos(posRef.current.x, posRef.current.y, true, false);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        writePos(to.x, to.y, true, false);
+        await new Promise((r) => setTimeout(r, WIN_EASE_MS + 30));
+        cursorStore.set({ visible: false });
+        setVisible(false);
+        return;
+      }
       await controls.start({ x: to.x, y: to.y, transition: SPRING });
-      writePos(to.x, to.y, true);
+      writePos(to.x, to.y, true, false);
       await controls.start({
         opacity: 0,
         scale: 0.5,
@@ -255,6 +293,14 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
           zIndex: 10500,
           pointerEvents: 'none',
           transformOrigin: 'top left',
+          ...(IS_WIN
+            ? {
+                transform: `translate(${storePos.x}px, ${storePos.y}px)`,
+                // Closest CSS approximation of the Mac spring (stiffness 260, damping 26): a softly easing ~420ms cubic-bezier for moveTo/fadeOut. Tracking sets instant=true so the cursor snaps to its target each frame instead of perpetually lagging behind.
+                transition: storePos.instant ? 'none' : 'transform 420ms cubic-bezier(0.22, 1, 0.36, 1)',
+                willChange: 'transform',
+              }
+            : null),
         }}
       >
         {visible && (
@@ -269,7 +315,6 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
             }}
             style={{
               transform: 'translate(-2px, -2px)',
-              // Tight inner ring + soft outer halo reads on light AND dark canvases.
               filter: `drop-shadow(0 0 6px ${c.accent.primary}cc) drop-shadow(0 0 14px ${c.accent.primary}55)`,
             }}
           >

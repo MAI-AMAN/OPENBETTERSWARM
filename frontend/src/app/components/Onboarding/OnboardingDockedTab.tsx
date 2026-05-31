@@ -1,7 +1,7 @@
 // Docked onboarding home: a small, quiet handle on the right edge that reopens the tour.
 
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from './_motionWin';
 import { Box, IconButton, Typography, CircularProgress } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';

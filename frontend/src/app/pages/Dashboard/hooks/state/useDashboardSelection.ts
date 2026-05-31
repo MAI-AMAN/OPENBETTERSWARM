@@ -69,6 +69,17 @@ export function useDashboardSelection(
 
   const deselectAll = useCallback(() => setSelectedIds(new Map()), []);
 
+  // Cmd/Ctrl+A: select every card on the canvas so the user can wipe the
+  // board in one keystroke. Mirrors the per-type id keys the marquee uses.
+  const selectAll = useCallback(() => {
+    const next = new Map<string, CardType>();
+    for (const card of Object.values(cards)) next.set(card.session_id, 'agent');
+    for (const vc of Object.values(viewCards)) next.set(vc.output_id, 'view');
+    for (const bc of Object.values(browserCards)) next.set(bc.browser_id, 'browser');
+    for (const n of Object.values(notes)) next.set(n.note_id, 'note');
+    setSelectedIds(next);
+  }, [cards, viewCards, browserCards, notes]);
+
   const selectCard = useCallback(
     (id: string, type: CardType, shiftKey: boolean) => {
       setSelectedIds((prev) => {
@@ -192,8 +203,7 @@ export function useDashboardSelection(
         if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
         isDraggingMarqueeRef.current = true;
         document.body.style.userSelect = 'none';
-        // Disable pointer events on browser webviews/iframes for the
-        // duration of the drag so the cursor passes through them.
+        // Disable pointer events on webviews/iframes during drag so the cursor passes through.
         document.body.classList.add('dashboard-marquee-active');
       }
 
@@ -272,6 +282,7 @@ export function useDashboardSelection(
     isSelected,
     selectCard,
     deselectAll,
+    selectAll,
     handleCanvasMouseDown,
     handleCanvasMouseMove,
     handleCanvasMouseUp,

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from './_motionWin';
 import { Box, Typography, IconButton, Button, ButtonBase } from '@mui/material';
 import RemoveIcon from '@mui/icons-material/Remove';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -447,7 +447,7 @@ const StepCardBody: React.FC<StepCardProps> = ({
           <Box
             component="video"
             src={step.videoSrc}
-            autoPlay
+            autoPlay={typeof navigator === 'undefined' || !navigator.userAgent.includes('Windows')}
             muted
             loop
             playsInline
@@ -569,7 +569,7 @@ const StepCardBody: React.FC<StepCardProps> = ({
               <Box
                 component="video"
                 src={step.videoSrc}
-                autoPlay
+                autoPlay={typeof navigator === 'undefined' || !navigator.userAgent.includes('Windows')}
                 muted
                 loop
                 playsInline
