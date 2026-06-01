@@ -8,6 +8,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import { AgentMessage, ToolGroupMeta } from '@/shared/state/agentsSlice';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
+import { useMountReveal } from './useMountReveal';
 import { sanitizeSvgString } from '@/shared/sanitizeSvg';
 import ToolCallBubble, { ToolPair } from './ToolCallBubble';
 
@@ -71,6 +72,7 @@ interface Props {
 
 const ToolGroupBubble: React.FC<Props> = React.memo(({ group, isSessionRunning = false, meta, sessionId }) => {
   const c = useClaudeTokens();
+  const reveal = useMountReveal(); // JS-driven slide-in; see useMountReveal (was a fragile mount keyframe)
   const isMcp = !!group.mcpServer;
   const [expanded, setExpanded] = useState(isMcp);
 
@@ -102,13 +104,7 @@ const ToolGroupBubble: React.FC<Props> = React.memo(({ group, isSessionRunning =
         // Ease in instead of popping when a tool group appears mid-turn.
         // Transform+opacity only, so it rides the compositor and never nudges
         // layout or the scroll position. No streaming twin, so no handoff flash.
-        // 260ms / 8px glide to match DefaultToolBubble: a calm slide-in rather
-        // than a pop, so a group appearing after a long pending gap eases in.
-        animation: 'toolGroupEnter 260ms cubic-bezier(0.22, 1, 0.36, 1)',
-        '@keyframes toolGroupEnter': {
-          from: { opacity: 0, transform: 'translateY(8px)' },
-          to: { opacity: 1, transform: 'translateY(0)' },
-        },
+        ...reveal,
       }}
     >
       <Box

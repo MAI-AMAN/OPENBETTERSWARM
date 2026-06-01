@@ -11,6 +11,7 @@ import BlockIcon from '@mui/icons-material/Block';
 import SearchIcon from '@mui/icons-material/Search';
 import { AgentMessage } from '@/shared/state/agentsSlice';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
+import { useMountReveal } from './useMountReveal';
 import { getToolLabelWithInput } from '../parsing/toolLabels';
 import BrowserAgentInlineFeed from '../shell/BrowserAgentInlineFeed';
 import { GoogleServiceIcon } from '../mcp-cards/GoogleServiceIcon';
@@ -53,6 +54,12 @@ export const DefaultToolBubble: React.FC<DefaultToolBubbleProps> = ({
 }) => {
   const c = useClaudeTokens();
   const tc = useTermColors();
+  // JS-driven mount reveal (see useMountReveal): replaces the old mount keyframe
+  // that silently no-op'd, which is why standalone tools "appeared out of nowhere".
+  // Skipped while streaming (the live pill has a committed twin; animating both
+  // would flash) and for mcpCompact rows (the group's row-fade already handles them).
+  const reveal = useMountReveal();
+  const enterStyle = (!isStreaming && !mcpCompact) ? reveal : {};
 
   return (
     <Box
@@ -60,22 +67,7 @@ export const DefaultToolBubble: React.FC<DefaultToolBubbleProps> = ({
       sx={{
         maxWidth: mcpCompact ? '100%' : '85%',
         my: mcpCompact ? 0 : 0.5,
-        // Ease standalone tool calls in instead of popping. Skipped while
-        // streaming (the live pill has a committed twin, so animating both
-        // would flash) and when mcpCompact (rows inside a group already fade
-        // via toolRowFadeIn). Transform+opacity only, so layout/scroll are untouched.
-        ...(!isStreaming && !mcpCompact ? {
-          // 260ms / 8px glide (was 160ms / 4px). Tool events land at wildly
-          // uneven gaps (measured: 1ms-54s apart, stdev ~8s), so after a long
-          // pending wait the bubble used to POP in. A slightly longer, larger
-          // ease reads as the same calm "slide" as the streamed text instead of
-          // a snap. Transform+opacity only, so layout/scroll stay untouched.
-          animation: 'toolBubbleEnter 260ms cubic-bezier(0.22, 1, 0.36, 1)',
-          '@keyframes toolBubbleEnter': {
-            from: { opacity: 0, transform: 'translateY(8px)' },
-            to: { opacity: 1, transform: 'translateY(0)' },
-          },
-        } : {}),
+        ...enterStyle,
       }}
     >
       <Box
