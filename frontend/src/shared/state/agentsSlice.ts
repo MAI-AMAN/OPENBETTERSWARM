@@ -744,13 +744,16 @@ const agentsSlice = createSlice({
       const session = state.sessions[action.payload.sessionId];
       if (!session) return;
       session.compacted_through_msg_id = action.payload.throughMsgId;
-      // The next preflight check looks at tokens.input to estimate "history used".
-      // After a compaction the real number is unknown until the next turn round-trips,
-      // but the OLD number is definitely wrong (it counts messages we just dropped).
-      // Zero it so preflight falls back to the char/4 estimate of remaining content,
-      // which is closer than holding the stale pre-compact value.
+      // After compaction the OLD context numbers are wrong (they count messages we
+      // just dropped). Reset EVERY context-derived field so all surfaces that show
+      // it — the toolbar ContextRing, the /context drawer %, the pre-send guard —
+      // reflect the post-compaction state, not just the token count. The real values
+      // refill on the next turn's round-trip; until then zero is closer than stale.
       if (action.payload.throughMsgId) {
         session.tokens = { input: 0, output: session.tokens?.output ?? 0 };
+        session.ctx_used_pct = 0;
+        session.cache_read_pct = 0;
+        session.cache_read_tokens = 0;
       }
     },
 

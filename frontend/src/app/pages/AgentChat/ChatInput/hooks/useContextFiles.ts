@@ -4,15 +4,16 @@ import { API_BASE, getAuthToken } from '@/shared/config';
 import { ForcedToolGroup } from '../types';
 import { basename } from '../helpers';
 
-// Only auto-shrink a file when it would eat 85%+ of the window on its own. Below
-// that, send it NATIVELY to the model (base64 document block) the way claude.ai /
+// Only auto-shrink a file when it literally won't fit (98%+ of the window on its
+// own). Below that, send it NATIVELY (base64 document block) the way claude.ai /
 // OpenAI / Gemini do — the model reads the PDF server-side, instantly, no separate
 // summarize round-trip. The old 50% trigger was force-summarizing files that fit
 // fine, which is the entire reason our file flow felt 60s-slow vs their instant: we
-// were doing pre-processing work the big providers simply don't do. Leaves ~15% for
-// the conversation; if it grows past the window later, auto-compact handles it.
+// were doing pre-processing work the big providers simply don't do. 98% (not 100%)
+// leaves a sliver for the prompt itself so a barely-fitting file doesn't 4xx; if the
+// conversation later grows past the window, auto-compact handles it.
 function shrinkThreshold(modelCtx: number): number {
-  return Math.floor(modelCtx * 0.85);
+  return Math.floor(modelCtx * 0.98);
 }
 
 export type SendBlock = null | {
