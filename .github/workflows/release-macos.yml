@@ -88,6 +88,9 @@ jobs:
           python-version: '3.13'
 
       - name: Build app
+        # Skip (green) when Apple signing secrets aren't in CI: Mac ships via local
+        # publish.sh, so a secret-less CI run should no-op, not fail red.
+        if: ${{ env.APPLE_ID != '' }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -101,8 +104,10 @@ jobs:
 
           version="$(node -p "require('./electron/package.json').version")"
           if [[ "$version" == *-* ]]; then
-            export EP_PRE_RELEASE=true
-            echo "Version $version is EXPERIMENTAL; setting EP_PRE_RELEASE=true"
+            # Do NOT set EP_PRE_RELEASE: the GH pre-release checkbox hides the release
+            # from the releases.atom feed electron-updater reads, so even experimental
+            # clients can't discover it (matches release-windows.yml fix).
+            echo "Version $version is EXPERIMENTAL (semver-suffix channel; NOT a GH pre-release)"
           else
             echo "Version $version is STABLE"
           fi
@@ -123,6 +128,7 @@ jobs:
       # NOTE: like the rest of this workflow, this mac path is unverified locally
       # (no Mac on hand); first exercise it via workflow_dispatch publish=false.
       - name: Verify the shipped app is signed + notarized
+        if: ${{ env.APPLE_ID != '' }}
         shell: bash
         run: |
           set -euo pipefail
