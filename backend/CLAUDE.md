@@ -53,3 +53,10 @@ What runs under `bash backend/run.sh` is not what ships in the DMG/EXE. Test the
 - Pinning matters; `requirements.txt` is fully pinned for reproducibility.
 - Token middleware already scrubs bearer tokens from logs; don't re-add raw logging.
 - MCP bundles in `mcp-bundles/` are esbuild output; regenerate via the bundle script rather than editing.
+
+## Hardening precedences (learned the hard way)
+
+- **Compaction must actually trim, not just mark.** `_build_history_prefix` honors `session.compacted_through_msg_id`; the auto path leaves the SDK session intact (preserves prompt cache, the ~70% aux-cost win), the manual `/compact` button sets `needs_fresh_session=True` because the user is opting in to the cache-loss tradeoff for a visible shrink. Never flatten to `User:/Assistant:` text and never throw away tool turns; the model loses fidelity if you do.
+- **SSRF guard is async + multi-record.** `tools/ssrf_guard.py` uses `loop.getaddrinfo` (non-blocking, covers IPv4 + IPv6) and rejects if ANY resolved record is private. Loopback (`127/8`, `::1`) is intentionally ALLOWED because App Builder previews on `127.0.0.1:<random>`; the real desktop-app SSRF threat is cloud metadata (`169.254.169.254`) and corporate LAN, not localhost. Per-redirect re-validation via `safe_fetch`; never use `follow_redirects=True` directly in a fetch path that takes a user-supplied URL.
+- **Inline-text attachments need a combined cap, not just per-file.** `prompt/attachments.py` tracks `text_total_chars` so a pile of `.txt` files can't silently blow the context window past the per-file 512KB. Picked 1.5M chars as a 1M-window-model-friendly default.
+- **`ENABLE_TOOL_SEARCH=1` (not `auto`) on non-Anthropic paths.** Forces tool schemas to load on demand instead of upfront — saves ~9K first-message tokens. The CLI's `tengu_defer_all_bn4` Statsig flag still defers tools without the env set, so a non-Anthropic path without this loses tools entirely.

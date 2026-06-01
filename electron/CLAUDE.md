@@ -41,3 +41,8 @@ For any change touching paths, subprocess spawning, IPC, deep links, or the auto
 
 - `build-staging/` is regenerated on every build; never commit it.
 - Auto-updater reads the latest release feed from GitHub; staging/test builds should use a separate channel to avoid pushing unsigned bits to users.
+
+## Hardening precedences (learned the hard way)
+
+- **Renderer origin (port) must be stable across launches.** `localStorage` is keyed by full origin including port, so `server.listen(0)` (OS-assigned random port) was wiping onboarding state every restart and re-triggering the tour. Pin to a preferred port (currently `4173`), fall back to OS-assigned only if held. Same rule applies to any future renderer-side persisted state.
+- **`webSecurity` stays on.** The file:// segfault was fixed by serving over `http://127.0.0.1:<port>`, NOT by disabling web security. Any future "let's just disable CSP" fix is wrong; find the underlying file:// quirk and route around it (loopback HTTP is the canonical workaround).
