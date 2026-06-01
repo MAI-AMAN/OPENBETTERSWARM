@@ -82,7 +82,7 @@ export default function ContextDrawer() {
               : 'Original history intact (no compaction yet).'}
           </Typography>
           <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: c.text.tertiary }}>
-            Auto-compact triggers at 65% ctx; pre-send guard trims at 90%.
+            Auto-compacts at 65% mid-turn; if a send would overflow, history is compacted automatically and the message sent. Big files auto-shrink to fit.
           </Typography>
         </Section>
 
