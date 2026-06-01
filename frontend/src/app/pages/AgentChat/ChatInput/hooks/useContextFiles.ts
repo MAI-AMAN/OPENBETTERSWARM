@@ -4,6 +4,17 @@ import { API_BASE, getAuthToken } from '@/shared/config';
 import { ForcedToolGroup } from '../types';
 import { basename } from '../helpers';
 
+// Only auto-shrink a file when it would eat 85%+ of the window on its own. Below
+// that, send it NATIVELY to the model (base64 document block) the way claude.ai /
+// OpenAI / Gemini do — the model reads the PDF server-side, instantly, no separate
+// summarize round-trip. The old 50% trigger was force-summarizing files that fit
+// fine, which is the entire reason our file flow felt 60s-slow vs their instant: we
+// were doing pre-processing work the big providers simply don't do. Leaves ~15% for
+// the conversation; if it grows past the window later, auto-compact handles it.
+function shrinkThreshold(modelCtx: number): number {
+  return Math.floor(modelCtx * 0.85);
+}
+
 export type SendBlock = null | {
   estimate: number;
   window: number;
@@ -46,11 +57,10 @@ export function useContextFiles(
       });
       if (!resp.ok) throw new Error('Upload failed');
       const data = await resp.json();
-      const halfCap = Math.floor(currentModelCtx * 0.5);
       const oversize: Array<{ path: string; name: string; tokens: number }> = [];
       const newPaths: ContextPath[] = (data.files || []).map((f: { path: string; name?: string; tokens?: number; kind?: 'text' | 'pdf' | 'image' | 'binary'; media_type?: string }) => {
         const t = typeof f.tokens === 'number' ? f.tokens : 0;
-        if (t > halfCap) oversize.push({ path: f.path, name: f.name || basename(f.path) || 'file', tokens: t });
+        if (t > shrinkThreshold(currentModelCtx)) oversize.push({ path: f.path, name: f.name || basename(f.path) || 'file', tokens: t });
         return { path: f.path, type: 'file' as const, tokens: t, kind: f.kind, media_type: f.media_type };
       });
       setContextPaths((prev) => [...prev, ...newPaths]);
@@ -63,11 +73,10 @@ export function useContextFiles(
   }, [currentModelCtx]);
 
   useEffect(() => {
-    const halfCap = Math.floor(currentModelCtx * 0.5);
     const stillOversize: Array<{ path: string; name: string; tokens: number }> = [];
     for (const cp of contextPaths) {
       const t = cp.tokens || 0;
-      if (t > halfCap) {
+      if (t > shrinkThreshold(currentModelCtx)) {
         const name = basename(cp.path) || cp.path;
         stillOversize.push({ path: cp.path, name, tokens: t });
       }
