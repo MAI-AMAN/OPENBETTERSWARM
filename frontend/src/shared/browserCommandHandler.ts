@@ -5,7 +5,7 @@ import { rankAndCapInteractives, type RankItem } from './interactiveRanking';
 
 let initialized = false;
 
-export type BrowserAction = 'screenshot' | 'get_text' | 'navigate' | 'click' | 'type' | 'evaluate' | 'get_elements' | 'scroll' | 'wait' | 'press_key' | 'list_interactives' | 'click_index' | 'batch' | 'detect_webmcp' | 'list_routes' | 'replay_route';
+export type BrowserAction = 'screenshot' | 'get_text' | 'navigate' | 'click' | 'type' | 'evaluate' | 'get_elements' | 'scroll' | 'wait' | 'press_key' | 'list_interactives' | 'click_index' | 'batch' | 'detect_webmcp' | 'list_routes' | 'replay_route' | 'click_by_name';
 
 export interface BrowserActivity {
   action: BrowserAction;
@@ -49,6 +49,7 @@ const ACTION_LABELS: Record<string, string> = {
   press_key: 'Pressing key...',
   list_interactives: 'Reading page structure...',
   click_index: 'Clicking element...',
+  click_by_name: 'Clicking element...',
   batch: 'Running batch...',
 };
 
@@ -276,18 +277,13 @@ async function frameOffset(
   return { dx, dy };
 }
 
-async function handleListInteractives(wv: BrowserWebview, params: Record<string, any> = {}): Promise<Record<string, any>> {
+// Enumerate interactive elements across the root frame + every attached OOPIF
+// child frame. Shared by list_interactives (numbered list) and click_by_name
+// (stable re-resolution for replay), so both see the exact same surface.
+async function enumerateCandidates(wv: BrowserWebview): Promise<RankItem[]> {
   const candidates: RankItem[] = [];
-  try {
-    const rootTree = await sendCdp(wv, 'Accessibility.getFullAXTree', {});
-    candidates.push(...axNodesToCandidates(rootTree?.nodes || []));
-  } catch (err: any) {
-    return { error: `getFullAXTree failed: ${err.message || String(err)}` };
-  }
-
-  // Merge cross-origin OOPIF child frames (e.g. the Google Docs share dialog),
-  // whose nodes never appear in the root tree. A frame that won't answer
-  // (closed / navigating) is skipped, not fatal.
+  const rootTree = await sendCdp(wv, 'Accessibility.getFullAXTree', {});
+  candidates.push(...axNodesToCandidates(rootTree?.nodes || []));
   const children = await getChildSessions(wv);
   for (const child of children) {
     try {
@@ -296,6 +292,60 @@ async function handleListInteractives(wv: BrowserWebview, params: Record<string,
     } catch {
       // skip unresponsive frame
     }
+  }
+  return candidates;
+}
+
+// Resolve + click a specific backend node (revalidate, frame-local box model,
+// OS-level dispatch in the element's own frame, cosmetic top-level ripple).
+// Shared by click_index (cache lookup) and click_by_name (fresh resolution).
+async function clickBackendNode(
+  wv: BrowserWebview, backendNodeId: number, sessionId: string | undefined, label: string,
+): Promise<Record<string, any>> {
+  try {
+    await sendCdp(wv, 'DOM.resolveNode', { backendNodeId }, sessionId);
+  } catch (err: any) {
+    return { error: `${label} is no longer valid (${err.message || 'node not found'}). The page may have changed.` };
+  }
+  let boxModel;
+  try {
+    boxModel = await sendCdp(wv, 'DOM.getBoxModel', { backendNodeId }, sessionId);
+  } catch (err: any) {
+    return { error: `${label} has no box model (likely off-screen or hidden). Try scrolling first.` };
+  }
+  const content = boxModel?.model?.content;
+  if (!Array.isArray(content) || content.length < 8) {
+    return { error: `${label} has no valid bounding rect.` };
+  }
+  const lx = (content[0] + content[4]) / 2;
+  const ly = (content[1] + content[5]) / 2;
+  try {
+    await sendCdp(wv, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: lx, y: ly, button: 'left', clickCount: 1 }, sessionId);
+    await sendCdp(wv, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: lx, y: ly, button: 'left', clickCount: 1 }, sessionId);
+  } catch (err: any) {
+    return { error: `Click failed: ${err.message || String(err)}` };
+  }
+  let rx = lx, ry = ly;
+  if (sessionId) {
+    try {
+      const children = await getChildSessions(wv);
+      const { dx, dy } = await frameOffset(wv, sessionId, children);
+      rx = lx + dx; ry = ly + dy;
+    } catch { /* fall back to frame-local for the ripple */ }
+  }
+  return {
+    text: `Clicked ${label} at (${Math.round(rx)}, ${Math.round(ry)})`,
+    clickX: rx / wv.clientWidth * 100,
+    clickY: ry / wv.clientHeight * 100,
+  };
+}
+
+async function handleListInteractives(wv: BrowserWebview, params: Record<string, any> = {}): Promise<Record<string, any>> {
+  let candidates: RankItem[];
+  try {
+    candidates = await enumerateCandidates(wv);
+  } catch (err: any) {
+    return { error: `getFullAXTree failed: ${err.message || String(err)}` };
   }
 
   // Dedupe twins, rank what a human acts on first (and the current goal
@@ -311,9 +361,11 @@ async function handleListInteractives(wv: BrowserWebview, params: Record<string,
   }));
 
   // Cache in main-process so click_index can resolve across separate WS commands.
-  const indexMap: Record<number, { backendNodeId: number; sessionId?: string }> = {};
+  // role+name ride along so click_index can report WHAT it clicked (the agent
+  // loop records that as a stable, replayable click-by-name step).
+  const indexMap: Record<number, { backendNodeId: number; sessionId?: string; role?: string; name?: string }> = {};
   for (const el of interactives) {
-    indexMap[el.index] = { backendNodeId: el.backendNodeId, sessionId: el.sessionId };
+    indexMap[el.index] = { backendNodeId: el.backendNodeId, sessionId: el.sessionId, role: el.role, name: el.name };
   }
   try {
     const cacheBridge = (window as any).openswarm?.cdpCacheSet;
@@ -350,6 +402,8 @@ async function handleClickIndex(wv: BrowserWebview, params: Record<string, any>)
 
   let backendNodeId: number | undefined;
   let sessionId: string | undefined;
+  let role: string | undefined;
+  let name: string | undefined;
   try {
     const cacheBridge = (window as any).openswarm?.cdpCacheGet;
     if (cacheBridge) {
@@ -360,6 +414,7 @@ async function handleClickIndex(wv: BrowserWebview, params: Record<string, any>)
       } else if (entry && typeof entry === 'object' && entry.backendNodeId != null) {
         backendNodeId = Number(entry.backendNodeId);
         sessionId = entry.sessionId || undefined;
+        role = entry.role; name = entry.name;
       }
     }
   } catch {
@@ -372,64 +427,37 @@ async function handleClickIndex(wv: BrowserWebview, params: Record<string, any>)
     };
   }
 
-  // Revalidate in the element's own frame: fails fast if the page mutated and
-  // the node is gone (vs. clicking the wrong element).
+  const result = await clickBackendNode(wv, backendNodeId, sessionId, `index ${idx}`);
+  // Surface what was clicked so the agent loop can record a stable,
+  // replayable click-by-name step (indices are ephemeral; names aren't).
+  if (!result.error) {
+    result.clickedRole = role || '';
+    result.clickedName = name || '';
+  }
+  return result;
+}
+
+// Robust click for REPLAY: re-resolve the target fresh by (role, name) instead
+// of a stale index, so a recorded skill survives index shifts between runs.
+async function handleClickByName(wv: BrowserWebview, params: Record<string, any>): Promise<Record<string, any>> {
+  const wantName = String(params.name || '').trim();
+  const wantRole = String(params.role || '').trim();
+  if (!wantName && !wantRole) return { error: 'click_by_name needs a name and/or role' };
+  let candidates: RankItem[];
   try {
-    await sendCdp(wv, 'DOM.resolveNode', { backendNodeId }, sessionId);
+    candidates = await enumerateCandidates(wv);
   } catch (err: any) {
-    return {
-      error: `Index ${idx} is no longer valid (${err.message || 'node not found'}). The page may have changed. Call BrowserListInteractives again.`,
-    };
+    return { error: `enumerate failed: ${err.message || String(err)}` };
   }
-
-  // Box model in the element's OWN frame -> frame-local center.
-  let boxModel;
-  try {
-    boxModel = await sendCdp(wv, 'DOM.getBoxModel', { backendNodeId }, sessionId);
-  } catch (err: any) {
-    return {
-      error: `Index ${idx} has no box model (likely off-screen or hidden). Try scrolling first or call BrowserListInteractives again.`,
-    };
+  const norm = (s: string) => s.trim().toLowerCase();
+  // Exact (role,name) first, then name-only, so we click the most specific match.
+  const match =
+    candidates.find((c) => (!wantRole || norm(c.role) === norm(wantRole)) && norm(c.name) === norm(wantName)) ||
+    candidates.find((c) => norm(c.name) === norm(wantName));
+  if (!match) {
+    return { error: `No element matching role="${wantRole}" name="${wantName}" on this page.` };
   }
-  const content = boxModel?.model?.content;
-  if (!Array.isArray(content) || content.length < 8) {
-    return { error: `Index ${idx} has no valid bounding rect.` };
-  }
-  const lx = (content[0] + content[4]) / 2;
-  const ly = (content[1] + content[5]) / 2;
-
-  // Dispatch the OS-level click in the element's OWN frame (sessionId routes
-  // into the OOPIF). This is compositor-independent, so it lands even when the
-  // card is offscreen, and still passes the isTrusted check on hostile sites.
-  try {
-    await sendCdp(wv, 'Input.dispatchMouseEvent', {
-      type: 'mousePressed', x: lx, y: ly, button: 'left', clickCount: 1,
-    }, sessionId);
-    await sendCdp(wv, 'Input.dispatchMouseEvent', {
-      type: 'mouseReleased', x: lx, y: ly, button: 'left', clickCount: 1,
-    }, sessionId);
-  } catch (err: any) {
-    return { error: `Click failed: ${err.message || String(err)}` };
-  }
-
-  // Cosmetic ripple: place it in top-level coords. Best-effort for OOPIF.
-  let rx = lx, ry = ly;
-  if (sessionId) {
-    try {
-      const children = await getChildSessions(wv);
-      const { dx, dy } = await frameOffset(wv, sessionId, children);
-      rx = lx + dx;
-      ry = ly + dy;
-    } catch {
-      // fall back to frame-local coords for the ripple
-    }
-  }
-
-  return {
-    text: `Clicked index ${idx} at (${Math.round(rx)}, ${Math.round(ry)})`,
-    clickX: rx / wv.clientWidth * 100,
-    clickY: ry / wv.clientHeight * 100,
-  };
+  return clickBackendNode(wv, match.backendNodeId, match.sessionId, `${match.role} "${match.name}"`);
 }
 
 // Sequential sub-actions; aborts mid-batch if URL changes (indices/selectors go stale on navigation).
@@ -863,6 +891,12 @@ async function handleBrowserCommand(data: Record<string, any>) {
         break;
       case 'list_routes':
         result = await handleListRoutes(wv);
+        break;
+      case 'click_by_name':
+        result = await handleClickByName(wv, params);
+        if (result.clickX != null && result.clickY != null) {
+          setActivity(browser_id, { action: 'click_by_name', detail, coords: { xPercent: result.clickX, yPercent: result.clickY } });
+        }
         break;
       case 'replay_route':
         result = await handleReplayRoute(wv, params);
