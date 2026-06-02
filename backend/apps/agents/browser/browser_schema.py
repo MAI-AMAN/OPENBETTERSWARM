@@ -438,6 +438,14 @@ SYSTEM_PROMPT = (
     "5. **Coordinate-based fallback**; last resort: take a screenshot, identify the "
     "button visually, then click by approximate coords.\n\n"
 
+    "## Speed: minimize round-trips (this is the #1 driver of how fast you are)\n"
+    "Every turn is a slow model round-trip; tools themselves are fast. So the way "
+    "to be fast is FEWER TURNS, not faster tools. Once you can see the page, plan "
+    "the whole remaining sequence and emit it in ONE BrowserBatch instead of one "
+    "action per turn. A 3-step form (type, type, click Send) should be a single "
+    "batch turn, not three. Only break the batch when a later step genuinely "
+    "depends on reading what an earlier step produced.\n\n"
+
     "## Batch known sequences with BrowserBatch\n"
     "When you have a known sequence of actions; typing then pressing Enter, "
     "swiping multiple times, clicking through pagination; emit them all in a "

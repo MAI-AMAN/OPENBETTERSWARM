@@ -322,6 +322,17 @@ async def run_browser_agent(
                 + prior_note
             )
 
+    # Prompt-caching shapes built once: system as a single cached text block,
+    # and the last tool carrying the cache_control marker (Anthropic keys on the
+    # trailing marker, so one marker covers the whole tool array + system).
+    _cached_system = [{
+        "type": "text", "text": run_system_prompt,
+        "cache_control": {"type": "ephemeral"},
+    }]
+    _cached_tools = [dict(t) for t in BROWSER_TOOLS_SCHEMA]
+    if _cached_tools:
+        _cached_tools[-1] = {**_cached_tools[-1], "cache_control": {"type": "ephemeral"}}
+
     user_msg = Message(role="user", content=task)
     session.messages.append(user_msg)
     await ws_manager.send_to_session(session_id, "agent:message", {
@@ -429,8 +440,13 @@ async def run_browser_agent(
             response = await _cancellable(client.messages.create(
                 model=api_model,
                 max_tokens=4096,
-                system=run_system_prompt,
-                tools=BROWSER_TOOLS_SCHEMA,
+                # Cache the ~4k-token fixed prefix (system + tool schema) so it's
+                # reprocessed once, not on every turn: big TTFT + cost win on the
+                # first run, which is dominated by turns x per-turn prefill. The
+                # trailing cache_control marker is what Anthropic keys on; on
+                # non-Anthropic routes (9router) the marker is harmlessly ignored.
+                system=_cached_system,
+                tools=_cached_tools,
                 messages=messages,
             ))
             if response is None:
@@ -445,6 +461,13 @@ async def run_browser_agent(
             if hasattr(response, 'usage') and response.usage:
                 session.tokens["input"] = session.tokens.get("input", 0) + (response.usage.input_tokens or 0)
                 session.tokens["output"] = session.tokens.get("output", 0) + (response.usage.output_tokens or 0)
+                # Cache-read tokens prove the prompt cache is working (climbs
+                # after turn 1). Logged so the speed win is verifiable, not assumed.
+                _cr = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+                _cw = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+                if _cr or _cw:
+                    session.tokens["cache_read"] = session.tokens.get("cache_read", 0) + _cr
+                    logger.info(f"[browser-perf] turn {turn}: cache_read={_cr} cache_write={_cw} input={response.usage.input_tokens}")
 
             assistant_content = []
             text_parts = []
@@ -881,10 +904,18 @@ async def run_browser_agent(
         # the next identical task on this host runs via the no-LLM fast path.
         try:
             rec_host = browser_skills.host_of(last_seen_url)
+            _distilled = browser_skills.distill_steps(action_log)
+            logger.info(
+                f"[browser-skills] record attempt: host={rec_host!r} "
+                f"last_url={last_seen_url!r} action_tools={[a.get('tool') for a in action_log]} "
+                f"distilled={[s['tool'] for s in _distilled]}"
+            )
             if browser_skills.record_skill(rec_host, task, action_log):
                 logger.info(f"[browser-skills] learned skill for {rec_host} (future runs replay fast)")
-        except Exception:
-            pass
+            else:
+                logger.info(f"[browser-skills] NOT recorded (host empty or no robust steps)")
+        except Exception as e:
+            logger.warning(f"[browser-skills] record raised: {e}")
         agent_manager._sync_session_close(session)
         await ws_manager.send_to_session(session_id, "agent:status", {
             "session_id": session_id,

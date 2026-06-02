@@ -268,6 +268,24 @@ def test_replay_falls_back_to_full_agent_when_a_step_fails(monkeypatch):
     assert len(primary.calls) > 0, "fell back to the full LLM agent"
 
 
+def test_prompt_caching_markers_present(monkeypatch):
+    # The fixed system+tools prefix must carry cache_control so it's cached
+    # across turns (the first-run speed/cost win). Without the marker the
+    # ~4k-token prefix is reprocessed every turn.
+    BH._browser_history.clear(); BH._domain_notes.clear()
+    primary = FakeLLM([Resp([Blk("text", "done")], stop_reason="end_turn")])
+    aux = FakeAux()
+    _install(monkeypatch, primary, aux)
+    asyncio.run(BA.run_browser_agent(task="hi", browser_id="bz", model="sonnet"))
+    call = primary.calls[0]
+    sys = call["system"]
+    assert isinstance(sys, list) and sys[-1]["cache_control"]["type"] == "ephemeral"
+    tools = call["tools"]
+    assert tools[-1].get("cache_control", {}).get("type") == "ephemeral"
+    # exactly one cache marker on the tools array (Anthropic allows <=4; we use 1)
+    assert sum(1 for t in tools if t.get("cache_control")) == 1
+
+
 def test_prior_domain_hint_is_seeded_into_system_prompt(monkeypatch):
     BH._browser_history.clear(); BH._domain_notes.clear()
     BH.set_domain_note("google.com", "REMEMBERED: Share button is index 43; Tab into the dialog.")
@@ -279,7 +297,12 @@ def test_prior_domain_hint_is_seeded_into_system_prompt(monkeypatch):
         task="open the doc", browser_id="b2", model="sonnet", initial_url=DOC_URL,
     ))
     assert primary.calls, "LLM should have been called"
+    # system is a cached content-block list (prompt caching); flatten its text
     system = primary.calls[0]["system"]
-    assert "Notes from a previous visit" in system
-    assert "REMEMBERED: Share button is index 43" in system
+    system_text = system if isinstance(system, str) else " ".join(b.get("text", "") for b in system)
+    assert "Notes from a previous visit" in system_text
+    assert "REMEMBERED: Share button is index 43" in system_text
+    # the cached system block carries the cache_control marker
+    if isinstance(system, list):
+        assert system[-1].get("cache_control", {}).get("type") == "ephemeral"
     assert len(aux.calls) == 0  # no exhaustion, no adjudication on a clean run
