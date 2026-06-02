@@ -98,6 +98,12 @@ def _install(monkeypatch, primary, aux):
             return {"text": "Navigated", "url": params.get("url", DOC_URL)}
         if action == "screenshot":
             return {"text": "shot"}
+        if action == "detect_webmcp":
+            return {"text": "No WebMCP on this page.", "url": DOC_URL}
+        if action == "list_routes":
+            return {"text": "Replayable API routes:\nGET https://docs.google.com/api/docs (x3)", "url": DOC_URL}
+        if action == "replay_route":
+            return {"text": f"GET {params.get('url')} -> HTTP 200\n{{\"docs\": []}}", "status": 200, "url": DOC_URL}
         return {"text": "ok", "url": DOC_URL}
 
     async def _noop(*a, **k):
@@ -165,6 +171,32 @@ def test_aux_adjudication_fires_even_when_loop_detector_trips(monkeypatch):
     # ...and the aux adjudication STILL fired exactly once despite that
     assert len(aux.calls) == 1
     assert "Suggested next step" in all_msgs
+
+
+def test_tier1_and_tier2_tools_drive_through_the_real_loop(monkeypatch):
+    # The agent can call the new tier-1 (WebMCP detect) and tier-2 (list/replay)
+    # tools through the actual run_browser_agent loop, and replay threads its url.
+    BH._browser_history.clear(); BH._domain_notes.clear()
+    primary = FakeLLM([
+        Resp([_rp("check for a faster path"), _tu("BrowserDetectWebMCP")]),
+        Resp([_rp("list captured routes"), _tu("BrowserListRoutes")]),
+        Resp([_rp("replay the docs route"), _tu("BrowserReplayRoute", url="https://docs.google.com/api/docs")]),
+        Resp([Blk("text", "Got the data via the API.")], stop_reason="end_turn"),
+    ])
+    aux = FakeAux()
+    sent = _install(monkeypatch, primary, aux)
+
+    asyncio.run(BA.run_browser_agent(
+        task="Read my docs list", browser_id="b4", model="sonnet",
+    ))
+    actions = [c["action"] for c in sent]
+    assert "detect_webmcp" in actions
+    assert "list_routes" in actions
+    replay = next(c for c in sent if c["action"] == "replay_route")
+    assert replay["params"].get("url") == "https://docs.google.com/api/docs"
+    # the API response was fed back to the model on a later turn
+    all_msgs = json.dumps([c["messages"] for c in primary.calls])
+    assert "HTTP 200" in all_msgs
 
 
 def test_prior_domain_hint_is_seeded_into_system_prompt(monkeypatch):
