@@ -53,6 +53,7 @@ const fs = require('fs');
 const getPort = require('get-port');
 const http = require('http');
 const affiliateTracking = require('./affiliateTracking');
+const cdpRoutes = require('./cdp-routes');
 
 // Squirrel makes the APP create its own shortcuts: on --squirrel-install it must
 // call Update.exe --createShortcut and exit, else the user finds only Setup.exe
@@ -1877,6 +1878,7 @@ app.on('web-contents-created', (_event, contents) => {
       cdpQueueByWcId.delete(contents.id);
       cdpChildSessions.delete(contents.id);
       cdpAutoAttachWired.delete(contents.id);
+      cdpRoutesByWcId.delete(contents.id);
     });
 
     contents.on('render-process-gone', () => {
@@ -1884,6 +1886,7 @@ app.on('web-contents-created', (_event, contents) => {
       cdpQueueByWcId.delete(contents.id);
       cdpChildSessions.delete(contents.id);
       cdpAutoAttachWired.delete(contents.id);
+      cdpRoutesByWcId.delete(contents.id);
     });
 
     // WebAuthn/passkey shim. Injected on every dom-ready in the main world
@@ -2242,15 +2245,27 @@ const cdpQueueByWcId = new Map();  // wcId -> Promise (serialization tail)
 // attached child-frame session and where it sits in the frame tree.
 const cdpChildSessions = new Map();   // wcId -> Map<sessionId, {frameId, parentSessionId, url}>
 const cdpAutoAttachWired = new Set(); // wcIds whose 'message' listener is attached
+const cdpRoutesByWcId = new Map();    // wcId -> Map<routeKey, entry> (tier-2 shadow-API capture)
 
 function wireChildSessions(wc) {
   const wcId = wc.id;
   if (cdpAutoAttachWired.has(wcId)) return;
   cdpAutoAttachWired.add(wcId);
   cdpChildSessions.set(wcId, new Map());
+  cdpRoutesByWcId.set(wcId, new Map());
   wc.debugger.on('message', (_e, method, params, sessionId) => {
     const sessions = cdpChildSessions.get(wcId);
     if (!sessions) return;
+    if (method === 'Network.requestWillBeSent') {
+      // Tier-2 passive shadow-API capture: record the XHR/fetch endpoints the
+      // page fires (from root or any child session) so a later task can replay
+      // a safe one. Secrets are redacted inside cdp-routes.
+      const routes = cdpRoutesByWcId.get(wcId);
+      if (routes && params && params.request) {
+        cdpRoutes.recordRoute(routes, params.request, params.type);
+      }
+      return;
+    }
     if (method === 'Target.attachedToTarget') {
       const info = params.targetInfo || {};
       if (info.type !== 'iframe') return;
@@ -2260,10 +2275,11 @@ function wireChildSessions(wc) {
         parentSessionId: sessionId || null,
         url: info.url || '',
       });
-      // Enable perception domains and propagate auto-attach into nested OOPIF.
+      // Enable perception + network domains and propagate auto-attach into nested OOPIF.
       const sid = params.sessionId;
       wc.debugger.sendCommand('Accessibility.enable', {}, sid).catch(() => {});
       wc.debugger.sendCommand('DOM.enable', {}, sid).catch(() => {});
+      wc.debugger.sendCommand('Network.enable', {}, sid).catch(() => {});
       wc.debugger.sendCommand('Target.setAutoAttach',
         { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, sid).catch(() => {});
     } else if (method === 'Target.detachedFromTarget') {
@@ -2295,6 +2311,10 @@ async function ensureDebuggerAttached(wc) {
   try {
     await wc.debugger.sendCommand('Target.setAutoAttach',
       { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  } catch (_) {}
+  // Tier-2: record the page's own XHR/fetch endpoints as the agent drives it.
+  try {
+    await wc.debugger.sendCommand('Network.enable', {});
   } catch (_) {}
 }
 
@@ -2356,6 +2376,16 @@ ipcMain.handle('cdp-child-sessions-get', (_event, wcId) => {
   const m = cdpChildSessions.get(wcId);
   if (!m) return [];
   return [...m.entries()].map(([sessionId, info]) => ({ sessionId, ...info }));
+});
+
+// Tier-2: captured shadow-API routes for a webContents, newest-busiest first,
+// optionally filtered to an origin. Secrets were already redacted at capture.
+ipcMain.handle('cdp-routes-get', (_event, wcId, originFilter) => {
+  const m = cdpRoutesByWcId.get(wcId);
+  if (!m) return [];
+  let list = [...m.values()];
+  if (originFilter) list = list.filter((r) => r.template.startsWith(originFilter));
+  return list.sort((a, b) => b.hits - a.hits || b.lastSeen - a.lastSeen);
 });
 
 ipcMain.handle('connect-slack', async () => {
