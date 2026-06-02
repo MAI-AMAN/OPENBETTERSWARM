@@ -33,6 +33,7 @@ from backend.apps.agents.browser.browser_loop import (
     stagnation_exhausted,
 )
 from backend.apps.agents.browser.browser_validator import adjudicate_stuck
+from backend.apps.agents.browser import browser_metrics
 from backend.apps.agents.browser.browser_schema import (
     _ACTION_TOOLS_REQUIRING_REPORT,
     ACTION_MAP,
@@ -269,6 +270,7 @@ async def run_browser_agent(
     messages: list[dict] = list(prior_messages) + [{"role": "user", "content": task}]
     action_log: list[dict] = []
     final_screenshot: str | None = None
+    metrics_started_at = time.time()  # wall-clock start for per-task timing
 
     # Loop detection state; sliding window of recent state-mutating tool calls
     recent_tool_calls: list[tuple[str, str, str]] = []
@@ -713,6 +715,14 @@ async def run_browser_agent(
                                 {"type": "text", "text": f"\n\n💡 Suggested next step: {guidance}"}
                                 ]
 
+                _ok = "error" not in result
+                browser_metrics.record_tool(
+                    session_id, browser_id, turn, tu.name, elapsed_ms,
+                    ok=_ok, error=result.get("error", ""),
+                    is_loop=is_loop, stagnation_streak=stagnation_streak,
+                    result_len=len(str(result.get("text") or result.get("error") or "")),
+                )
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -748,6 +758,8 @@ async def run_browser_agent(
 
         if cancel_event.is_set():
             session.status = "stopped"
+            browser_metrics.record_task(session_id, browser_id, task, "stopped",
+                                        metrics_started_at, turn + 1, action_log, session.tokens)
             await ws_manager.send_to_session(session_id, "agent:status", {
                 "session_id": session_id,
                 "status": "stopped",
@@ -785,6 +797,8 @@ async def run_browser_agent(
         )
 
         session.status = "completed"
+        browser_metrics.record_task(session_id, browser_id, task, "completed",
+                                    metrics_started_at, turn + 1, action_log, session.tokens)
         agent_manager._sync_session_close(session)
         await ws_manager.send_to_session(session_id, "agent:status", {
             "session_id": session_id,
@@ -803,6 +817,9 @@ async def run_browser_agent(
     except Exception as e:
         logger.exception(f"Browser agent {session_id} error: {e}")
         session.status = "error"
+        browser_metrics.record_task(session_id, browser_id, task, "error",
+                                    metrics_started_at, locals().get("turn", -1) + 1,
+                                    action_log, session.tokens)
         error_msg = Message(role="system", content=f"Error: {str(e)}")
         session.messages.append(error_msg)
         await ws_manager.send_to_session(session_id, "agent:message", {
