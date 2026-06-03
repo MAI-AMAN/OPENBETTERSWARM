@@ -43,6 +43,7 @@ from backend.apps.agents.browser import browser_batch_replay
 from backend.apps.agents.browser import browser_metrics
 from backend.apps.agents.browser import browser_playbook
 from backend.apps.agents.browser import browser_skills
+from backend.apps.agents.browser import browser_wait
 from backend.apps.agents.browser.browser_schema import (
     _ACTION_TOOLS_REQUIRING_REPORT,
     ACTION_MAP,
@@ -952,9 +953,19 @@ async def run_browser_agent(
                 tool_input = tu.input
                 if tu.name == "BrowserListInteractives" and current_next_goal:
                     tool_input = {**tu.input, "goal": current_next_goal}
-                result = await _cancellable(execute_browser_tool(
-                    tu.name, tool_input, browser_id, tab_id,
-                ))
+                if tu.name == "BrowserWait":
+                    # Smart wait: return as soon as the page's network settles
+                    # instead of sleeping the full fixed duration (the audit's
+                    # 42%-of-time hog). Caps at the requested ms; never premature.
+                    async def _wait_exec(tool, params, bid, tid):
+                        return await _cancellable(execute_browser_tool(tool, params, bid, tid))
+                    result = await browser_wait.smart_wait(
+                        _wait_exec, browser_id, tab_id, tu.input.get("milliseconds"),
+                    )
+                else:
+                    result = await _cancellable(execute_browser_tool(
+                        tu.name, tool_input, browser_id, tab_id,
+                    ))
                 if result is None:
                     cancelled = True
                     break

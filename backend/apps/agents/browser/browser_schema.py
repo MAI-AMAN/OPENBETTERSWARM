@@ -269,9 +269,11 @@ BROWSER_TOOLS_SCHEMA = [
     {
         "name": "BrowserWait",
         "description": (
-            "Wait for a specified duration. Useful after navigation or actions that "
-            "trigger page loads, animations, or async content rendering. "
-            "Min 100ms, max 10000ms."
+            "Wait for the page to settle after navigation or an action that loads "
+            "async content. This is SMART: it returns as soon as the page's network "
+            "goes quiet, so the duration you give is just an upper bound, not a fixed "
+            "sleep. Pass a generous cap (e.g. 4000) without worrying about wasted "
+            "time; you usually get control back in a few hundred ms. Min 100, max 10000."
         ),
         "input_schema": {
             "type": "object",

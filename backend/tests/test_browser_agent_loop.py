@@ -90,6 +90,10 @@ def _install(monkeypatch, primary, aux):
 
     async def _send_browser_command(request_id, action, browser_id, params, tab_id=""):
         sent.append({"action": action, "params": params})
+        # smart-wait probes via evaluate; report 'settled' so BrowserWait returns
+        # fast in tests instead of riding the full cap.
+        if action == "evaluate" and "getEntriesByType('resource')" in str(params.get("expression", "")):
+            return {"text": '{"ready": true, "quiet": 9999}', "url": DOC_URL}
         if action == "list_interactives":
             return {"text": '1 interactive elements:\n[1]<button "Submit">', "url": DOC_URL}
         if action == "click_index":
@@ -896,6 +900,26 @@ def test_batch_replay_uses_the_fast_network_route_per_value(monkeypatch):
     asyncio.run(BA.run_browser_agent(task="fetch two", browser_id="b1", model="sonnet", initial_url=DOC_URL))
     routes = [c["params"]["url"] for c in sent if c["action"] == "replay_route"]
     assert any("u=ada" in u for u in routes) and any("u=grace" in u for u in routes)
+
+
+def test_browser_wait_routes_through_smart_wait_and_returns_early(monkeypatch):
+    # BrowserWait must no longer be a blind sleep: it probes the page (evaluate)
+    # and returns as soon as it's settled, well under the requested cap.
+    BH._browser_history.clear()
+    primary = FakeLLM([
+        Resp([_rp("let it settle"), _tu("BrowserWait", milliseconds=8000)]),
+        Resp([Blk("text", "Settled, moving on.")], stop_reason="end_turn"),
+    ])
+    sent = _install(monkeypatch, primary, FakeAux())
+    import time as _t
+    t0 = _t.time()
+    asyncio.run(BA.run_browser_agent(task="wait then act", browser_id="b1", model="sonnet", initial_url=DOC_URL))
+    elapsed = _t.time() - t0
+    # it probed via evaluate (smart), not a blind 'wait' action...
+    assert any(c["action"] == "evaluate" and "getEntriesByType" in str(c["params"].get("expression", "")) for c in sent)
+    assert not any(c["action"] == "wait" for c in sent), "no blind wait dispatched"
+    # ...and the whole run finished far faster than the 8s cap (it settled early)
+    assert elapsed < 4.0, "smart wait returned early instead of sleeping the full cap"
 
 
 def test_prior_domain_hint_is_seeded_into_system_prompt(monkeypatch):
