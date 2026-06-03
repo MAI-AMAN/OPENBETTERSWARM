@@ -762,9 +762,12 @@ async function handleListRoutes(wv: BrowserWebview): Promise<Record<string, any>
   if (!safe.length) {
     return { text: 'No replayable (GET) API routes captured for this site yet. Use the page first so they get recorded, then try again.', url: wv.getURL() };
   }
-  const lines = safe.slice(0, 40).map((r) => `${r.method} ${r.template} (x${r.hits})`);
+  const lines = safe.slice(0, 40).map((r) => `${r.method} ${r.example || r.template} (seen ${r.hits}x)`);
   return {
-    text: `Replayable API routes for this site (safe GETs, call with BrowserReplayRoute):\n${lines.join('\n')}`,
+    text: `Replayable API routes for this site (safe GETs). To READ the same kind of `
+      + `data for many inputs fast: swap the varying value in the URL with {{value}} `
+      + `and use a replay_route step in BrowserRepeatFlow (or call BrowserReplayRoute `
+      + `per item). Far cheaper than navigating + scraping each page:\n${lines.join('\n')}`,
     routes: safe.slice(0, 40),
     url: wv.getURL(),
   };

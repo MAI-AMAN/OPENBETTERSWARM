@@ -38,6 +38,34 @@ function redactHeaders(headers) {
   return out;
 }
 
+// A concrete EXAMPLE url (real values) so the agent can see the param shape and
+// template its own input in. The template alone (value-stripped) isn't composable
+// for multi-param endpoints. We redact token-shaped query VALUES so a session
+// token / api key in the query never lands in the agent's context. The user's own
+// search terms stay (the agent typed them; not secret). Path stays as-is.
+const SECRET_PARAM = /token|secret|sig|session|password|pwd|jwt|bearer|auth|access|refresh|csrf|api[-_]?key/i;
+const TOKEN_PREFIX = /^(sk-|ghp_|gho_|pk_|xox[bap]-|AIza|eyJ|Bearer )/;
+
+function looksSecretValue(v) {
+  if (!v) return false;
+  if (TOKEN_PREFIX.test(v)) return true;
+  return v.length >= 20 && /[A-Za-z]/.test(v) && /[0-9]/.test(v) && !/\s/.test(v);
+}
+
+function redactExampleUrl(raw) {
+  try {
+    const u = new URL(raw);
+    for (const [k, v] of [...u.searchParams.entries()]) {
+      if (SECRET_PARAM.test(k) || looksSecretValue(v)) {
+        u.searchParams.set(k, '<redacted>');
+      }
+    }
+    return u.origin + u.pathname + (u.search || '');
+  } catch {
+    return raw;
+  }
+}
+
 // Keep the JSON body's key skeleton with value TYPES, never values.
 function bodyShape(postData) {
   if (!postData) return null;
@@ -73,6 +101,7 @@ function makeRouteEntry(request, resourceType) {
   return {
     method,
     template,
+    example: redactExampleUrl(request.url),
     resourceType,
     headers: redactHeaders(request.headers),
     bodyShape: bodyShape(request.postData),
@@ -109,6 +138,8 @@ function recordRoute(routesMap, request, resourceType, now = Date.now()) {
 
 module.exports = {
   templateUrl,
+  redactExampleUrl,
+  looksSecretValue,
   redactHeaders,
   bodyShape,
   isSafeMethod,

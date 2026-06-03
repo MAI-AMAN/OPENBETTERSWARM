@@ -97,3 +97,42 @@ test('recordRoute evicts least-recently-seen past the cap', () => {
   // the earliest few paths should have been evicted
   assert.ok(!m.has('GET https://x.com/p0/a'));
 });
+
+test('redactExampleUrl keeps normal search terms (agent typed them)', () => {
+  assert.equal(
+    R.redactExampleUrl('https://x.com/api/search?q=design+engineer&page=2'),
+    'https://x.com/api/search?q=design+engineer&page=2',
+  );
+});
+
+test('redactExampleUrl redacts token-shaped param VALUES', () => {
+  // sensitive param name
+  assert.equal(
+    R.redactExampleUrl('https://x.com/api/feed?access_token=abc123xyz&q=cats'),
+    'https://x.com/api/feed?access_token=%3Credacted%3E&q=cats',
+  );
+  // high-entropy value even under a benign key
+  assert.equal(
+    R.redactExampleUrl('https://x.com/api?sid=aB3xK9mQ2pL7wR4tY8nZ&q=hi'),
+    'https://x.com/api?sid=%3Credacted%3E&q=hi',
+  );
+  // known token prefix
+  assert.ok(
+    R.redactExampleUrl('https://x.com/api?key=sk-ant-api03-abc').includes('redacted'),
+  );
+});
+
+test('looksSecretValue: tokens yes, plain words no', () => {
+  assert.ok(R.looksSecretValue('eyJhbGciOiJIUzI1NiIsInR5cCI6'));
+  assert.ok(R.looksSecretValue('aB3xK9mQ2pL7wR4tY8nZ'));
+  assert.ok(!R.looksSecretValue('shoes'));
+  assert.ok(!R.looksSecretValue('design engineer'));
+  assert.ok(!R.looksSecretValue('2'));
+});
+
+test('makeRouteEntry carries a redacted example url', () => {
+  const e = R.makeRouteEntry({ method: 'GET', url: 'https://x.com/api/p?q=ada&token=secretAbc123Long', headers: {} }, 'XHR');
+  assert.ok(e.example.includes('q=ada'));
+  assert.ok(e.example.includes('redacted'));
+  assert.ok(!e.example.includes('secretAbc123Long'));
+});
