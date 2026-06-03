@@ -773,6 +773,8 @@ async def run_browser_agent(
                     cur_host = browser_skills.host_of(last_seen_url) or replay_host
                     if tu.name == "BrowserListSkills":
                         skills = browser_skills.list_skills(cur_host) if cur_host else []
+                        playbook = browser_playbook.get_playbook(cur_host) if cur_host else []
+                        parts = []
                         if skills:
                             _tag = {"trusted": "proven", "probation": "unproven", "quarantine": "disabled"}
                             def _fmt_skill(s):
@@ -780,10 +782,10 @@ async def run_browser_agent(
                                 if s.get("builds_on"):
                                     line += f", builds on {len(s['builds_on'])} other shortcut(s)"
                                 return line + ")"
-                            lines = "\n".join(_fmt_skill(s) for s in skills[:20])
-                            meta_text = f"Learned shortcuts for {cur_host}:\n{lines}"
-                        else:
-                            meta_text = f"No learned shortcuts for {cur_host or 'this site'} yet."
+                            parts.append(f"Learned shortcuts for {cur_host}:\n" + "\n".join(_fmt_skill(s) for s in skills[:20]))
+                        if playbook:
+                            parts.append(f"Strategy I've learned about {cur_host}:\n" + "\n".join(f"- {b}" for b in playbook))
+                        meta_text = "\n\n".join(parts) if parts else f"Nothing learned for {cur_host or 'this site'} yet."
                     else:
                         target = tu.input.get("task", "")
                         ok = browser_skills.deprecate_skill(cur_host, target) if cur_host else False

@@ -238,6 +238,32 @@ async def get_browser_agent_children(session_id: str):
     children = agent_manager.get_browser_agent_children(session_id)
     return {"sessions": children}
 
+@agents.router.get("/browser-memory")
+async def list_browser_memory():
+    """Everything the browser agent has learned, per site, so the user can see it
+    and clear it: tier-1 skills (replayable shortcuts) + tier-2 playbook (strategy
+    text). Read-only; pure introspection."""
+    from backend.apps.agents.browser import browser_playbook, browser_skills
+    sites: dict[str, dict] = {}
+    for entry in browser_playbook.list_hosts():
+        sites.setdefault(entry["host"], {"host": entry["host"], "skills": [], "strategy": []})
+        sites[entry["host"]]["strategy"] = entry["bullets"]
+        sites[entry["host"]]["updated_at"] = entry.get("updated_at", 0)
+    for host in list(sites.keys()):
+        sites[host]["skills"] = browser_skills.list_skills(host)
+    return {"sites": sorted(sites.values(), key=lambda s: -s.get("updated_at", 0))}
+
+
+@agents.router.delete("/browser-memory/{host}")
+async def forget_browser_memory(host: str):
+    """Clear what the browser agent learned about one site (strategy + skills); it
+    re-learns on the next successful run."""
+    from backend.apps.agents.browser import browser_playbook, browser_skills
+    forgot_strategy = browser_playbook.forget(host)
+    forgot_skills = browser_skills.forget_host(host)
+    return {"ok": True, "host": host, "forgot_strategy": forgot_strategy, "forgot_skills": forgot_skills}
+
+
 @agents.router.post("/sessions/{session_id}/resume")
 async def resume_session(session_id: str):
     try:

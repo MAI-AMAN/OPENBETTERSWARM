@@ -691,6 +691,28 @@ def deprecate_skill(host: str, task: str) -> bool:
     return removed
 
 
+def forget_host(host: str) -> int:
+    """Remove ALL learned skills for a host (memory + disk). For the user-facing
+    'forget this site' control. Returns how many were removed."""
+    if not host:
+        return 0
+    n = 0
+    for sig in list(_host_skills(host).keys()):
+        removed = _skills.pop(_key(host, sig), None) is not None
+        path = _skill_path(host, sig)
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                removed = True
+            except Exception:
+                pass
+        if removed:
+            n += 1
+    if n:
+        logger.info(f"[browser-skills] forgot all {n} skill(s) for {host}")
+    return n
+
+
 def clear(wipe_disk: bool = False) -> None:
     """Clear the in-memory cache. With wipe_disk, also remove persisted files
     in the current skills dir (used by tests for isolation)."""
