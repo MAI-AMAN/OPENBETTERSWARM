@@ -5,6 +5,7 @@ from backend.apps.agents.browser.browser_loop import (
     _STAGNATION_MAX,
     _looks_like_failure,
     advance_stagnation,
+    card_is_unavailable,
     completion_is_honest,
     is_unproductive,
     stagnation_exhausted,
@@ -151,3 +152,11 @@ def test_completion_honest_when_some_errors_but_an_action_landed():
     log = [_err("BrowserClick"), _err("BrowserClick"), _ok("BrowserClickIndex", "Clicked Submit")]
     honest, reason = completion_is_honest(log)
     assert honest
+
+
+def test_card_is_unavailable_only_for_unrecoverable_errors():
+    # a gone card is unrecoverable (fail fast); a missing selector is not (route around)
+    assert card_is_unavailable({"error": "Browser card 'b1' not found or not an Electron webview"})
+    assert card_is_unavailable({"error": "No dashboard is connected. Open the dashboard to use browser tools."})
+    assert not card_is_unavailable({"error": "Element not found: '.submit'"})
+    assert not card_is_unavailable({"text": "ok", "url": "http://x"})

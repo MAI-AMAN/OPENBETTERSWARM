@@ -199,6 +199,20 @@ _READ_TOOLS = {
 }
 
 
+# A card whose webview is gone is UNRECOVERABLE by the agent (it cannot resurrect
+# the card), unlike a missing selector it could route around. The frontend
+# returns these only AFTER a 2s re-register grace, so they mean the card is truly
+# gone (closed) or the dashboard was never open. Retrying just burns the turn
+# budget (the multi-minute spins we measured), so the caller fails fast instead.
+_CARD_GONE_MARKERS = ("not an electron webview", "no dashboard is connected")
+_CARD_GONE_LIMIT = 2  # consecutive misses before we give up (absorbs a transient)
+
+
+def card_is_unavailable(result: dict) -> bool:
+    err = str(result.get("error") or "").lower()
+    return any(m in err for m in _CARD_GONE_MARKERS)
+
+
 def completion_is_honest(action_log: list[dict]) -> tuple[bool, str]:
     """Reality-check a run the model declared done. Returns (honest, reason).
 

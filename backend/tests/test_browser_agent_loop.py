@@ -394,6 +394,41 @@ def test_ghost_completion_is_reported_as_error_not_completed(monkeypatch):
     assert SK.find_skill("docs.google.com", "Submit the form") is None
 
 
+def test_dead_browser_card_aborts_fast_without_spinning(monkeypatch):
+    # The measured waste: a sub-agent dispatched to a released card retried the
+    # dead webview for many turns. Now a gone card must abort fast (a couple of
+    # turns, not the whole budget) and report the precise reason.
+    import backend.apps.agents.browser.browser_skills as SK
+    SK.clear()
+    BH._browser_history.clear()
+    # the model would happily keep clicking for 8 turns if we let it
+    primary = FakeLLM(
+        [Resp([_rp("click"), _tu("BrowserClick", selector=f".s{i}")]) for i in range(8)]
+        + [Resp([Blk("text", "done")], stop_reason="end_turn")]
+    )
+    aux = FakeAux()
+    _install(monkeypatch, primary, aux)
+
+    async def _card_gone(request_id, action, browser_id, params, tab_id=""):
+        return {"error": f"Browser card '{browser_id}' not found or not an Electron webview"}
+    monkeypatch.setattr(BA.ws_manager, "send_browser_command", _card_gone, raising=False)
+    captured = {}
+    orig = BA.ws_manager.send_to_session
+
+    async def _cap(session_id, event, payload):
+        if event == "agent:status":
+            captured["status"] = payload.get("status")
+        return await orig(session_id, event, payload)
+    monkeypatch.setattr(BA.ws_manager, "send_to_session", _cap, raising=False)
+
+    r = asyncio.run(BA.run_browser_agent(
+        task="Click submit", browser_id="b1", model="sonnet", initial_url=DOC_URL,
+    ))
+    assert len(primary.calls) <= 3, "a dead card must fail fast, not spin the whole budget"
+    assert captured.get("status") == "error"
+    assert "no longer open" in r["summary"].lower()
+
+
 def test_perception_is_frontloaded_into_first_turn(monkeypatch):
     # With a known start URL, the agent should prefetch the element list + page
     # text and put them in the FIRST user message, so the model can act on turn 1

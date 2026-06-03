@@ -30,7 +30,9 @@ from backend.apps.agents.browser.browser_loop import (
     _LOOP_WINDOW_SIZE,
     _detect_loop,
     _hash_tool_call,
+    _CARD_GONE_LIMIT,
     advance_stagnation,
+    card_is_unavailable,
     completion_is_honest,
     stagnation_exhausted,
 )
@@ -320,6 +322,7 @@ async def run_browser_agent(
     # Loop detection state; sliding window of recent state-mutating tool calls
     recent_tool_calls: list[tuple[str, str, str]] = []
     loop_trigger_count = 0
+    card_gone_streak = 0  # consecutive "card is gone" results -> fail fast, don't spin
 
     # Stagnation state: busy-but-stuck detection (no URL change + failures
     # across a run of actions), distinct from the exact-repeat loop above.
@@ -836,6 +839,7 @@ async def run_browser_agent(
                 })
                 if result.get("url"):
                     last_seen_url = result["url"]
+                card_gone_streak = card_gone_streak + 1 if card_is_unavailable(result) else 0
 
                 if tu.name == "BrowserScreenshot" and result.get("image"):
                     final_screenshot = result["image"]
@@ -949,6 +953,15 @@ async def run_browser_agent(
                 )
                 break
 
+            # The card's webview is gone (closed / dashboard not open). The agent
+            # can't bring it back, so stop retrying and report it honestly below.
+            if card_gone_streak >= _CARD_GONE_LIMIT:
+                logger.warning(
+                    f"[browser-agent {session_id}] browser card {browser_id} is gone "
+                    f"({card_gone_streak} consecutive misses); aborting fast"
+                )
+                break
+
         if cancel_event.is_set():
             session.status = "stopped"
             browser_metrics.record_task(session_id, browser_id, task, "stopped",
@@ -991,8 +1004,12 @@ async def run_browser_agent(
 
         # Honesty gate: the model declaring done is not proof the goal happened.
         # If the run did no real work (zero actions, all actions errored, or only
-        # looked around), report the truth instead of a ghost "completed".
-        honest, dishonest_reason = completion_is_honest(action_log)
+        # looked around), report the truth instead of a ghost "completed". A gone
+        # card gets its own precise reason instead of the generic verdict.
+        if card_gone_streak >= _CARD_GONE_LIMIT:
+            honest, dishonest_reason = False, "the browser card is no longer open (it was closed or never opened)"
+        else:
+            honest, dishonest_reason = completion_is_honest(action_log)
         final_status = "completed" if honest else "error"
         if not honest:
             summary = f"I was not able to complete this task ({dishonest_reason})."
