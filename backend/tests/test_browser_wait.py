@@ -7,7 +7,9 @@ cap, (4) keeps waiting through a still-loading SPA, (5) survives a cancel or a
 mid-navigation probe error. Edge-case-complete on purpose.
 """
 
+import asyncio
 import json
+import time
 
 import pytest
 
@@ -51,6 +53,19 @@ class FakeExec:
         r = self.results[min(self.calls, len(self.results) - 1)]
         self.calls += 1
         return r
+
+
+class HangingExec:
+    """Simulates a wedged tab: every probe blocks far longer than the probe
+    timeout (like the underlying 30s command timeout on a hung page)."""
+    def __init__(self, block_s=5.0):
+        self.block_s = block_s
+        self.calls = 0
+
+    async def __call__(self, tool, params, bid, tid):
+        self.calls += 1
+        await asyncio.sleep(self.block_s)
+        return _probe(False, 0)
 
 
 @pytest.mark.asyncio
@@ -105,3 +120,35 @@ async def test_garbage_probe_text_does_not_crash():
     ex = FakeExec([{"text": "not json", "url": "u"}, _probe(True, 999)])
     out = await bw.smart_wait(ex, "b", "", 3000, poll_ms=15, floor_ms=15, quiet_window_ms=50)
     assert out["settled"] is True
+
+
+@pytest.mark.asyncio
+async def test_hung_tab_returns_fast_not_after_the_full_command_timeout():
+    # THE bug from the 20-min loop: a wedged tab made each 'wait' block ~30s.
+    # Now each probe is bounded, so after a couple of timeouts it returns hung,
+    # in a few seconds, NOT 30s+, regardless of how long the command would block.
+    ex = HangingExec(block_s=30.0)  # mimic the 30s command timeout
+    t0 = time.monotonic()
+    out = await bw.smart_wait(ex, "b", "", 8000, poll_ms=20, probe_timeout_s=0.3)
+    elapsed = time.monotonic() - t0
+    assert out["hung"] is True, "a non-responding tab must be flagged hung"
+    assert out.get("error") == "page unresponsive"
+    assert elapsed < 3.0, f"hung wait must return fast, took {elapsed:.1f}s"
+    # it bailed after the timeout threshold, not after burning the whole cap
+    assert ex.calls <= bw._MAX_PROBE_TIMEOUTS
+
+
+@pytest.mark.asyncio
+async def test_a_single_slow_probe_then_settle_is_not_flagged_hung():
+    # one slow probe (under the threshold count) shouldn't trip 'hung'; it recovers
+    class _OneSlow:
+        def __init__(self): self.n = 0
+        async def __call__(self, *a):
+            self.n += 1
+            if self.n == 1:
+                await asyncio.sleep(0.5)   # one slow poll
+                return _probe(False, 0)
+            return _probe(True, 999)
+    out = await bw.smart_wait(_OneSlow(), "b", "", 5000, poll_ms=10, floor_ms=10,
+                              quiet_window_ms=50, probe_timeout_s=0.2)
+    assert out["hung"] is False and out["settled"] is True

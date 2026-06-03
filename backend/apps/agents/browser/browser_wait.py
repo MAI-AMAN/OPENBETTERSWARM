@@ -23,7 +23,10 @@ logic is a pure function we can hammer with tests.
 
 import asyncio
 import json
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 # One probe: is the document complete, and how long since the last network
 # resource finished/started? Returns a JSON string (BrowserEvaluate hands back
@@ -38,6 +41,14 @@ PROBE_JS = (
 _QUIET_WINDOW_MS = 400   # network must be silent this long to count as settled
 _FLOOR_MS = 250          # never return before this (a momentary gap isn't 'settled')
 _POLL_MS = 150
+# A healthy probe is tens of ms. A busy-but-fine SPA (heavy main-thread work mid-
+# hydration) can occasionally block longer, so a slow probe is NOT proof of death,
+# it's just a reason to stop THIS wait early instead of inheriting the 30s command
+# timeout. We bound each probe at this, and after a few consecutive non-responses
+# we surface hung=True as a SIGNAL (the loop folds it into a cross-command streak
+# and only then acts), never as a unilateral abort from a single wait.
+_PROBE_TIMEOUT_S = 2.5
+_MAX_PROBE_TIMEOUTS = 3
 
 
 def decide_stop(ready, quiet_ms, elapsed_ms,
@@ -51,14 +62,19 @@ def decide_stop(ready, quiet_ms, elapsed_ms,
 
 async def smart_wait(execute_fn, browser_id, tab_id, max_ms, *,
                      poll_ms=_POLL_MS, floor_ms=_FLOOR_MS,
-                     quiet_window_ms=_QUIET_WINDOW_MS) -> dict:
+                     quiet_window_ms=_QUIET_WINDOW_MS,
+                     probe_timeout_s=_PROBE_TIMEOUT_S) -> dict:
     """Wait up to `max_ms`, returning early once the page settles. `execute_fn`
     is an async (tool, params, browser_id, tab_id) -> result|None (None = the run
-    was cancelled). Never raises into the caller."""
+    was cancelled). Never raises into the caller. If the page stops responding to
+    probes (hung tab), returns fast with hung=True so the caller can bail instead
+    of blocking on the underlying long command timeout."""
     max_ms = max(100, min(int(max_ms or 1000), 10000))
     start = time.monotonic()
     settled = False
+    hung = False
     last_url = ""
+    probe_timeouts = 0
 
     def _elapsed():
         return (time.monotonic() - start) * 1000
@@ -67,7 +83,25 @@ async def smart_wait(execute_fn, browser_id, tab_id, max_ms, *,
         await asyncio.sleep(min(poll_ms, max(0, max_ms - _elapsed())) / 1000)
         if _elapsed() >= max_ms:
             break
-        res = await execute_fn("BrowserEvaluate", {"expression": PROBE_JS}, browser_id, tab_id)
+        # Bound each probe so a wedged tab can't make us inherit the 30s command
+        # timeout. A timeout is a not-responding signal (not a verdict): count
+        # consecutive ones and surface hung only after the threshold; any non-
+        # timeout error is a different problem, treated as 'keep waiting'.
+        try:
+            res = await asyncio.wait_for(
+                execute_fn("BrowserEvaluate", {"expression": PROBE_JS}, browser_id, tab_id),
+                timeout=probe_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            probe_timeouts += 1
+            if probe_timeouts >= _MAX_PROBE_TIMEOUTS:
+                hung = True
+                break
+            continue
+        except Exception as e:
+            logger.debug(f"[smart-wait] probe error (not a timeout): {e}")
+            continue
+        probe_timeouts = 0     # a response resets the streak (busy != dead)
         if res is None:        # cancelled mid-wait
             break
         last_url = res.get("url") or last_url
@@ -83,7 +117,11 @@ async def smart_wait(execute_fn, browser_id, tab_id, max_ms, *,
             break
 
     waited = round(_elapsed())
-    text = f"Waited {waited}ms ({'page settled' if settled else 'reached cap'})."
+    state = "page settled" if settled else ("page not responding" if hung else "reached cap")
+    text = f"Waited {waited}ms ({state})."
+    if hung:
+        text += " The page or tab appears unresponsive."
     if last_url:
         text += f" Current URL: {last_url}"
-    return {"text": text, "url": last_url, "settled": settled, "waited_ms": waited}
+    return {"text": text, "url": last_url, "settled": settled, "hung": hung,
+            "waited_ms": waited, **({"error": "page unresponsive"} if hung else {})}
