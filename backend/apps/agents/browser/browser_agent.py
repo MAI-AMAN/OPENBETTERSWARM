@@ -398,6 +398,28 @@ async def run_browser_agent(
             return None
         return task.result()
 
+    # Skill key: prefer the USER's original request over the orchestrator's
+    # reformulation. The reformulation varies run-to-run ("click the search box"
+    # vs "find the search box") and that variance silently breaks exact-key
+    # replay (measured: two issuances of one request produced two skills). The
+    # user's words are stable across repeats. Guard: if the message carries
+    # multiple quoted values, several same-host sub-tasks could collide on one
+    # key, so fall back to the (differentiated) delegated task; the verify gate
+    # backs this up if a key is ever too loose.
+    skill_key_task = task
+    if parent_session_id:
+        try:
+            _psess = agent_manager.get_session(parent_session_id)
+            if _psess:
+                for _m in reversed(_psess.messages):
+                    if _m.role == "user" and isinstance(_m.content, str) and _m.content.strip():
+                        _orig = _m.content.strip()
+                        if len(browser_skills.template_task(_orig)[1]) <= 1:
+                            skill_key_task = _orig
+                        break
+        except Exception:
+            pass
+
     # --- Fast path: replay a previously-learned skill with NO LLM round-trips.
     # This is what gets a REPEAT task from ~50s (full agent loop) down to ~1s,
     # i.e. faster than a human. Robust by construction: clicks re-resolve by
@@ -410,11 +432,11 @@ async def run_browser_agent(
         m = re.search(r"https?://\S+", task)
         if m:
             replay_host = browser_skills.host_of(m.group(0))
-    skill = browser_skills.find_skill(replay_host, task) if replay_host else None
+    skill = browser_skills.find_skill(replay_host, skill_key_task) if replay_host else None
     # Fill any parameter slots from THIS task's quoted values (so one learned
     # skill serves "do the same thing with a different input"). If a slot can't
     # be filled, concrete_steps is None and we run the full agent instead.
-    concrete_steps = browser_skills.rehydrate(skill, task) if skill else None
+    concrete_steps = browser_skills.rehydrate(skill, skill_key_task) if skill else None
     if skill and not concrete_steps:
         logger.info(f"[browser-skills] skill matched on {replay_host} but slots unfillable from task; running full agent")
         skill = None
@@ -452,11 +474,11 @@ async def run_browser_agent(
             if res.get("url"):
                 last_seen_url = res["url"]
         if replay_ok and replay_log:
-            browser_skills.mark_replay_succeeded(replay_host, task)
+            browser_skills.mark_replay_succeeded(replay_host, skill_key_task)
             summary = browser_metrics.record_task(
                 session_id, browser_id, task, "completed", metrics_started_at,
                 0, replay_log, session.tokens,
-                path="replay", task_sig=browser_skills._sig(task),
+                path="replay", task_sig=browser_skills._sig(skill_key_task),
             )
             logger.info(f"[browser-skills] REPLAY SUCCEEDED in {summary['total_ms']}ms with 0 LLM calls")
             try:
@@ -482,7 +504,7 @@ async def run_browser_agent(
         # again -> pure-LLM baseline), a proven one tolerates a transient miss.
         # The full agent below then re-records edit-aware (new steps -> new rev).
         if not cancel_event.is_set():
-            verdict = browser_skills.mark_replay_failed(replay_host, task)
+            verdict = browser_skills.mark_replay_failed(replay_host, skill_key_task)
             logger.info(f"[browser-skills] replay fell back to full agent (trust verdict: {verdict})")
 
     text_parts = []  # initialized before loop so post-loop summary (line ~1294) has a default
@@ -1022,7 +1044,7 @@ async def run_browser_agent(
         browser_metrics.record_task(session_id, browser_id, task, final_status,
                                     metrics_started_at, turn + 1, action_log, session.tokens,
                                     path="llm_fallback" if replay_attempted else "llm",
-                                    task_sig=browser_skills._sig(task))
+                                    task_sig=browser_skills._sig(skill_key_task))
         # Learn this task ONLY from a genuinely successful run: distill the action
         # sequence into a replayable skill. A dishonest "completion" must never be
         # recorded, or we'd persist a broken skill that ghosts on every replay.
@@ -1035,7 +1057,7 @@ async def run_browser_agent(
                     f"last_url={last_seen_url!r} action_tools={[a.get('tool') for a in action_log]} "
                     f"distilled={[s['tool'] for s in _distilled]}"
                 )
-                if browser_skills.record_skill(rec_host, task, action_log):
+                if browser_skills.record_skill(rec_host, skill_key_task, action_log):
                     logger.info(f"[browser-skills] learned skill for {rec_host} (future runs replay fast)")
                 else:
                     logger.info(f"[browser-skills] NOT recorded (host empty or no robust steps)")

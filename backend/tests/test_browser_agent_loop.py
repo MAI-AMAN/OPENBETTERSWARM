@@ -295,6 +295,81 @@ def test_replay_resolves_host_from_live_page_when_no_initial_url(monkeypatch):
     assert any(c["action"] == "click_by_name" for c in sent)
 
 
+def test_skill_keys_on_parent_user_message_so_reformulations_share_a_skill(monkeypatch):
+    # The measured real-flow blocker: the orchestrator reformulates the same user
+    # request differently each run ("click the search box" vs "find the search
+    # box"), so exact-key replay never hits. Keying on the parent's STABLE user
+    # message instead lets two different reformulations share one skill and replay.
+    import backend.apps.agents.browser.browser_skills as SK
+    import backend.apps.agents.agent_manager as am_mod
+    SK.clear()
+    BH._browser_history.clear()
+
+    class _Msg:
+        def __init__(self, role, content):
+            self.role = role; self.content = content
+
+    class _Parent:
+        messages = [_Msg("user", 'search Wikipedia for "Ada Lovelace"')]
+    monkeypatch.setattr(am_mod.agent_manager, "get_session", lambda sid: _Parent(), raising=False)
+
+    # Run 1: ONE reformulation of the request -> learns a skill keyed on the
+    # parent's user message (not this delegated wording).
+    primary1 = FakeLLM([
+        Resp([_rp("click submit"), _tu("BrowserListInteractives")]),
+        Resp([_rp("click it"), _tu("BrowserClickIndex", index=1)]),
+        Resp([Blk("text", "Done.")], stop_reason="end_turn"),
+    ])
+    _install(monkeypatch, primary1, FakeAux())
+    asyncio.run(BA.run_browser_agent(
+        task="Go to wikipedia, click the search box, type Ada Lovelace, then submit",
+        browser_id="b1", model="sonnet", initial_url=DOC_URL, parent_session_id="p1",
+    ))
+    assert SK.find_skill("docs.google.com", 'search Wikipedia for "Ada Lovelace"') is not None, \
+        "skill must be keyed on the stable parent message, not the delegated reformulation"
+
+    # Run 2: a DIFFERENT reformulation, same parent intent -> must REPLAY (the
+    # exact thing that failed live, now fixed).
+    primary2 = FakeLLM([Resp([Blk("text", "should not be needed")], stop_reason="end_turn")])
+    sent = _install(monkeypatch, primary2, FakeAux())
+    r = asyncio.run(BA.run_browser_agent(
+        task="Navigate to wikipedia, find the search field, and submit Ada Lovelace",
+        browser_id="b1", model="sonnet", initial_url=DOC_URL, parent_session_id="p1",
+    ))
+    assert r.get("replayed") is True, "different reformulation of the same request must replay"
+    assert len(primary2.calls) == 0, "replay must make zero LLM calls"
+
+
+def test_skill_key_falls_back_to_delegated_task_on_multi_quote_message(monkeypatch):
+    # Guard against same-host collisions: a user message with several quoted
+    # values could spawn several same-host sub-tasks that must NOT share one key.
+    import backend.apps.agents.browser.browser_skills as SK
+    import backend.apps.agents.agent_manager as am_mod
+    SK.clear()
+    BH._browser_history.clear()
+
+    class _Msg:
+        def __init__(self, role, content):
+            self.role = role; self.content = content
+
+    class _Parent:
+        messages = [_Msg("user", 'search Wikipedia for "Ada Lovelace" and also "Grace Hopper"')]
+    monkeypatch.setattr(am_mod.agent_manager, "get_session", lambda sid: _Parent(), raising=False)
+
+    primary = FakeLLM([
+        Resp([_rp("go"), _tu("BrowserClickIndex", index=1)]),
+        Resp([Blk("text", "Done.")], stop_reason="end_turn"),
+    ])
+    _install(monkeypatch, primary, FakeAux())
+    asyncio.run(BA.run_browser_agent(
+        task="search wikipedia for Ada Lovelace", browser_id="b1", model="sonnet",
+        initial_url=DOC_URL, parent_session_id="p1",
+    ))
+    # the multi-quote message is NOT used as the key; the delegated task is
+    assert SK.find_skill("docs.google.com", 'search Wikipedia for "Ada Lovelace" and also "Grace Hopper"') is None
+    assert SK.find_skill("docs.google.com", "search wikipedia for Ada Lovelace") is not None
+
+
 def test_replay_success_promotes_skill_to_trusted_through_the_loop(monkeypatch):
     # The verify gate, end to end: run 1 learns a PROBATION skill; run 2 replays
     # it successfully, which must PROMOTE it to trusted (proven by a real replay).
