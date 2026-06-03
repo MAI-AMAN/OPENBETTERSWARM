@@ -127,6 +127,17 @@ def _build_browser_context(dashboard_id: str | None, selected_browser_ids: list[
         "",
         "You do NOT have direct access to low-level browser tools (click, type, screenshot, etc.). "
         "Instead, describe what you want accomplished and the browser agent will handle the details.",
+        "",
+        "**Same flow for many items? Give ONE agent the whole list, don't split it.** "
+        "When a task repeats the SAME steps for a list of inputs (read these 10 profiles, "
+        "look up these 6 names, open each of these links), delegate it to a SINGLE "
+        "browser agent with the FULL list in one task, e.g. CreateBrowserAgent(\"Look up "
+        "the first sentence of the Wikipedia article for each of: A, B, C, D. Do the first "
+        "one normally, then use BrowserRepeatFlow for the rest\"). The browser agent has a "
+        "BrowserRepeatFlow tool that runs the repeated flow for all the inputs in one shot "
+        "(no re-analyzing each page), and hands back the data per item. This is far cheaper "
+        "and faster than spawning one agent per item with BrowserAgents, use parallel "
+        "BrowserAgents only for genuinely DIFFERENT tasks, not for the same flow repeated.",
     ]
 
     if browser_cards and selected_browser_ids:
