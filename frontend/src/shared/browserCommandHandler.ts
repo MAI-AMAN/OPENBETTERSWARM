@@ -2,6 +2,7 @@ import { getWebview, type BrowserWebview } from './browserRegistry';
 import { dashboardWs } from './ws/WebSocketManager';
 import { resolveInput } from './resolveUrl';
 import { rankAndCapInteractives, type RankItem } from './interactiveRanking';
+import { shouldStopWaiting, SETTLE_FLOOR_MS, SETTLE_POLL_MS, SETTLE_PROBE_JS } from './browserSettle';
 
 let initialized = false;
 
@@ -18,7 +19,15 @@ type ActivityListener = (browserId: string, activity: BrowserActivity | null) =>
 const activityMap = new Map<string, BrowserActivity>();
 const listeners = new Set<ActivityListener>();
 
+// A webview keeps churning for a beat after an action lands; capturing it into the
+// dashboard snapshot during that churn is what crashes the renderer (SharedImage
+// 'non-existent mailbox' -> V8 ToLocalChecked), so we hold "busy" this long past
+// the last command before letting the thumbnail capture run again.
+const BUSY_COOLDOWN_MS = 1500;
+let lastActivityAt = 0;
+
 function setActivity(browserId: string, activity: BrowserActivity | null) {
+  lastActivityAt = Date.now();
   if (activity) {
     activityMap.set(browserId, activity);
   } else {
@@ -29,6 +38,14 @@ function setActivity(browserId: string, activity: BrowserActivity | null) {
 
 export function getActivity(browserId: string): BrowserActivity | null {
   return activityMap.get(browserId) ?? null;
+}
+
+// True while an agent is actively driving any browser webview (a command is in
+// flight, or one finished within the cooldown). The dashboard thumbnail capture
+// checks this and skips rather than screenshot a live, churning webview.
+export function isAnyBrowserBusy(): boolean {
+  if (activityMap.size > 0) return true;
+  return Date.now() - lastActivityAt < BUSY_COOLDOWN_MS;
 }
 
 export function subscribeActivity(fn: ActivityListener): () => void {
@@ -67,23 +84,13 @@ async function handleScreenshot(wv: BrowserWebview): Promise<Record<string, any>
     try {
       const nativeImage = await wv.capturePage();
       if (!nativeImage.isEmpty()) {
-        // Send a downscaled JPEG, not a full-res PNG: on real pages JPEG cuts the
-        // wire/upload bytes ~10x (the model reads images by dimensions, so this is
-        // a network + memory win), and capping near 1280 actual px keeps text
-        // legible while trimming tokens a little. Native ops, sub-10ms.
-        // Electron-42 retina gotchas, verified empirically: toJPEG() on a raw
-        // scaleFactor-2 capture returns an EMPTY image, and resize({width}) emits
-        // `width` ACTUAL pixels at scaleFactor 1, EXCEPT resizing to the source's
-        // own logical width is a no-op that leaves it retina (and unencodable). So
-        // we ALWAYS resize to a distinct width to force a clean scaleFactor-1 image.
-        const TARGET_W = 1280;
-        const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-        const { width: dipW } = nativeImage.getSize();
-        const backingW = Math.round(dipW * dpr);
-        let target = Math.min(TARGET_W, backingW);
-        if (target === dipW) target = Math.max(1, target - 1); // dodge the retina no-op
-        const base64 = nativeImage.resize({ width: target, quality: 'good' }).toJPEG(72).toString('base64');
-        return { image: base64, image_mime: 'image/jpeg', url: wv.getURL(), title: wv.getTitle() };
+        // Stable PNG capture. The resize()+toJPEG() variant was reverted: it's the
+        // prime suspect for the renderer "V8 Empty MaybeLocal" crash, NativeImage's
+        // JPEG codec returns an empty image on some retina captures, which is the
+        // shape of that native fault. A stable app beats a faster screenshot.
+        const dataUrl = nativeImage.toDataURL();
+        const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+        return { image: base64, url: wv.getURL(), title: wv.getTitle() };
       }
       lastErr = new Error('capturePage returned an empty image (frame not painted yet)');
     } catch (err: any) {
@@ -498,7 +505,7 @@ const MAX_BATCH_ACTIONS = 5;
 
 type SubActionType =
   | 'click_index' | 'press_key' | 'type' | 'wait'
-  | 'scroll' | 'navigate' | 'click';
+  | 'scroll' | 'navigate' | 'click' | 'list_interactives';
 
 const BATCH_DISPATCH: Record<SubActionType, (wv: BrowserWebview, p: Record<string, any>) => Promise<Record<string, any>>> = {
   click_index: handleClickIndex,
@@ -508,6 +515,8 @@ const BATCH_DISPATCH: Record<SubActionType, (wv: BrowserWebview, p: Record<strin
   scroll: handleScroll,
   navigate: handleNavigate,
   click: handleClick,
+  // Allowed as the LAST sub-action so a click->wait->read folds into one turn.
+  list_interactives: handleListInteractives,
 };
 
 async function handleBatch(wv: BrowserWebview, params: Record<string, any>): Promise<Record<string, any>> {
@@ -643,9 +652,28 @@ async function handleScroll(wv: BrowserWebview, params: Record<string, any>): Pr
 
 async function handleWait(wv: BrowserWebview, params: Record<string, any>): Promise<Record<string, any>> {
   const ms = Math.min(Math.max((params.milliseconds as number) || 1000, 100), 10000);
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  const start = Date.now();
+  let settled = false;
+  let probeErrors = 0;
+  while (Date.now() - start < ms) {
+    const remaining = ms - (Date.now() - start);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(SETTLE_POLL_MS, Math.max(0, remaining))));
+    const elapsed = Date.now() - start;
+    if (elapsed >= ms) break;
+    if (elapsed < SETTLE_FLOOR_MS) continue;
+    try {
+      const probe = JSON.parse(await wv.executeJavaScript(SETTLE_PROBE_JS));
+      probeErrors = 0;
+      if (shouldStopWaiting(probe.ready, probe.quiet || 0, elapsed)) { settled = true; break; }
+    } catch {
+      // Mid-navigation pages aren't evaluable yet; a few misses is normal, but a
+      // wedged tab shouldn't make us burn the whole cap, so bail after a short streak.
+      if (++probeErrors >= 3) break;
+    }
+  }
+  const waited = Date.now() - start;
   return {
-    text: `Waited ${ms}ms. Current URL: ${wv.getURL()}`,
+    text: `Waited ${waited}ms (${settled ? 'page settled' : 'reached cap'}). Current URL: ${wv.getURL()}`,
     url: wv.getURL(),
     title: wv.getTitle(),
   };

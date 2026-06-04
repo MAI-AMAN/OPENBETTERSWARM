@@ -214,10 +214,14 @@ BROWSER_TOOLS_SCHEMA = [
             "- click: { selector: str }\n"
             "- scroll: { direction?: 'up'|'down', amount?: int }\n"
             "- wait: { milliseconds?: int }\n"
-            "- navigate: { url: str }\n\n"
+            "- navigate: { url: str }\n"
+            "- list_interactives: { } (read the page; ONLY valid as the LAST sub-action)\n\n"
+            "End a batch with list_interactives to fold a click -> wait -> read into "
+            "ONE turn: e.g. click a button, wait for it to settle, then read the "
+            "result, all without a second round-trip.\n"
             "Example: { actions: [{type: 'click_index', params: {index: 1}}, "
-            "{type: 'wait', params: {milliseconds: 500}}, "
-            "{type: 'press_key', params: {key: 'ArrowRight'}}] }"
+            "{type: 'wait', params: {milliseconds: 4000}}, "
+            "{type: 'list_interactives', params: {}}] }"
         ),
         "input_schema": {
             "type": "object",
@@ -230,7 +234,7 @@ BROWSER_TOOLS_SCHEMA = [
                         "properties": {
                             "type": {
                                 "type": "string",
-                                "enum": ["click_index", "press_key", "type", "wait", "scroll", "navigate", "click"],
+                                "enum": ["click_index", "press_key", "type", "wait", "scroll", "navigate", "click", "list_interactives"],
                             },
                             "params": {"type": "object"},
                         },
@@ -523,8 +527,11 @@ SYSTEM_PROMPT = (
     "to be fast is FEWER TURNS, not faster tools. Once you can see the page, plan "
     "the whole remaining sequence and emit it in ONE BrowserBatch instead of one "
     "action per turn. A 3-step form (type, type, click Send) should be a single "
-    "batch turn, not three. Only break the batch when a later step genuinely "
-    "depends on reading what an earlier step produced.\n\n"
+    "batch turn, not three. And when you DO need to read after acting, put "
+    "list_interactives as the batch's LAST sub-action (click -> wait -> "
+    "list_interactives) so the click, the settle, and the read are one turn "
+    "instead of three. Only truly break the batch when a step needs to read "
+    "what an EARLIER step produced (a mid-sequence read, not a final one).\n\n"
 
     "## Batch known sequences with BrowserBatch\n"
     "When you have a known sequence of actions; typing then pressing Enter, "
@@ -535,8 +542,9 @@ SYSTEM_PROMPT = (
     "Use BrowserBatch when:\n"
     "- You're doing the same action repeatedly (5 swipes, 3 scrolls)\n"
     "- You have a deterministic flow (type query → press Enter → click first result)\n"
+    "- You act then need to see the result (click → wait → list_interactives as the last step)\n"
     "Don't use BrowserBatch when:\n"
-    "- You need to read the page state between actions\n"
+    "- You need to read the page state BETWEEN actions to decide the next one (a final read is fine)\n"
     "- You're uncertain about what comes next\n"
     "- An action might trigger an unexpected popup or navigation\n\n"
 
