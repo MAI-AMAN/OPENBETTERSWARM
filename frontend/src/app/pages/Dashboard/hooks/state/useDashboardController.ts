@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { useElementSelection } from '@/app/components/editor/ElementSelectionContext';
 import { useCanvasControls } from '../interaction/useCanvasControls';
@@ -59,6 +59,14 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     spawnOriginsRef, measuredHeightsRef, measuredHeightsTick, handleMeasuredHeight,
     revealSpawnedRef, hasFittedRef, restoredExpandedRef,
   } = useDashboardUiState(selection, cards);
+
+  // Nudge the chat button while the canvas is empty; the first click dismisses it for this visit.
+  const bounceDismissedRef = useRef(false);
+  const canvasEmpty = layoutInitialized && sessionList.length === 0
+    && Object.keys(viewCards).length === 0 && Object.keys(browserCards).length === 0;
+  useEffect(() => {
+    setNewAgentBounce(canvasEmpty && !bounceDismissedRef.current);
+  }, [canvasEmpty, setNewAgentBounce]);
 
   const canvasStateRef = useRef({ panX: canvas.panX, panY: canvas.panY, zoom: canvas.zoom });
   canvasStateRef.current = { panX: canvas.panX, panY: canvas.panY, zoom: canvas.zoom };
@@ -265,7 +273,10 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     onHistoryResume: handleHistoryResume,
     onAddBrowser: handleAddBrowser,
     onAddNote: handleAddNote,
-    onNewAgentBounceEnd: () => setNewAgentBounce(false),
+    onNewAgentBounceEnd: () => {
+      bounceDismissedRef.current = true;
+      setNewAgentBounce(false);
+    },
     onFitToView: handleFitToView,
     onTidy: handleTidy,
     onSearchPaletteClose: () => setSearchPaletteOpen(false),

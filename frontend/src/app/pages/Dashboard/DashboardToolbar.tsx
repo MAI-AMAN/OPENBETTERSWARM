@@ -26,6 +26,14 @@ function ChatBubbleTeardrop(props: { sx?: { fontSize?: number } }) {
     </svg>
   );
 }
+// Collapsed-row buttons hop up one after another when the toolbar appears.
+const popIn = (i: number) => ({
+  animation: `toolbar-pop 0.4s cubic-bezier(0.2, 1.4, 0.4, 1) ${i * 55}ms both`,
+  '@keyframes toolbar-pop': {
+    from: { opacity: 0, transform: 'translateY(14px)' },
+    to: { opacity: 1, transform: 'translateY(0)' },
+  },
+});
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded';
 import StickyNote2OutlinedIcon from '@mui/icons-material/StickyNote2Outlined';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
@@ -641,17 +649,20 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                   transition: 'background-color 0.15s',
                   '&:hover': { bgcolor: c.accent.hover },
                   '&:active': { bgcolor: c.accent.pressed },
-                  ...(newAgentBounce && {
-                    animation: 'new-agent-bounce 1.6s ease-out infinite',
-                    '@keyframes new-agent-bounce': {
-                      '0%':   { transform: 'translateY(0)' },
-                      '15%':  { transform: 'translateY(-10px)' },
-                      '30%':  { transform: 'translateY(0)' },
-                      '42%':  { transform: 'translateY(-4px)' },
-                      '55%':  { transform: 'translateY(0)' },
-                      '100%': { transform: 'translateY(0)' },
-                    },
-                  }),
+                  // Pop in first; the empty-canvas bounce takes over once the row has settled.
+                  animation: `toolbar-pop 0.4s cubic-bezier(0.2, 1.4, 0.4, 1) both${newAgentBounce ? ', new-agent-bounce 1.6s ease-out 0.6s infinite' : ''}`,
+                  '@keyframes toolbar-pop': {
+                    from: { opacity: 0, transform: 'translateY(14px)' },
+                    to: { opacity: 1, transform: 'translateY(0)' },
+                  },
+                  '@keyframes new-agent-bounce': {
+                    '0%':   { transform: 'translateY(0)' },
+                    '15%':  { transform: 'translateY(-10px)' },
+                    '30%':  { transform: 'translateY(0)' },
+                    '42%':  { transform: 'translateY(-4px)' },
+                    '55%':  { transform: 'translateY(0)' },
+                    '100%': { transform: 'translateY(0)' },
+                  },
                 }}
               >
                 <ChatBubbleTeardrop sx={{ fontSize: 18 }} />
@@ -686,6 +697,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                   cursor: 'pointer',
                   transition: 'opacity 0.15s, background-color 0.15s',
                   '&:hover': { opacity: 1, bgcolor: c.bg.secondary, color: c.accent.primary },
+                  ...popIn(1),
                 }}
               >
                 <GridViewRoundedIcon sx={{ fontSize: 22 }} />
@@ -720,6 +732,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                   cursor: 'pointer',
                   transition: 'opacity 0.15s, background-color 0.15s',
                   '&:hover': { opacity: 1, bgcolor: c.bg.secondary, color: c.accent.primary },
+                  ...popIn(2),
                 }}
               >
                 <LanguageIcon sx={{ fontSize: 22 }} />
@@ -753,6 +766,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                   cursor: 'pointer',
                   transition: 'opacity 0.15s, background-color 0.15s',
                   '&:hover': { opacity: 1, bgcolor: c.bg.secondary, color: c.accent.primary },
+                  ...popIn(3),
                 }}
               >
                 <HistoryRoundedIcon sx={{ fontSize: 22 }} />
@@ -787,6 +801,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                   cursor: 'pointer',
                   transition: 'opacity 0.15s, background-color 0.15s',
                   '&:hover': { opacity: 1, bgcolor: c.bg.secondary, color: c.accent.primary },
+                  ...popIn(4),
                 }}
               >
                 <StickyNote2OutlinedIcon sx={{ fontSize: 22 }} />
