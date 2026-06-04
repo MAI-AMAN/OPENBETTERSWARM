@@ -554,6 +554,16 @@ async function handleBatch(wv: BrowserWebview, params: Record<string, any>): Pro
     }
     results.push({ index: i, type: subType, ...subResult });
 
+    // A failed sub-action means every later one is operating on a page that
+    // isn't in the state it assumed, so stop instead of compounding the error
+    // (browser-use's multi_act breaks the same way). The terminal read is the
+    // last action, so a read failure never trips this.
+    if (subResult.error && i < actions.length - 1) {
+      aborted_at = i + 1;
+      abort_reason = `Sub-action ${i + 1} (${subType}) failed: ${subResult.error}; remaining ${actions.length - i - 1} action(s) skipped`;
+      break;
+    }
+
     // URL changed: selectors and indices are stale on the half-loaded page; abort.
     const urlAfter = wv.getURL();
     if (urlAfter !== urlBefore && i < actions.length - 1) {
