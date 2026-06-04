@@ -24,7 +24,7 @@ import { shallowEqual } from 'react-redux';
 import { useAppDispatch, useAppSelector } from '@/shared/hooks';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { SKILL_COLOR } from '@/app/components/editor/richEditorUtils';
-import PlanPicker from '@/app/components/overlays/PlanPicker';
+import PlanPickerModal from '@/app/components/overlays/PlanPickerModal';
 import { ErrorSlime } from '@/app/components/feedback/ErrorSlime';
 
 const streamingCursorKeyframes = `
@@ -1189,43 +1189,15 @@ const MessageBubble: React.FC<Props> = React.memo(({ message, editing = false, o
         )}
       </Box>
 
-      <Modal
+      <PlanPickerModal
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}
-      >
-        <Box sx={{
-          width: 460, maxWidth: '100%',
-          maxHeight: '90vh', overflowY: 'auto',
-          bgcolor: c.bg.surface, borderRadius: `${c.radius.xl}px`,
-          border: `1px solid ${c.border.subtle}`,
-          p: 3, outline: 'none',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
-        }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1.5 }}>
-            <Typography sx={{ fontSize: '1.05rem', fontWeight: 700, color: c.text.primary }}>
-              Upgrade your plan
-            </Typography>
-            <IconButton
-              size="small"
-              onClick={() => setPickerOpen(false)}
-              sx={{ color: c.text.tertiary }}
-              aria-label="Close"
-            >
-              <CloseIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-          </Box>
-          <Typography sx={{ fontSize: '0.75rem', color: c.text.muted, mb: 2 }}>
-            Pick a plan to keep going. Cancel anytime from Stripe.
-          </Typography>
-          <PlanPicker
-            source="upgrade_cta"
-            defaultPlan="pro_plus"
-            compact
-            onSubscribed={() => setPickerOpen(false)}
-          />
-        </Box>
-      </Modal>
+        title="Upgrade your plan"
+        subtitle="Pick a plan to keep going. Cancel anytime from Stripe."
+        source="upgrade_cta"
+        defaultPlan="pro_plus"
+        onSubscribed={() => setPickerOpen(false)}
+      />
     </Box>
   );
 });
