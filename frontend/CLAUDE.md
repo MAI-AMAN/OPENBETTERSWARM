@@ -17,7 +17,7 @@ Full precedences live in root [CLAUDE.md](../.claude/CLAUDE.md). Always: **under
 - **Spatial dashboard.** Agents are draggable nodes on a canvas; layout + selection state lives in Redux.
 - **Settings draft persistence.** `AppSettings.dismissed_mcp_suggestions` is a map of MCP id → ISO timestamp; preserve this shape when modifying settings serialization.
 - **Onboarding wizard** (`src/app/components/Onboarding/`). 8-step agentic cursor walkthrough. Cursor offsets, fit-to-view, AC popup timing, and group-meta dedup were each delicate to land; verify visually after touching this code. Note: steps 3/5/6 launch real agent sessions that hit the cloud's analytics ingest, so don't treat them as visual-only.
-- **SignInGate** (`src/app/components/SignInGate.tsx`, mounted in `Main.tsx`). First-launch gate that captures `user_id` + email via Google OAuth or email magic link, hitting the cloud's `/api/auth/{google,email}/*`. Auto-dismisses for users with a valid bearer.
+- **SignInDialog** (`src/app/components/overlays/SignInDialog.tsx`, opened from the Settings account card). Optional sign-in that captures `user_id` + email via Google OAuth or email magic link, hitting the cloud's `/api/auth/{google,email}/*`. Sign-in is never required to use the app.
 - **Custom providers.** `AppSettings.custom_providers: CustomProvider[]` supports any OpenAI-compatible endpoint (e.g. LM Studio).
 
 ## Conventions

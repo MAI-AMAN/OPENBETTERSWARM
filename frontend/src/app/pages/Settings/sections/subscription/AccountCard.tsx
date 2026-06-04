@@ -7,6 +7,7 @@ import { useAppDispatch, useAppSelector } from '@/shared/hooks';
 import { signOut } from '@/shared/state/settingsSlice';
 import { OPENSWARM_DEFAULT_PROXY_URL } from '@/shared/config';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
+import SignInDialog from '@/app/components/overlays/SignInDialog';
 
 /** Account card at top of General tab; three states: signed in, paid-but-unlinked, or not signed in. */
 const AccountCard: React.FC = () => {
@@ -20,10 +21,12 @@ const AccountCard: React.FC = () => {
   const installId = useAppSelector((s) => s.settings.data.installation_id ?? '');
   const proxyUrl = useAppSelector((s) => s.settings.data.openswarm_proxy_url || OPENSWARM_DEFAULT_PROXY_URL);
   const [signingOut, setSigningOut] = useState(false);
+  const [signInOpen, setSignInOpen] = useState(false);
 
   const methodLabel = (() => {
     switch (signinMethod) {
       case 'google': return 'Signed in with Google';
+      case 'email': return 'Signed in with email';
       case 'stripe': return 'Signed in via Stripe checkout';
       default: return null;
     }
@@ -53,7 +56,7 @@ const AccountCard: React.FC = () => {
     else window.open(startUrl, '_blank');
   };
 
-  // Not signed in at all (no bearer, no user_id); inline CTA.
+  // Not signed in at all (no bearer, no user_id); optional, sign-in just adds sync + backup.
   if (!userId && !hasBearer) {
     return (
       <Box sx={{ p: 2, mb: 2, borderRadius: `${c.radius.lg}px`, border: `1px solid ${c.border.subtle}`, bgcolor: c.bg.surface }}>
@@ -64,7 +67,7 @@ const AccountCard: React.FC = () => {
         <Button
           variant="outlined"
           size="small"
-          onClick={onSignIn}
+          onClick={() => setSignInOpen(true)}
           sx={{
             textTransform: 'none',
             fontSize: '0.8rem',
@@ -75,6 +78,8 @@ const AccountCard: React.FC = () => {
         >
           Sign in to OpenSwarm
         </Button>
+        {/* Dialog unmounts on its own once sign-in lands and this branch flips to signed-in. */}
+        {signInOpen && <SignInDialog onClose={() => setSignInOpen(false)} />}
       </Box>
     );
   }

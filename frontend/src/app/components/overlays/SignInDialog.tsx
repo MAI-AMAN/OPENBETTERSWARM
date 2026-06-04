@@ -1,6 +1,6 @@
-// Mandatory sign-in gate; Google OAuth handoff or email magic-link (6-digit code per sign-in).
+// Optional sign-in dialog opened from Settings; Google OAuth handoff or email magic-link (6-digit code).
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box,
   Typography,
@@ -8,21 +8,25 @@ import {
   Button,
   TextField,
   CircularProgress,
+  IconButton,
   Link,
 } from '@mui/material';
 import GoogleIcon from '@mui/icons-material/Google';
 import EmailIcon from '@mui/icons-material/Email';
-import { useAppSelector } from '@/shared/hooks';
+import CloseIcon from '@mui/icons-material/Close';
+import { useAppDispatch, useAppSelector } from '@/shared/hooks';
+import { activateSignin, fetchSettings } from '@/shared/state/settingsSlice';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
-import { OPENSWARM_DEFAULT_PROXY_URL, API_BASE } from '@/shared/config';
+import { OPENSWARM_DEFAULT_PROXY_URL } from '@/shared/config';
 import { report } from '@/shared/serviceClient';
 
 type Stage = 'choose' | 'email_form' | 'code_form';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-export default function SignInGate(): JSX.Element {
+export default function SignInDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const tokens = useClaudeTokens();
+  const dispatch = useAppDispatch();
   const proxyUrl = useAppSelector(
     (s) => s.settings.data.openswarm_proxy_url || OPENSWARM_DEFAULT_PROXY_URL,
   );
@@ -33,6 +37,12 @@ export default function SignInGate(): JSX.Element {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  // Google's handoff page POSTs the bearer to the local backend out-of-band; poll so the dialog notices.
+  useEffect(() => {
+    const id = setInterval(() => { dispatch(fetchSettings()); }, 2000);
+    return () => clearInterval(id);
+  }, [dispatch]);
 
   const cloudBase = proxyUrl.replace(/\/$/, '');
 
@@ -121,21 +131,14 @@ export default function SignInGate(): JSX.Element {
       }
       const data = (await res.json()) as { bearer?: string; user_id?: string; user_email?: string };
       if (!data.bearer) throw new Error('Server did not return a bearer.');
-      // Hand bearer to local backend like Google's handoff page so the app converges identically.
-      const activate = await fetch(`${API_BASE}/auth/signin-activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      // Hand bearer to local backend like Google's handoff page; the settings refetch flips the account card, which unmounts us.
+      await dispatch(
+        activateSignin({
           token: data.bearer,
           email: data.user_email,
           signin_method: 'email',
         }),
-      });
-      if (!activate.ok) {
-        const text = await activate.text().catch(() => '');
-        throw new Error(text || `Local activate failed (${activate.status})`);
-      }
-      // SignInGateLoader's 2s poll picks up new user_id and unmounts the gate.
+      ).unwrap();
     } catch (err) {
       setErrMsg((err as Error).message || 'Verification failed.');
     } finally {
@@ -152,13 +155,14 @@ export default function SignInGate(): JSX.Element {
   return (
     <Modal
       open
-      disableEscapeKeyDown
+      onClose={onClose}
       hideBackdrop={false}
       sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       slotProps={{ backdrop: { sx: { backgroundColor: 'rgba(0,0,0,0.55)' } } }}
     >
       <Box
         sx={{
+          position: 'relative',
           width: '100%',
           maxWidth: 440,
           mx: 2,
@@ -171,6 +175,14 @@ export default function SignInGate(): JSX.Element {
           outline: 'none',
         }}
       >
+        <IconButton
+          size="small"
+          onClick={onClose}
+          aria-label="Close"
+          sx={{ position: 'absolute', top: 10, right: 10, color: tokens.text.tertiary }}
+        >
+          <CloseIcon sx={{ fontSize: 18 }} />
+        </IconButton>
         {stage === 'code_form' ? (
           <>
             <Typography

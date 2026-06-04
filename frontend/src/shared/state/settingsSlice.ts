@@ -66,7 +66,7 @@ export interface AppSettings {
   /** Identity populated by /api/auth/signin-activate; Stripe checkout also fills these. */
   user_id?: string | null;
   user_email?: string | null;
-  signin_method?: 'google' | 'stripe' | null;
+  signin_method?: 'google' | 'email' | 'stripe' | null;
   /** Anonymous device id (first-run generated); stitches anon to authed PostHog Persons. */
   installation_id?: string | null;
 }
@@ -79,7 +79,7 @@ export interface ActivateSubscriptionPayload {
 
 export interface ActivateSigninPayload {
   token: string;
-  signin_method: 'google';
+  signin_method: 'google' | 'email';
   email?: string | null;
 }
 
@@ -197,12 +197,12 @@ export const activateSignin = createAsyncThunk(
       user_id: string;
       email: string;
       plan: string;
-      signin_method: 'google';
+      signin_method: 'google' | 'email';
     };
   },
 );
 
-/** POST /api/auth/signout; revokes cloud bearer, clears local identity, returns to sign-in gate. */
+/** POST /api/auth/signout; revokes cloud bearer, clears local identity. */
 export const signOut = createAsyncThunk(
   'settings/signOut',
   async (_: void, { dispatch }) => {
@@ -254,7 +254,7 @@ const settingsSlice = createSlice({
       .addCase(fetchSettings.fulfilled, (state, action) => {
         state.loading = false;
         state.loaded = true;
-        // Skip ref-assignment when byte-identical; prevents SignInGate 2s poll from re-firing every effect.
+        // Skip ref-assignment when byte-identical; keeps background refetch polls from re-firing every effect.
         const next = JSON.stringify(action.payload);
         const prev = JSON.stringify(state.data);
         if (next !== prev) {
