@@ -2,7 +2,7 @@ import { getWebview, type BrowserWebview } from './browserRegistry';
 import { dashboardWs } from './ws/WebSocketManager';
 import { resolveInput } from './resolveUrl';
 import { rankAndCapInteractives, type RankItem } from './interactiveRanking';
-import { shouldStopWaiting, SETTLE_FLOOR_MS, SETTLE_POLL_MS, SETTLE_PROBE_JS } from './browserSettle';
+import { shouldStopWaiting, SETTLE_POLL_MS, settleProbeJs } from './browserSettle';
 
 let initialized = false;
 
@@ -688,19 +688,27 @@ async function handleScroll(wv: BrowserWebview, params: Record<string, any>): Pr
 
 async function handleWait(wv: BrowserWebview, params: Record<string, any>): Promise<Record<string, any>> {
   const ms = Math.min(Math.max((params.milliseconds as number) || 1000, 100), 10000);
+  const until = typeof params.until === 'string' ? params.until : '';
+  const probeJs = settleProbeJs(until);
   const start = Date.now();
   let settled = false;
+  let found = false;
   let probeErrors = 0;
+  let lastElems: number | null = null;
+  let elemsChangedAt = start; // DOM-settle clock
   while (Date.now() - start < ms) {
     const remaining = ms - (Date.now() - start);
     await new Promise((resolve) => setTimeout(resolve, Math.min(SETTLE_POLL_MS, Math.max(0, remaining))));
     const elapsed = Date.now() - start;
     if (elapsed >= ms) break;
-    if (elapsed < SETTLE_FLOOR_MS) continue;
     try {
-      const probe = JSON.parse(await wv.executeJavaScript(SETTLE_PROBE_JS));
+      const probe = JSON.parse(await wv.executeJavaScript(probeJs));
       probeErrors = 0;
-      if (shouldStopWaiting(probe.ready, probe.quiet || 0, elapsed)) { settled = true; break; }
+      if (probe.elems !== lastElems) { lastElems = probe.elems; elemsChangedAt = Date.now(); }
+      const domStable = Date.now() - elemsChangedAt;
+      if (shouldStopWaiting(probe.ready, probe.quiet || 0, domStable, !!probe.found, elapsed)) {
+        settled = true; found = !!probe.found; break;
+      }
     } catch {
       // Mid-navigation pages aren't evaluable yet; a few misses is normal, but a
       // wedged tab shouldn't make us burn the whole cap, so bail after a short streak.
@@ -708,8 +716,9 @@ async function handleWait(wv: BrowserWebview, params: Record<string, any>): Prom
     }
   }
   const waited = Date.now() - start;
+  const state = found ? 'found target' : settled ? 'page settled' : 'reached cap';
   return {
-    text: `Waited ${waited}ms (${settled ? 'page settled' : 'reached cap'}). Current URL: ${wv.getURL()}`,
+    text: `Waited ${waited}ms (${state}). Current URL: ${wv.getURL()}`,
     url: wv.getURL(),
     title: wv.getTitle(),
   };

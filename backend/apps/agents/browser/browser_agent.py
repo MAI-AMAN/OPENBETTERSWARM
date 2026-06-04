@@ -987,6 +987,7 @@ async def run_browser_agent(
                         return await _cancellable(execute_browser_tool(tool, params, bid, tid))
                     result = await browser_wait.smart_wait(
                         _wait_exec, browser_id, tab_id, tu.input.get("milliseconds"),
+                        until=(tu.input.get("until") or ""),
                     )
                 else:
                     result = await _cancellable(execute_browser_tool(

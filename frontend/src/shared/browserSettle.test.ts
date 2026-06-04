@@ -4,26 +4,32 @@ import assert from 'node:assert/strict';
 import { shouldStopWaiting, SETTLE_FLOOR_MS, SETTLE_QUIET_MS } from './browserSettle.ts';
 
 test('does not settle before the floor, even when fully quiet', () => {
-  assert.equal(shouldStopWaiting(true, 5000, SETTLE_FLOOR_MS - 1), false);
+  assert.equal(shouldStopWaiting(true, 5000, 5000, false, SETTLE_FLOOR_MS - 1), false);
 });
 
-test('settles once past the floor with a complete doc and a long-quiet network', () => {
-  assert.equal(shouldStopWaiting(true, SETTLE_QUIET_MS, SETTLE_FLOOR_MS), true);
-  assert.equal(shouldStopWaiting(true, 2000, 1000), true);
+test('settles past the floor when the network is quiet', () => {
+  assert.equal(shouldStopWaiting(true, SETTLE_QUIET_MS, 0, false, SETTLE_FLOOR_MS), true);
+});
+
+test('settles past the floor on DOM-stable even when the network never idles', () => {
+  assert.equal(shouldStopWaiting(true, 5, SETTLE_QUIET_MS, false, 1000), true);
+});
+
+test('target found short-circuits the floor and a busy network', () => {
+  assert.equal(shouldStopWaiting(false, 0, 0, true, 10), true);
 });
 
 test('does not settle while the document is still loading', () => {
-  assert.equal(shouldStopWaiting(false, 5000, 1000), false);
+  assert.equal(shouldStopWaiting(false, 5000, 5000, false, 1000), false);
 });
 
-test('does not settle when the network was quiet for less than the window', () => {
-  assert.equal(shouldStopWaiting(true, SETTLE_QUIET_MS - 1, 1000), false);
+test('does not settle when neither network nor DOM has been quiet long enough', () => {
+  assert.equal(shouldStopWaiting(true, SETTLE_QUIET_MS - 1, SETTLE_QUIET_MS - 1, false, 1000), false);
 });
 
-test('a page that keeps fetching (quiet=0) rides to the cap', () => {
-  assert.equal(shouldStopWaiting(true, 0, 9000), false);
-});
-
-test('missing/NaN quiet is treated as not-quiet, not as settled', () => {
-  assert.equal(shouldStopWaiting(true, undefined as unknown as number, 1000), false);
+test('missing signals are treated as not-quiet, not as settled', () => {
+  assert.equal(
+    shouldStopWaiting(true, undefined as unknown as number, undefined as unknown as number, false, 1000),
+    false,
+  );
 });

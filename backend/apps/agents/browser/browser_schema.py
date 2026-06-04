@@ -289,18 +289,29 @@ BROWSER_TOOLS_SCHEMA = [
     {
         "name": "BrowserWait",
         "description": (
-            "Wait for the page to settle after navigation or an action that loads "
-            "async content. This is SMART: it returns as soon as the page's network "
-            "goes quiet, so the duration you give is just an upper bound, not a fixed "
-            "sleep. Pass a generous cap (e.g. 4000) without worrying about wasted "
-            "time; you usually get control back in a few hundred ms. Min 100, max 10000."
+            "Wait for the page to be READY after navigation or an action. This is SMART: "
+            "it returns as soon as the page settles visually (its DOM stops changing), so "
+            "the duration is just an upper bound, not a fixed sleep, pass a generous cap "
+            "(e.g. 4000) without worrying about wasted time. Best of all, pass `until` with "
+            "the thing you expect to appear (a button label, result text, the compose box) "
+            "and it returns the INSTANT that shows up, so you wait for what you actually "
+            "need instead of guessing. Min 100, max 10000."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "milliseconds": {
                     "type": "number",
-                    "description": "Duration to wait in milliseconds. Defaults to 1000.",
+                    "description": "Upper-bound wait in milliseconds. Defaults to 1000.",
+                },
+                "until": {
+                    "type": "string",
+                    "description": (
+                        "Optional. A specific button label, visible text, or CSS selector "
+                        "you expect to appear (e.g. 'Haik Decie', 'Write a message', "
+                        "'button[type=submit]'). The wait ends the moment it's present and "
+                        "visible. Be specific, not a generic word like 'Message'."
+                    ),
                 },
             },
             "required": [],
@@ -584,7 +595,9 @@ SYSTEM_PROMPT = (
     "- Do NOT screenshot after every single action. Screenshot ONLY when you genuinely "
     "don't know the page state (start of task, after navigation, after a failure).\n"
     "- Don't BrowserWait if what you need is already on screen; just act (the wait is for "
-    "content that hasn't loaded yet, not a reflex after every action).\n"
+    "content that hasn't loaded yet, not a reflex after every action). When you DO wait, "
+    "pass `until` with the specific thing you expect (a name, the exact button label, the "
+    "compose box) so it returns the instant that appears instead of waiting blind.\n"
     "- When scrolling, stop as soon as BrowserScroll reports atTop/atBottom or a 0 delta; "
     "don't loop past the end.\n"
     "- Do NOT call BrowserGetElements on the entire body if you already know roughly "

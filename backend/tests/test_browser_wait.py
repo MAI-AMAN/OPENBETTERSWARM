@@ -20,26 +20,37 @@ from backend.apps.agents.browser import browser_wait as bw
 def test_decide_stop_waits_until_past_the_floor():
     # even a fully-settled page must not return before the floor (a momentary gap
     # between two requests would otherwise look 'settled')
-    assert bw.decide_stop(ready=True, quiet_ms=9999, elapsed_ms=100, floor_ms=250) is False
-    assert bw.decide_stop(ready=True, quiet_ms=9999, elapsed_ms=300, floor_ms=250) is True
+    assert bw.decide_stop(True, 9999, 0, False, 100, floor_ms=250) is False
+    assert bw.decide_stop(True, 9999, 0, False, 300, floor_ms=250) is True
 
 
 def test_decide_stop_needs_ready_and_quiet():
     # past floor, but document not complete -> keep waiting
-    assert bw.decide_stop(ready=False, quiet_ms=9999, elapsed_ms=500) is False
-    # past floor, ready, but network still active (quiet below the window) -> wait
-    assert bw.decide_stop(ready=True, quiet_ms=100, elapsed_ms=500, quiet_window_ms=400) is False
-    # past floor, ready, quiet long enough -> stop
-    assert bw.decide_stop(ready=True, quiet_ms=400, elapsed_ms=500, quiet_window_ms=400) is True
+    assert bw.decide_stop(False, 9999, 9999, False, 500) is False
+    # past floor, ready, but neither network nor DOM quiet long enough -> wait
+    assert bw.decide_stop(True, 100, 100, False, 500, settle_window_ms=400) is False
+    # past floor, ready, network quiet long enough -> stop
+    assert bw.decide_stop(True, 400, 0, False, 500, settle_window_ms=400) is True
 
 
-def test_decide_stop_handles_missing_quiet():
-    assert bw.decide_stop(ready=True, quiet_ms=None, elapsed_ms=500) is False
+def test_decide_stop_target_found_short_circuits_everything():
+    # the target is present -> stop NOW, even before the floor and with a busy network
+    assert bw.decide_stop(False, 0, 0, True, 10) is True
+
+
+def test_decide_stop_dom_settle_when_network_never_idles():
+    # beacon-heavy SPA: network never idle (quiet tiny) but the DOM has stopped -> stop
+    assert bw.decide_stop(True, 5, 400, False, 600, settle_window_ms=400) is True
+
+
+def test_decide_stop_handles_missing_signals():
+    assert bw.decide_stop(True, None, None, False, 500) is False
 
 
 # --- the async loop with a scripted probe -----------------------------------
-def _probe(ready, quiet):
-    return {"text": json.dumps({"ready": ready, "quiet": quiet}), "url": "https://x.com"}
+def _probe(ready, quiet, elems=1000, found=False):
+    return {"text": json.dumps({"ready": ready, "quiet": quiet, "elems": elems, "found": found}),
+            "url": "https://x.com"}
 
 
 class FakeExec:
@@ -86,6 +97,28 @@ async def test_rides_to_cap_when_page_never_settles():
     assert out["settled"] is False
     assert out["waited_ms"] >= 180  # ~the cap
     assert "reached cap" in out["text"]
+
+
+@pytest.mark.asyncio
+async def test_settles_on_dom_stable_when_network_never_idles():
+    # the LinkedIn case: network always busy (quiet tiny) but the DOM count is
+    # constant -> DOM-settle fires instead of riding to the cap
+    ex = FakeExec([_probe(True, 5, elems=500)])
+    out = await bw.smart_wait(ex, "b", "", 3000, poll_ms=20, floor_ms=20, quiet_window_ms=200)
+    assert out["settled"] is True and out["waited_ms"] < 3000
+    assert "page settled" in out["text"]
+
+
+@pytest.mark.asyncio
+async def test_returns_the_instant_target_is_found():
+    # network busy AND DOM churning, but the agent's target appears on probe 2 ->
+    # stop immediately, bypassing even the floor
+    ex = FakeExec([_probe(False, 5, elems=100, found=False),
+                   _probe(False, 5, elems=200, found=True)])
+    out = await bw.smart_wait(ex, "b", "", 5000, until="Send",
+                              poll_ms=20, floor_ms=800, quiet_window_ms=999)
+    assert out["settled"] is True and "found target" in out["text"]
+    assert out["waited_ms"] < 800  # bypassed the floor because the target was there
 
 
 @pytest.mark.asyncio

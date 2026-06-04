@@ -28,15 +28,27 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# One probe: is the document complete, and how long since the last network
-# resource finished/started? Returns a JSON string (BrowserEvaluate hands back
-# string results verbatim).
-PROBE_JS = (
-    "(()=>{const n=performance.now();"
-    "const es=performance.getEntriesByType('resource');let last=0;"
-    "for(const e of es){const t=Math.max(e.responseEnd||0,e.startTime||0);if(t>last)last=t;}"
-    "return JSON.stringify({ready:document.readyState==='complete',quiet:Math.round(n-last)});})()"
-)
+# One probe, built per wait so it can also look for the agent's target. Returns:
+#   ready  - document.readyState === 'complete'
+#   quiet  - ms since the last network resource (the old network-idle signal)
+#   elems  - element count; the loop watches it stop changing = DOM/visual settle
+#   found  - the agent's `until` target is present + visible (visible text or selector)
+# `until` is JSON-encoded into a string literal, so it's data, never executable.
+def _probe_js(until: str) -> str:
+    spec = json.dumps(until or "")
+    return (
+        "(()=>{const n=performance.now();"
+        "const es=performance.getEntriesByType('resource');let last=0;"
+        "for(const e of es){const t=Math.max(e.responseEnd||0,e.startTime||0);if(t>last)last=t;}"
+        f"let found=false;const spec={spec};"
+        "if(spec){try{const low=spec.toLowerCase();"
+        "let el=[...document.querySelectorAll('button,a,[role],input,textarea,[contenteditable],[aria-label],h1,h2')]"
+        ".find(e=>((e.innerText||e.value||e.getAttribute('aria-label')||'')+'').toLowerCase().includes(low));"
+        "if(!el){try{el=document.querySelector(spec);}catch(_){}}"
+        "if(el){const r=el.getBoundingClientRect();found=r.width>0&&r.height>0;}}catch(_){}}"
+        "return JSON.stringify({ready:document.readyState==='complete',"
+        "quiet:Math.round(n-last),elems:document.getElementsByTagName('*').length,found});})()"
+    )
 
 _QUIET_WINDOW_MS = 400   # network must be silent this long to count as settled
 _FLOOR_MS = 250          # never return before this (a momentary gap isn't 'settled')
@@ -51,30 +63,43 @@ _PROBE_TIMEOUT_S = 2.5
 _MAX_PROBE_TIMEOUTS = 3
 
 
-def decide_stop(ready, quiet_ms, elapsed_ms,
-                floor_ms=_FLOOR_MS, quiet_window_ms=_QUIET_WINDOW_MS) -> bool:
-    """Pure decision: stop waiting once we're past the floor AND the document is
-    complete AND the network has been quiet for the settle window."""
+def decide_stop(ready, quiet_ms, dom_stable_ms, found, elapsed_ms,
+                floor_ms=_FLOOR_MS, settle_window_ms=_QUIET_WINDOW_MS) -> bool:
+    """Pure decision. Stop the INSTANT the agent's target is present (no floor, it's
+    exactly what we were waiting for). Otherwise, past the floor and once the document
+    is complete, stop as soon as it has gone quiet by EITHER the network OR the DOM
+    settling. Watching DOM-settle as well as network is what stops beacon-heavy SPAs
+    (LinkedIn, Gmail) riding to the cap while visually done: their network never idles,
+    but their DOM does."""
+    if found:
+        return True
     if elapsed_ms < floor_ms:
         return False
-    return bool(ready) and (quiet_ms or 0) >= quiet_window_ms
+    if not ready:
+        return False
+    return (quiet_ms or 0) >= settle_window_ms or (dom_stable_ms or 0) >= settle_window_ms
 
 
-async def smart_wait(execute_fn, browser_id, tab_id, max_ms, *,
+async def smart_wait(execute_fn, browser_id, tab_id, max_ms, *, until="",
                      poll_ms=_POLL_MS, floor_ms=_FLOOR_MS,
                      quiet_window_ms=_QUIET_WINDOW_MS,
                      probe_timeout_s=_PROBE_TIMEOUT_S) -> dict:
-    """Wait up to `max_ms`, returning early once the page settles. `execute_fn`
-    is an async (tool, params, browser_id, tab_id) -> result|None (None = the run
-    was cancelled). Never raises into the caller. If the page stops responding to
-    probes (hung tab), returns fast with hung=True so the caller can bail instead
-    of blocking on the underlying long command timeout."""
+    """Wait up to `max_ms`, returning early once the page is ready. `until` (optional)
+    is a label / visible text / selector the agent expects to appear; the wait ends the
+    INSTANT it's present, so the agent isn't waiting blind. `execute_fn` is an async
+    (tool, params, browser_id, tab_id) -> result|None (None = cancelled). Never raises.
+    If the page stops responding to probes (hung tab), returns fast with hung=True so the
+    caller can bail instead of inheriting the long command timeout."""
     max_ms = max(100, min(int(max_ms or 1000), 10000))
+    probe_js = _probe_js(until)
     start = time.monotonic()
     settled = False
+    found = False
     hung = False
     last_url = ""
     probe_timeouts = 0
+    last_elems = None
+    elems_changed_at = start  # DOM-settle clock: when the element count last changed
 
     def _elapsed():
         return (time.monotonic() - start) * 1000
@@ -89,7 +114,7 @@ async def smart_wait(execute_fn, browser_id, tab_id, max_ms, *,
         # timeout error is a different problem, treated as 'keep waiting'.
         try:
             res = await asyncio.wait_for(
-                execute_fn("BrowserEvaluate", {"expression": PROBE_JS}, browser_id, tab_id),
+                execute_fn("BrowserEvaluate", {"expression": probe_js}, browser_id, tab_id),
                 timeout=probe_timeout_s,
             )
         except asyncio.TimeoutError:
@@ -111,13 +136,27 @@ async def smart_wait(execute_fn, browser_id, tab_id, max_ms, *,
             probe = json.loads(res.get("text") or "{}")
         except Exception:
             continue
-        if decide_stop(probe.get("ready"), probe.get("quiet", 0), _elapsed(),
-                       floor_ms=floor_ms, quiet_window_ms=quiet_window_ms):
+        elems = probe.get("elems")
+        if elems != last_elems:
+            last_elems = elems
+            elems_changed_at = time.monotonic()
+        dom_stable_ms = (time.monotonic() - elems_changed_at) * 1000
+        if decide_stop(probe.get("ready"), probe.get("quiet", 0), dom_stable_ms,
+                       probe.get("found"), _elapsed(),
+                       floor_ms=floor_ms, settle_window_ms=quiet_window_ms):
             settled = True
+            found = bool(probe.get("found"))
             break
 
     waited = round(_elapsed())
-    state = "page settled" if settled else ("page not responding" if hung else "reached cap")
+    if found:
+        state = "found target"
+    elif settled:
+        state = "page settled"
+    elif hung:
+        state = "page not responding"
+    else:
+        state = "reached cap"
     text = f"Waited {waited}ms ({state})."
     if hung:
         text += " The page or tab appears unresponsive."
