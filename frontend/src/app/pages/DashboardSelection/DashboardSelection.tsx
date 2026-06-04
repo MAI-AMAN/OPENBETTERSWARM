@@ -30,6 +30,9 @@ import {
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { byPreviewRecency } from '@/shared/previewOrder';
 
+// Module-scope: auto-enter fires once per app boot; revisiting "/" later shows the picker normally.
+let bootAutoEntered = false;
+
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return '';
   const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
@@ -56,8 +59,26 @@ const DashboardSelection: React.FC = () => {
   const [renameValue, setRenameValue] = useState('');
 
   useEffect(() => {
-    dispatch(fetchDashboards());
-  }, [dispatch]);
+    if (bootAutoEntered) {
+      dispatch(fetchDashboards());
+      return;
+    }
+    // First mount of the session: skip the picker and drop the user into their latest dashboard.
+    bootAutoEntered = true;
+    (async () => {
+      const res = await dispatch(fetchDashboards());
+      if (!fetchDashboards.fulfilled.match(res)) return;
+      const list = (res.payload as Dashboard[]).slice().sort(byPreviewRecency);
+      if (list.length > 0) {
+        navigate(`/dashboard/${list[0].id}`, { replace: true });
+        return;
+      }
+      const created = await dispatch(createDashboard('Untitled Dashboard'));
+      if (createDashboard.fulfilled.match(created)) {
+        navigate(`/dashboard/${created.payload.id}`, { replace: true });
+      }
+    })();
+  }, [dispatch, navigate]);
 
   const dashboards = useMemo(() => {
     const all = Object.values(items).sort(byPreviewRecency);

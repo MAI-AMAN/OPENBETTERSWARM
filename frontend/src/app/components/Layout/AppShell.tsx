@@ -80,7 +80,8 @@ const AppShell: React.FC = () => {
   const [dashboardsExpanded, setDashboardsExpanded] = useState(true);
   const [appsExpanded, setAppsExpanded] = useState(true);
   const [customizationExpanded, setCustomizationExpanded] = useState(true);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Starts collapsed so a fresh boot lands on a clean canvas; the toggle brings it back.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [renamingDashboardId, setRenamingDashboardId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [sidebarWidth, setSidebarWidth] = useState(() => {
