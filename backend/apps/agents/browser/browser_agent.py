@@ -591,6 +591,7 @@ async def run_browser_agent(
             logger.info(f"[browser-skills] skill matched on {host} but slots unfillable from task; running full agent")
             return None
         if not (sk_obj and steps):
+            logger.info(f"[browser-skills] no skill for host={host!r} after {turns_spent} turn(s)")
             return None
         # Audit finding: replay bypasses the per-tool gate and act-and-confirm,
         # so a recorded Send/Submit must never re-fire silently. Those flows
@@ -724,6 +725,7 @@ async def run_browser_agent(
     # dispatch check misses and the deferred re-check inside the loop catches it
     # after the first navigation.
     replay_rechecked = False
+    logger.info(f"[browser-skills] dispatch replay check: host={replay_host!r}")
     _dispatch_replay = await _try_replay(replay_host, 0, allow_prefix=True)
     if _dispatch_replay is not None:
         return _dispatch_replay
@@ -1289,9 +1291,14 @@ async def run_browser_agent(
                     cur_host = browser_skills.host_of(last_seen_url)
                     if cur_host and cur_host != replay_host:
                         replay_rechecked = True
-                        _deferred = await _try_replay(cur_host, turn + 1)
+                        _deferred = await _try_replay(cur_host, turn + 1, allow_prefix=True)
                         if _deferred is not None:
                             return _deferred
+                        # a prefix replay just moved the page; tell the model on
+                        # THIS result so it continues from the composer
+                        if replay_prefix_note:
+                            result["text"] = f"{result.get('text') or ''}{replay_prefix_note}"
+                            replay_prefix_note = ""
 
                 if tu.name == "BrowserScreenshot" and result.get("image"):
                     final_screenshot = result["image"]
