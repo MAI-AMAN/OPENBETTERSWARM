@@ -3358,6 +3358,8 @@ class AgentManager:
         session = self.sessions.get(session_id)
         if not session:
             return
+        _fp_t0 = time.monotonic()
+        _fp_path = verdict
         logger.info(f"[browser-fast-path] direct dispatch for session {session_id} ({verdict})")
         text = ""
         try:
@@ -3371,6 +3373,8 @@ class AgentManager:
                 text = await browser_fast_read.try_fast_read(
                     prompt, brief, load_settings(), get_api_type(session.model),
                 ) or ""
+                if not text:
+                    _fp_path = "read->browser"
 
             async def _dispatch(task_text: str) -> str:
                 results = await run_browser_agents(
@@ -3390,8 +3394,10 @@ class AgentManager:
                     # retry identically, so skip it and tell the user instead.
                     if ws_manager.global_connections:
                         logger.info(f"[browser-fast-path] first dispatch failed for {session_id}; one recovery dispatch")
+                        _fp_path += "+recovery"
                         text = await _dispatch(browser_fast_path.recovery_task(prompt, text))
                     else:
+                        _fp_path += "+no-dashboard"
                         text = browser_fast_path.NO_DASHBOARD_REPLY
                 if not text:
                     text = "The browser agent couldn't complete this and gave no report."
@@ -3401,6 +3407,10 @@ class AgentManager:
             logger.warning(f"[browser-fast-path] dispatch failed: {e}")
             text = f"The browser agent couldn't complete this: {e}"
 
+        logger.info(
+            f"[browser-fast-path] session {session_id} done: path={_fp_path} "
+            f"reply={len(text)}ch in {int((time.monotonic() - _fp_t0) * 1000)}ms"
+        )
         asst_msg = Message(role="assistant", content=text, branch_id=session.active_branch_id)
         session.messages.append(asst_msg)
         await ws_manager.send_to_session(session_id, "agent:message", {

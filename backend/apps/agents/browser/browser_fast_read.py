@@ -9,6 +9,7 @@ old path, never a wrong answer from a thin read.
 import asyncio
 import logging
 import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +44,22 @@ async def try_fast_read(prompt: str, brief: str, settings, primary_api: str | No
     """Answer text on success; None means fall back to the browser leg."""
     entry = extract_entry_url(brief)
     if not entry:
+        logger.info("[browser-fast-read] no ENTRY url in brief; browser fallback")
         return None
     try:
         from backend.apps.agents.tools.web import WebFetchTool
 
+        t0 = time.monotonic()
         parts = await asyncio.wait_for(
             WebFetchTool().execute({"url": entry, "prompt": prompt}, None),
             timeout=12.0,
         )
         text = "\n".join(p.get("text", "") for p in parts if p.get("type") == "text")
+        fetch_ms = int((time.monotonic() - t0) * 1000)
         if page_is_thin(text):
-            logger.info(f"[browser-fast-read] thin/errored read of {entry}; browser fallback")
+            logger.info(f"[browser-fast-read] thin/errored read of {entry} ({len(text)}ch in {fetch_ms}ms); browser fallback")
             return None
+        logger.info(f"[browser-fast-read] fetched {entry}: {len(text)}ch in {fetch_ms}ms")
 
         from backend.apps.settings.credentials import get_anthropic_client_for_model
         from backend.apps.agents.providers.registry import resolve_aux_model
@@ -64,6 +69,7 @@ async def try_fast_read(prompt: str, brief: str, settings, primary_api: str | No
             settings, preferred_tier="haiku", primary_api=primary_api,
         )
         client = get_anthropic_client_for_model(settings, aux_model)
+        t1 = time.monotonic()
         resp = await asyncio.wait_for(
             client.messages.create(
                 model=aux_model,
@@ -78,9 +84,11 @@ async def try_fast_read(prompt: str, brief: str, settings, primary_api: str | No
             timeout=15.0,
         )
         answer = _safe_resp_text(resp).strip()
+        answer_ms = int((time.monotonic() - t1) * 1000)
         if not answer or answer.upper().startswith("INSUFFICIENT"):
-            logger.info(f"[browser-fast-read] aux found page insufficient; browser fallback")
+            logger.info(f"[browser-fast-read] aux found page insufficient ({answer_ms}ms); browser fallback")
             return None
+        logger.info(f"[browser-fast-read] answered in {answer_ms}ms ({len(answer)}ch, model={aux_model})")
         return f"{answer}\n\n(Source: {entry})"
     except Exception as e:
         logger.info(f"[browser-fast-read] failed ({e}); browser fallback")

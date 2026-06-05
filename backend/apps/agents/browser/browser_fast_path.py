@@ -19,6 +19,7 @@ Three gates, all conservative; any miss falls through to the orchestrator:
 import asyncio
 import logging
 import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ def _normalize_for_classifier(prompt: str) -> str:
 async def classify_and_brief(prompt: str, settings, primary_api: str | None) -> tuple[str, str]:
     """One cheap aux call returns a READ/ACT/NO verdict plus a routing brief
     (entry URL + step outline), timeboxed; any failure means NO (normal path)."""
+    t0 = time.monotonic()
     try:
         from backend.apps.settings.credentials import get_anthropic_client_for_model
         from backend.apps.agents.providers.registry import resolve_aux_model
@@ -177,7 +179,10 @@ async def classify_and_brief(prompt: str, settings, primary_api: str | None) -> 
         )
         from backend.apps.agents.core.aux_llm import _safe_resp_text
         verdict, brief = _parse_verdict_and_brief(_safe_resp_text(resp))
-        logger.info(f"[browser-fast-path] classifier: {verdict.upper()} brief={len(brief)}ch")
+        logger.info(
+            f"[browser-fast-path] classifier: {verdict.upper()} brief={len(brief)}ch "
+            f"model={aux_model} in {int((time.monotonic() - t0) * 1000)}ms"
+        )
         return verdict, brief
     except Exception as e:
         logger.warning(f"[browser-fast-path] classifier unavailable, normal path: {e}")

@@ -4,6 +4,18 @@ import logging
 import os
 from uuid import uuid4
 
+# App-level INFO logs (fast-path gates, skill recording, replay decisions) were
+# invisible because nothing configured the 'backend' logger; every debugging
+# session re-paid that blindness. Idempotent so uvicorn reloads don't stack
+# handlers; uvicorn's own access logs are untouched.
+_backend_logger = logging.getLogger("backend")
+if not _backend_logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname).1s %(name)s: %(message)s", "%H:%M:%S"))
+    _backend_logger.addHandler(_h)
+    _backend_logger.setLevel(logging.INFO)
+    _backend_logger.propagate = False
+
 logger = logging.getLogger(__name__)
 
 from fastapi.responses import JSONResponse, HTMLResponse
