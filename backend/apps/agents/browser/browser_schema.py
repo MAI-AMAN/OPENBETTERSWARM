@@ -18,11 +18,13 @@ MODEL_MAP = {
 _EXPECT_DESC = {
     "type": "string",
     "description": (
-        "Optional but recommended: the specific change this action should cause, a "
-        "button label, text, or element you expect to see afterward (e.g. 'Write a "
-        "message', the recipient's name in the thread). It's confirmed right after, so "
-        "you learn whether it actually worked. REQUIRED for anything you can't undo "
-        "(Send/Submit/Pay/Post): set it to proof the action landed."
+        "Optional but recommended: LITERAL text that should be VISIBLE on the page "
+        "after this action; an exact button label, a person's name, the exact text you "
+        "just typed. Never a description of the change: 'message appears in box' is not "
+        "page text, can never match, and will always come back NOT confirmed. It's "
+        "checked right after, so you learn whether it actually worked. REQUIRED for "
+        "anything you can't undo (Send/Submit/Pay/Post): set it to proof the action "
+        "landed (for typing, the typed text itself)."
     ),
 }
 

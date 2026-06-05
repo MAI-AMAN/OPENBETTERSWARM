@@ -1133,8 +1133,10 @@ async def run_browser_agent(
                         else:
                             result["text"] = (
                                 f"{result.get('text') or ''}\nNOT confirmed: '{_expect}' did not appear within "
-                                f"{_conf.get('waited_ms')}ms, so the action may not have worked. Check the page "
-                                "before assuming success, and never re-fire an irreversible action "
+                                f"{_conf.get('waited_ms')}ms. This only means that exact text was not found on "
+                                "the page; if this result already contains direct evidence (e.g. 'Verified: the "
+                                "box now contains ...'), TRUST THAT and do not redo the action. Otherwise check "
+                                "the page before assuming success, and never re-fire an irreversible action "
                                 "(Send/Submit/Pay/Post) without first verifying the previous one did not go through."
                             )
 

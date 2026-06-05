@@ -16,6 +16,9 @@ export interface RankItem {
   // Nearby text that disambiguates same-named twins (the card/section this
   // element sits in, e.g. which "Message" button belongs to which person).
   context?: string;
+  // Current text of a textbox/searchbox/combobox. Without it a filled compose
+  // box still renders by its placeholder name and reads as "typing failed".
+  value?: string;
 }
 
 // Lower number = higher priority. Inputs the user types into first, then

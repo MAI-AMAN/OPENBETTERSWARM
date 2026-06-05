@@ -275,6 +275,7 @@ interface InteractiveElement {
   name: string;
   backendNodeId: number;
   sessionId?: string;
+  value?: string;
 }
 
 function extractAxValue(prop: any): string {
@@ -394,7 +395,14 @@ function axNodesToCandidates(nodes: any[], sessionId?: string): RankItem[] {
     if (backendNodeId == null) continue;
     const shortName = name.slice(0, 80);
     if (twinOfAncestor(node, shortName)) continue;
-    out.push({ role, name: shortName, backendNodeId, sessionId, context: contextOf(node, name) });
+    let value = '';
+    if (role === 'textbox' || role === 'searchbox' || role === 'combobox') {
+      const isProtected = (node.properties || []).some(
+        (p: any) => p?.name === 'protected' && p?.value?.value === true,
+      );
+      value = isProtected ? '' : extractAxValue(node.value).slice(0, 60);
+    }
+    out.push({ role, name: shortName, backendNodeId, sessionId, context: contextOf(node, name), value });
   }
   return out;
 }
@@ -518,25 +526,31 @@ async function clickBackendNode(
     if (typeof opts.text === 'string' && opts.text.length > 0) {
       // Read the text back from the node itself; "insert reported OK" is not
       // "the box has the text" (rich-text editors can swallow synthetic input).
-      const textLanded = async (): Promise<boolean> => {
+      // Returns the box's actual content (or null on miss) so the result can
+      // echo the OBSERVED state; a bare "typed it" claim loses to a wrongly
+      // pessimistic expect-confirm and provokes a double-fill.
+      const readBack = async (): Promise<string | null> => {
         try {
           const t = await sendCdp(wv, 'DOM.resolveNode', { backendNodeId }, sessionId);
           const r = await sendCdp(wv, 'Runtime.callFunctionOn', {
             objectId: t.object.objectId,
             functionDeclaration:
-              'function(s) { const v = (this.value !== undefined ? this.value : this.textContent) || ""; return v.includes(s); }',
+              'function(s) { const v = (this.value !== undefined ? this.value : this.textContent) || ""; return v.includes(s) ? v.slice(0, 120) : null; }',
             arguments: [{ value: opts.text }],
             returnByValue: true,
           }, sessionId);
-          return r?.result?.value === true;
-        } catch { return true; } // unverifiable beats a false alarm
+          return typeof r?.result?.value === 'string' ? r.result.value : null;
+        } catch { return opts.text ?? ''; } // unverifiable beats a false alarm
       };
+      const landedMsg = (got: string, via = '') =>
+        ({ text: `Focused ${label} and typed the text in${via}. Verified: the box now contains "${got}". Do NOT type it again.` });
       try {
         await sendCdp(wv, 'Input.insertText', { text: opts.text }, sessionId);
       } catch (err: any) {
         return { error: `Focused ${label} but could not type into it: ${err?.message || String(err)}` };
       }
-      if (await textLanded()) return { text: `Focused ${label} and typed the text in.` };
+      let got = await readBack();
+      if (got !== null) return landedMsg(got);
       try {
         const t = await sendCdp(wv, 'DOM.resolveNode', { backendNodeId }, sessionId);
         await sendCdp(wv, 'Runtime.callFunctionOn', {
@@ -546,7 +560,8 @@ async function clickBackendNode(
           arguments: [{ value: opts.text }],
         }, sessionId);
       } catch { /* verified below; the honest error covers this failing too */ }
-      if (await textLanded()) return { text: `Focused ${label} and typed the text in (via editor command).` };
+      got = await readBack();
+      if (got !== null) return landedMsg(got, ' (via editor command)');
       return { error: `Focused ${label} but the text did not register; the box may be a custom editor. Try BrowserPressKey per character or a different element.` };
     }
     return { text: `Focused ${label}; the cursor is in it now (type with BrowserPressKey, or pass a text arg to fill it in one call).` };
@@ -726,6 +741,7 @@ async function handleListInteractives(wv: BrowserWebview, params: Record<string,
       name: el.name,
       backendNodeId: el.backendNodeId,
       sessionId: el.sessionId,
+      value: el.value,
       isNew: isNew(el),
       context: el.context,
     };
@@ -755,7 +771,8 @@ async function handleListInteractives(wv: BrowserWebview, params: Record<string,
   const lines = interactives.map((el) => {
     const dup = (nameCounts.get(`${el.role}|${el.name}`) || 0) > 1;
     const ctx = dup && el.context ? ` ctx="${el.context}"` : '';
-    return `[${el.index}]${el.isNew ? '*' : ''}<${el.role} "${el.name}"${ctx}>`;
+    const val = el.value ? ` value="${el.value}"` : '';
+    return `[${el.index}]${el.isNew ? '*' : ''}<${el.role} "${el.name}"${ctx}${val}>`;
   });
   let text: string;
   if (lines.length === 0) {
