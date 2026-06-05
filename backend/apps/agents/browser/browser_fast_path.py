@@ -117,8 +117,12 @@ def compose_task(prompt: str, brief: str) -> str:
 
 
 def dispatch_failed(summary: str) -> bool:
+    """Fail-closed: only an explicit DONE line or a skill replay counts as
+    success; framework failures ('I was not able to complete this task (the
+    browser became unresponsive...)') carry no OUTCOME line at all, and the
+    recovery task's verify-first wording makes a rare redundant retry safe."""
     s = (summary or "").strip()
-    return not s or s.startswith("Error:") or "OUTCOME: NOT DONE" in s.upper()
+    return not ("OUTCOME: DONE" in s.upper() or "learned skill replay" in s)
 
 
 def recovery_task(prompt: str, first_report: str) -> str:

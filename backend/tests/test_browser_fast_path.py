@@ -61,11 +61,17 @@ def test_compose_task_keeps_user_words_first():
     assert composed.endswith("ENTRY: https://news.ycombinator.com")
 
 
-def test_dispatch_failure_detection():
+def test_dispatch_failure_detection_is_fail_closed():
     assert dispatch_failed("")
     assert dispatch_failed("Error: browser card was deleted")
     assert dispatch_failed("Could not find the thread. OUTCOME: NOT DONE - login wall")
+    assert dispatch_failed(
+        "I was not able to complete this task (the browser became unresponsive "
+        "(the tab hung or was closed); it needs a fresh browser to continue)."
+    )
+    assert dispatch_failed("Found the page and clicked around a bit.")
     assert not dispatch_failed("Sent it. OUTCOME: DONE - bubble visible at 12:05 PM")
+    assert not dispatch_failed("Completed via learned skill replay (3 steps, no LLM).")
 
 
 def test_recovery_task_verifies_before_repeating():
