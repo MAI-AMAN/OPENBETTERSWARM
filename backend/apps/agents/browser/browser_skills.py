@@ -266,11 +266,24 @@ def distill_steps(action_log: list[dict]) -> list[dict]:
         inp = a.get("input") or {}
         if tool == "BrowserBatch":
             subs = inp.get("actions") or []
-            for sub in subs:
+            sub_res = a.get("sub_results")
+            by_idx = {r.get("index"): r for r in (sub_res or []) if isinstance(r, dict)}
+            for j, sub in enumerate(subs):
                 st = sub.get("type")
                 sp = sub.get("params") or {}
+                r = by_idx.get(j)
+                # aligned shape knows which subs actually ran; record only those
+                if sub_res is not None and (r is None or not r.get("ok", False)):
+                    break
+                if st == "list_interactives":
+                    continue  # read, never recorded
                 if st == "click_index":
-                    return []
+                    name = (r or {}).get("clicked_name")
+                    if not name:
+                        return []  # index clicks need a re-resolvable identity
+                    steps.append({"tool": "BrowserClickByName", "params": {"role": (r or {}).get("clicked_role", ""), "name": name}})
+                    productive_count += 1
+                    continue
                 if not _emit_simple(st, sp):
                     return []
             continue

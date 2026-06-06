@@ -1277,6 +1277,13 @@ async def run_browser_agent(
                     "ok": "error" not in result,
                     "clicked_role": result.get("clickedRole"),
                     "clicked_name": result.get("clickedName"),
+                    # per-sub click identities, aligned by index, so a batched
+                    # click_index can distill into a replayable ClickByName
+                    "sub_results": [
+                        {"index": r.get("index"), "ok": "error" not in r,
+                         "clicked_role": r.get("clickedRole"), "clicked_name": r.get("clickedName")}
+                        for r in (result.get("results") or [])
+                    ] if tu.name == "BrowserBatch" else None,
                 })
                 if result.get("url"):
                     last_seen_url = result["url"]

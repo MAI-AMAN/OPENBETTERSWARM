@@ -541,3 +541,53 @@ def test_long_card_blob_click_names_are_not_send_steps():
     # the blob at step 1 must NOT be flagged; the conservative cut lands on the
     # short "Message" composer-opener (shared wordlist), keeping sends live
     assert i == 2, f"expected the Message click flagged, got {i}: {why}"
+
+
+def test_distill_maps_batched_click_index_to_click_by_name():
+    from backend.apps.agents.browser.browser_skills import distill_steps
+    entry = {
+        "tool": "BrowserBatch", "ok": True,
+        "input": {"actions": [
+            {"type": "navigate", "params": {"url": "https://x.com/search"}},
+            {"type": "click_index", "params": {"index": 3}},
+            {"type": "list_interactives", "params": {}},
+        ]},
+        "sub_results": [
+            {"index": 0, "ok": True, "clicked_role": None, "clicked_name": None},
+            {"index": 1, "ok": True, "clicked_role": "link", "clicked_name": "Profile"},
+            {"index": 2, "ok": True, "clicked_role": None, "clicked_name": None},
+        ],
+    }
+    steps = distill_steps([entry])
+    assert [s["tool"] for s in steps] == ["BrowserNavigate", "BrowserClickByName"]
+    assert steps[1]["params"]["name"] == "Profile"
+
+
+def test_distill_batch_aborted_tail_and_missing_identities():
+    from backend.apps.agents.browser.browser_skills import distill_steps
+    aborted = {
+        "tool": "BrowserBatch", "ok": True,
+        "input": {"actions": [
+            {"type": "navigate", "params": {"url": "https://x.com"}},
+            {"type": "type", "params": {"selector": "#q", "text": "hi"}},
+            {"type": "click_index", "params": {"index": 9}},
+        ]},
+        "sub_results": [
+            {"index": 0, "ok": True, "clicked_role": None, "clicked_name": None},
+            {"index": 1, "ok": True, "clicked_role": None, "clicked_name": None},
+        ],
+    }
+    assert [s["tool"] for s in distill_steps([aborted])] == ["BrowserNavigate", "BrowserType"]
+
+    nameless_click = {
+        "tool": "BrowserBatch", "ok": True,
+        "input": {"actions": [{"type": "click_index", "params": {"index": 2}}]},
+        "sub_results": [{"index": 0, "ok": True, "clicked_role": "", "clicked_name": ""}],
+    }
+    assert distill_steps([nameless_click]) == []
+
+    old_shape = {
+        "tool": "BrowserBatch", "ok": True,
+        "input": {"actions": [{"type": "click_index", "params": {"index": 1}}]},
+    }
+    assert distill_steps([old_shape]) == []
