@@ -36,6 +36,7 @@ from backend.apps.agents.browser.browser_loop import (
     card_is_unavailable,
     completion_is_honest,
     deliverable_is_informational,
+    find_send_index,
     interstitial_dismiss_target,
     replay_recheck_is_safe,
     turn_needs_big_model,
@@ -65,6 +66,7 @@ from backend.apps.agents.browser import browser_schema
 from backend.apps.agents.browser.browser_schema import (
     _ACTION_TOOLS_REQUIRING_REPORT,
     _CHEAP_LAPS,
+    _COMPOSE_HELPER,
     _LEVERS_ON,
     ACTION_MAP,
     BROWSER_TOOLS_SCHEMA,
@@ -1460,6 +1462,22 @@ async def run_browser_agent(
                     # intervening reads (Wait/Extract don't invalidate it), so a
                     # later solo re-list is still caught as redundant.
                     fresh_state_pending = True
+
+                # Endgame helper: the model just typed into a message composer
+                # (BrowserClickIndex with `text`); the worst part of the endgame is
+                # then re-hunting for the Send button (it reshuffles / sits off
+                # screen). Locate it from the fresh state and hand it over, so the
+                # model goes straight to the deliberate send. We NEVER click Send.
+                if (_COMPOSE_HELPER and tu.name == "BrowserClickIndex"
+                        and str((tu.input or {}).get("text") or "").strip()
+                        and "error" not in result):
+                    _send = find_send_index("\n".join(attached_state_seen))
+                    if _send:
+                        _si, _sn = _send
+                        result["text"] = (f"{result.get('text') or ''}\n\n[send-ready] The Send "
+                                          f"control is index {_si} (button '{_sn}'). To deliver, click it "
+                                          f"SOLO with BrowserClickIndex + `expect` proof, do NOT press Enter.")
+                        logger.info(f"[browser-compose {session_id}] located Send at index {_si} after composer fill")
 
                 # Auto-dismiss a blocking junk popup (cookie wall / upsell /
                 # coachmark) before it costs the model a turn. Mechanical, once

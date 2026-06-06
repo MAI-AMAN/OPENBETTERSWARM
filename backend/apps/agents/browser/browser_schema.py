@@ -20,6 +20,12 @@ _LEVERS_ON = os.environ.get("OSW_BROWSER_NO_LEVERS", "") not in ("1", "true", "T
 # per-turn speedup may be eaten by prompt-cache thrash on the big model's turns.
 _CHEAP_LAPS = os.environ.get("OSW_BROWSER_CHEAP_LAPS", "") in ("1", "true", "TRUE")
 
+# Endgame helper (bench, default OFF): after the model types into a message
+# composer, mechanically locate the Send button and hand it over in the result,
+# so the model stops burning turns hunting for it. Reversible-only: it types and
+# points at Send, it NEVER clicks Send (that stays the model's gated deliberate act).
+_COMPOSE_HELPER = os.environ.get("OSW_BROWSER_COMPOSE_HELPER", "") in ("1", "true", "TRUE")
+
 _THINK_SHORTER = (
     "Do NOT also write a free-text sentence next to your action tools: your ReportProgress "
     "fields ARE your thinking, and a separate prose explanation just repeats them and slows "

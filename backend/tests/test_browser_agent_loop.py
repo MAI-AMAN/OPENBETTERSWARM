@@ -1342,3 +1342,24 @@ def test_cheap_laps_escalates_on_irreversible_endgame():
     assert turn_needs_big_model([_B("tool_use", "ReportProgress"), _B("tool_use", "BrowserClickIndex")]) is True
     assert turn_needs_big_model([]) is False
     assert turn_needs_big_model(None) is False
+
+
+def test_composer_and_send_finders():
+    from backend.apps.agents.browser.browser_loop import find_composer_index, find_send_index
+    page = '\n'.join([
+        '[1]<link "Tyler Chen">',
+        '[9]<textbox "Write a message…">',
+        '[12]<button "Send a message to Tyler Chen">',  # a profile link, NOT the send btn
+        '[44]<button "Send">',
+    ])
+    assert find_composer_index(page) == 9
+    assert find_send_index(page) == (44, "Send")
+    # strictness: upsell / decoy controls are never the Send button
+    assert find_send_index('[1]<button "Send InMail credit">') is None
+    assert find_send_index('[1]<button "Send a message to Maya">') is None
+    # picks the live (last) composer when an older one lingers
+    two = '[3]<textbox "Write a message…">\n[50]<textbox "Write a message…">'
+    assert find_composer_index(two) == 50
+    # nothing present
+    assert find_composer_index('[1]<button "Connect">') is None
+    assert find_send_index('') is None
