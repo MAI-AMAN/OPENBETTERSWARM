@@ -631,8 +631,15 @@ async def run_browser_agent(
             return None
 
         async def _exec_step(step: dict) -> dict | None:
-            """One replay step; an off-screen click gets one scroll-and-retry
-            (recorded elements often sit below the fold on a fresh page)."""
+            """One replay step; settle on the click target first so a recorded
+            click never fires before the page paints it (the premature-click miss
+            that quarantined skills), then an off-screen click gets one
+            scroll-and-retry (recorded elements often sit below the fold)."""
+            _settle = browser_skills.replay_settle_target(step)
+            if _settle:
+                async def _w(t, p, b, tid):
+                    return await _cancellable(execute_browser_tool(t, p, b, tid))
+                await browser_wait.smart_wait(_w, browser_id, tab_id, 1500, until=_settle)
             res = await _cancellable(execute_browser_tool(step["tool"], step.get("params", {}), browser_id, tab_id))
             if res is not None and "box model" in str(res.get("error", "")):
                 logger.info(f"[browser-skills] replay step off-screen ({step['tool']}); scrolling and retrying once")

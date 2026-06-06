@@ -328,6 +328,19 @@ def _prune_detours(steps: list[dict]) -> list[dict]:
     return out
 
 
+def replay_settle_target(step: dict) -> str | None:
+    """What a replay should WAIT for before running this step, or None. For a
+    click-by-name, that's the name itself: a recorded click can fire before the
+    target paints on a fresh page (the premature-click miss that quarantined
+    skills), so settling on the name first makes replay robust without changing
+    what it does. Only short, literal names are useful settle targets."""
+    if step.get("tool") != "BrowserClickByName":
+        return None
+    name = (step.get("params", {}) or {}).get("name") or ""
+    name = name.strip()
+    return name if 0 < len(name) <= 60 else None
+
+
 def first_unsafe_step(steps: list[dict]) -> tuple[int, str]:
     """Index of the first outward-facing step (click Send/Submit/Pay, type into
     a composer), -1 if none. Reuses the batch replayer's wordlist so there is

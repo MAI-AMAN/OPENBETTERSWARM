@@ -697,3 +697,19 @@ def test_distill_keeps_navigate_that_was_acted_on():
     steps = sk.distill_steps(log)
     urls = [s["params"].get("url") for s in steps if s["tool"] == "BrowserNavigate"]
     assert urls == ["https://x.com/form", "https://x.com/results"]  # both kept
+
+
+# --- replay settle-before-click target ---------------------------------------
+def test_replay_settle_target_for_click_by_name():
+    assert sk.replay_settle_target(
+        {"tool": "BrowserClickByName", "params": {"role": "button", "name": "Send"}}) == "Send"
+    # other tools have no settle target
+    assert sk.replay_settle_target(
+        {"tool": "BrowserType", "params": {"selector": "#m", "text": "hi"}}) is None
+    assert sk.replay_settle_target(
+        {"tool": "BrowserNavigate", "params": {"url": "https://x.com"}}) is None
+    # a too-long/blob name is not a useful settle target
+    assert sk.replay_settle_target(
+        {"tool": "BrowserClickByName", "params": {"name": "x" * 80}}) is None
+    assert sk.replay_settle_target(
+        {"tool": "BrowserClickByName", "params": {"name": ""}}) is None
