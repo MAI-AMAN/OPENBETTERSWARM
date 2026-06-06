@@ -139,3 +139,39 @@ def test_send_probe_replies_are_honest():
     assert "did NOT send it again" in a and "r46-os" in a
     u = unverifiable_reply("[test] hi r46-os", "browser became unresponsive")
     assert "not retrying" in u.lower() and "r46-os" in u
+
+
+def test_entry_url_extracted_from_brief():
+    from backend.apps.agents.browser.browser_fast_path import entry_url_from_brief
+    brief = (
+        "ENTRY: https://www.linkedin.com/search/results/people/?keywords=tyler%20chen\n"
+        "1. Open the first matching profile\n2. Click Message\n3. Type the text"
+    )
+    assert entry_url_from_brief(brief) == (
+        "https://www.linkedin.com/search/results/people/?keywords=tyler%20chen"
+    )
+    # case-insensitive, mid-brief, trailing punctuation stripped
+    assert entry_url_from_brief("steps...\nentry: https://news.ycombinator.com/.") == "https://news.ycombinator.com/"
+    assert entry_url_from_brief("no entry line here") == ""
+    assert entry_url_from_brief("") == ""
+    # never a non-http scheme
+    assert entry_url_from_brief("ENTRY: javascript:alert(1)") == ""
+
+
+def test_results_url_shapes():
+    from backend.apps.agents.browser.browser_agent import _RESULTS_URL_RE
+    hits = [
+        "https://www.linkedin.com/search/results/people/?keywords=tyler+chen",
+        "https://www.google.com/search?q=anything",
+        "https://www.reddit.com/search/?q=cats",
+        "https://example.com/find?term=x",
+    ]
+    misses = [
+        "https://www.linkedin.com/in/tylerchen1200/",
+        "https://news.ycombinator.com/",
+        "https://www.linkedin.com/messaging/thread/abc123/",
+    ]
+    for u in hits:
+        assert _RESULTS_URL_RE.search(u), u
+    for u in misses:
+        assert not _RESULTS_URL_RE.search(u), u

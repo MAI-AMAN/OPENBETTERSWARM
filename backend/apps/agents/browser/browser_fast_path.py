@@ -105,6 +105,17 @@ def _parse_verdict_and_brief(text: str) -> tuple[str, str]:
     return verdict, brief[:700]
 
 
+_ENTRY_RE = re.compile(r"^\s*ENTRY:\s*(https?://\S+)", re.I | re.M)
+
+
+def entry_url_from_brief(brief: str) -> str:
+    """The brief's ENTRY deep URL, or ''. Powers dispatch pre-navigation: a NEW
+    card opens directly on it instead of google, killing the orient+navigate
+    turns; a REUSED card is never moved (its deeper live state wins)."""
+    m = _ENTRY_RE.search(brief or "")
+    return m.group(1).rstrip(".,;)") if m else ""
+
+
 def compose_task(prompt: str, brief: str) -> str:
     """User's words first and authoritative; the brief is advisory routing.
     Skill replay keys on the parent's user message, so brief variance is safe."""

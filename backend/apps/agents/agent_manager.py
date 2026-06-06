@@ -3376,9 +3376,14 @@ class AgentManager:
                 if not text:
                     _fp_path = "read->browser"
 
+            _entry = browser_fast_path.entry_url_from_brief(brief)
+            if _entry:
+                logger.info(f"[browser-cold] brief entry url for {session_id}: {_entry}")
+
             async def _dispatch(task_text: str) -> dict:
                 results = await run_browser_agents(
-                    tasks=[{"task": task_text, "browser_id": selected[0] if selected else "", "url": ""}],
+                    tasks=[{"task": task_text, "browser_id": selected[0] if selected else "",
+                            "url": "", "entry_url": _entry}],
                     model=session.model,
                     dashboard_id=session.dashboard_id,
                     pre_selected_browser_ids=selected,
