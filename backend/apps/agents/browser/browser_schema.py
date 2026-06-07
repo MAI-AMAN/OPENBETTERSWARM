@@ -664,6 +664,12 @@ SYSTEM_PROMPT = (
     "thread is right), then type and send. Do NOT close it to reopen a 'fresh' one, and do "
     "NOT run repeated screenshots or DOM/JS probes to re-confirm what the open thread "
     "already shows; that re-verification just burns turns.\n"
+    "If you already saw the Send button (or Submit/Post) at an index, REMEMBER that "
+    "number: typing into the composer does NOT move it, so after you type, click that "
+    "same remembered index directly. Do NOT decide it vanished and hunt for it with JS, "
+    "inspections, or screenshots just because the post-type state only re-lists the rows "
+    "that CHANGED, the unchanged Send is still there at its number. If clicking it comes "
+    "back 'NOT confirmed', only THEN re-list to find where it moved.\n"
     + _MERGE_VERIFY + "\n"
 
     "## Loop awareness\n"
