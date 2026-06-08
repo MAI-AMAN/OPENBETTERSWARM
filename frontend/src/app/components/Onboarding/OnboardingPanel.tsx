@@ -243,7 +243,7 @@ const OnboardingPanel: React.FC = () => {
                       <ButtonBase
                         onClick={() => {
                           report('panel_skipped', { from: 'expanded' });
-                          progress.setPanelMode('docked');
+                          progress.setPanelMode('hidden');
                         }}
                         sx={{
                           fontSize: 11.5,
@@ -255,7 +255,7 @@ const OnboardingPanel: React.FC = () => {
                           transition: 'color 0.15s, background 0.15s',
                           '&:hover': { color: c.text.primary, bgcolor: `${c.text.tertiary}0A` },
                         }}
-                        aria-label="Skip setup and tuck it into the sidebar"
+                        aria-label="Skip setup (reopen later from Settings, Restart tour)"
                       >
                         Skip
                       </ButtonBase>
