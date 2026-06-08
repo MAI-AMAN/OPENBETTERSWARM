@@ -2115,10 +2115,14 @@ ipcMain.on('splash:action', (_event, action) => {
 });
 
 // Log every IPC handle entry so the trace shows which main-process call the renderer was making in the seconds before death.
+// The CDP channels fire once PER accessibility-tree node (hundreds per page read), pure noise that buries the useful trace,
+// so skip those by default; OPENSWARM_DIAG_IPC=1 brings them back when you genuinely need the firehose.
+const _NOISY_IPC = new Set(['send-cdp-command', 'cdp-cache-get', 'cdp-cache-set', 'cdp-routes-get', 'cdp-child-sessions-get']);
+const _DIAG_IPC_ALL = process.env.OPENSWARM_DIAG_IPC === '1';
 const _origHandle = ipcMain.handle.bind(ipcMain);
 ipcMain.handle = (channel, handler) => {
   return _origHandle(channel, async (...args) => {
-    console.log('[diag][ipc.handle]', channel);
+    if (_DIAG_IPC_ALL || !_NOISY_IPC.has(channel)) console.log('[diag][ipc.handle]', channel);
     try {
       return await handler(...args);
     } catch (err) {
