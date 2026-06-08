@@ -1084,9 +1084,9 @@ async def run_browser_agent(
                     # if the send registered, hand the parent a real DONE; otherwise just
                     # end the spin and let the honesty gate decide from the action log
                     if send_confirmed:
-                        _proof = next((str(a.get("result_summary") or "") for a in reversed(action_log)
-                                       if a.get("ok") and "Confirmed:" in str(a.get("result_summary") or "")), "")
-                        text_parts = ["OUTCOME: DONE - " + (_proof[:160] or "the task completed and was confirmed on the page.")]
+                        # plain confirmation; the raw action-log proof (indices, coords)
+                        # is machine-speak, so we do NOT splice it into the user's line
+                        text_parts = ["OUTCOME: DONE - the task is complete and was confirmed on the page."]
                     break
             else:
                 perception_stall = 0
