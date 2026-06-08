@@ -196,6 +196,22 @@ def _delta_state(text: str, seen_lines: set[str]) -> str:
     )
 
 
+# A button row whose name is exactly a Send control (not "Send InMail credit" or
+# "Send a message to X"); used to hand the model the Send button after it types,
+# so it never burns turns hunting a button that's right there.
+_SEND_ROW_RE = re.compile(r'\[(\d+)\]\*?<\s*button\s+"([^"]*)"', re.I)
+
+
+def _send_index_in_state(state_text: str):
+    """(index, name) of a real Send button in an interactives list, or None.
+    Strict exact match so it never grabs an upsell or a profile 'Send a message' link."""
+    for line in (state_text or "").splitlines():
+        m = _SEND_ROW_RE.search(line)
+        if m and m.group(2).strip().lower() in ("send", "send now", "send message"):
+            return int(m.group(1)), m.group(2)
+    return None
+
+
 def _is_composer_fill(tool_name: str, tool_input: dict) -> bool:
     """True if this action typed a message into a composer (the moment the Send
     button is about to matter). Covers the solo fill, BrowserType, and a batched
@@ -251,7 +267,19 @@ async def _post_action_state(
     if not isinstance(lst, dict) or "error" in lst or not lst.get("text"):
         return ""
     state = lst["text"] if seen_lines is None else _delta_state(lst["text"], seen_lines)
-    return f"\n\n{PAGE_STATE_MARKER}\n{_truncate_state(state)}"
+    out = f"\n\n{PAGE_STATE_MARKER}\n{_truncate_state(state)}"
+    # Hand the Send button's index over after a composer fill so the model clicks it
+    # directly instead of scanning the list or hunting via CSS/JS/screenshots. This is
+    # the POINTER; the wait above is what makes Send actually present to point at, the
+    # two work together (removing this brought the Send-hunt back, observed live).
+    if _composer_fill:
+        _si = _send_index_in_state(lst["text"])
+        if _si:
+            out = (f"\n\n[send-ready] Your message is typed and the Send button is index "
+                   f"{_si[0]} below. To deliver, click it SOLO with BrowserClickIndex + an "
+                   f"`expect` proof. Do NOT hunt for it with CSS/JS/screenshots, it is right here."
+                   ) + out
+    return out
 
 
 async def _request_browser_approval(

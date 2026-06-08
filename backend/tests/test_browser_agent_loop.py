@@ -1440,6 +1440,17 @@ def test_composer_fill_detection():
     assert not _is_composer_fill("BrowserScroll", {})
 
 
+def test_send_index_handoff_points_only_at_a_real_send_button():
+    # after a composer fill we hand the model the Send button's index so it clicks
+    # it directly instead of hunting; must never mistake an upsell/profile link for it
+    from backend.apps.agents.browser.browser_agent import _send_index_in_state
+    page = '[1]<link "Tyler Chen">\n[33]<textbox "Write a message">\n[44]<button "Send">'
+    assert _send_index_in_state(page) == (44, "Send")
+    assert _send_index_in_state('[12]<button "Send InMail credit">') is None
+    assert _send_index_in_state('[5]<button "Send a message to Maya">') is None
+    assert _send_index_in_state("") is None
+
+
 def test_strip_lone_surrogates():
     from backend.apps.agents.browser.browser_agent import _strip_lone_surrogates, _format_tool_result
     # an orphan UTF-16 surrogate (half an emoji from the webview) is what crashes
