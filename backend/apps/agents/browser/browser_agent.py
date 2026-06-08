@@ -206,6 +206,37 @@ def _delta_state(text: str, seen_lines: set[str]) -> str:
     )
 
 
+# A button row whose name is exactly a Send control (not "Send InMail credit" or
+# "Send a message to X"); used to hand the model the Send button after it types,
+# so it never burns turns hunting a button that's right there.
+_SEND_ROW_RE = re.compile(r'\[(\d+)\]\*?<\s*button\s+"([^"]*)"', re.I)
+
+
+def _is_composer_fill(tool_name: str, tool_input: dict) -> bool:
+    """True if this action typed a message into a composer (the moment the Send
+    button is about to matter). Covers the solo fill, BrowserType, and a batched
+    fill, the three ways the model composes."""
+    ti = tool_input or {}
+    if tool_name in ("BrowserClickIndex", "BrowserType"):
+        return bool(str(ti.get("text") or "").strip())
+    if tool_name == "BrowserBatch":
+        for a in (ti.get("actions") or []):
+            p = a.get("params") or {}
+            if a.get("type") in ("type", "click_index") and str(p.get("text") or "").strip():
+                return True
+    return False
+
+
+def _send_index_in_state(state_text: str):
+    """(index, name) of a real Send button in an interactives list, or None.
+    Strict exact match so it never grabs an upsell or a profile 'Send a message' link."""
+    for line in (state_text or "").splitlines():
+        m = _SEND_ROW_RE.search(line)
+        if m and m.group(2).strip().lower() in ("send", "send now", "send message"):
+            return int(m.group(1)), m.group(2)
+    return None
+
+
 async def _post_action_state(
     tool_name: str, tool_input: dict, result: dict,
     browser_id: str, tab_id: str, wait_exec, goal: str,
@@ -224,6 +255,16 @@ async def _post_action_state(
         )
         if settle.get("hung"):
             return ""
+    # Composer fill: the Send button renders a beat LATER than the text commits, so
+    # a re-list right now misses it and the model wastes turns hunting (measured ~54s
+    # on one run). Wait for Send to paint first, then it's in the list we hand back.
+    _composer_fill = _is_composer_fill(tool_name, tool_input)
+    if _composer_fill:
+        try:
+            await browser_wait.smart_wait(wait_exec, browser_id, tab_id, 2500,
+                                          until="Send", target_only=True)
+        except Exception:
+            pass
     try:
         params = {"goal": goal} if goal else {}
         lst = await asyncio.wait_for(
@@ -234,7 +275,16 @@ async def _post_action_state(
     if not isinstance(lst, dict) or "error" in lst or not lst.get("text"):
         return ""
     state = lst["text"] if seen_lines is None else _delta_state(lst["text"], seen_lines)
-    return f"\n\n{PAGE_STATE_MARKER}\n{_truncate_state(state)}"
+    out = f"\n\n{PAGE_STATE_MARKER}\n{_truncate_state(state)}"
+    # Hand the Send button over so the model clicks it instead of hunting via CSS/JS.
+    if _composer_fill:
+        _si = _send_index_in_state(lst["text"])
+        if _si:
+            out = (f"\n\n[send-ready] Your message is typed and the Send button is index "
+                   f"{_si[0]} below. To deliver, click it SOLO with BrowserClickIndex + an "
+                   f"`expect` proof. Do NOT hunt for it with CSS/JS/screenshots, it is right here."
+                   ) + out
+    return out
 
 
 async def _request_browser_approval(

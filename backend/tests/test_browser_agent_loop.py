@@ -1411,6 +1411,24 @@ def test_recoverable_tool_error_classifier():
     assert not recoverable_tool_error("some unrelated failure")
 
 
+def test_composer_fill_detection_and_send_handoff():
+    from backend.apps.agents.browser.browser_agent import _is_composer_fill, _send_index_in_state
+    # a composer fill is detected across the three ways the model types
+    assert _is_composer_fill("BrowserClickIndex", {"index": 4, "text": "hello world"})
+    assert _is_composer_fill("BrowserType", {"selector": "#m", "text": "hi"})
+    assert _is_composer_fill("BrowserBatch", {"actions": [
+        {"type": "click_index", "params": {"index": 4, "text": "hi there"}}]})
+    # a plain click (no text) is NOT a fill
+    assert not _is_composer_fill("BrowserClickIndex", {"index": 4})
+    assert not _is_composer_fill("BrowserScroll", {})
+    # the real Send button is handed over; upsells / profile links are never mistaken for it
+    page = '[1]<link "Tyler Chen">\n[33]<textbox "Write a message">\n[44]<button "Send">'
+    assert _send_index_in_state(page) == (44, "Send")
+    assert _send_index_in_state('[12]<button "Send InMail credit">') is None
+    assert _send_index_in_state('[5]<button "Send a message to Maya">') is None
+    assert _send_index_in_state("") is None
+
+
 def test_strip_lone_surrogates():
     from backend.apps.agents.browser.browser_agent import _strip_lone_surrogates, _format_tool_result
     # an orphan UTF-16 surrogate (half an emoji from the webview) is what crashes
