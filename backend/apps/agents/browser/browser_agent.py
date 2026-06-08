@@ -863,8 +863,7 @@ async def run_browser_agent(
     # tanks UI responsiveness. After N consecutive violations the agent
     # gives up and surfaces an error instead of churning through all
     # MAX_TURNS doing the same broken thing.
-    consecutive_violations = 0
-    MAX_CONSECUTIVE_VIOLATIONS = 3
+    rp_violations = 0  # turns the model acted without ReportProgress (now accepted + reminded, not rejected)
     # rows already shown to the model; attached state shrinks to the delta
     attached_state_seen: set[str] = set()
     # under-batching telemetry + nudge state
@@ -991,41 +990,25 @@ async def run_browser_agent(
             )
             # Violation: action tools without ReportProgress in the same turn.
             # The model MUST articulate its evaluation/memory/goal before acting.
+            # Acted without the ReportProgress preamble. Do NOT reject and burn
+            # the turn (measured 5/28 turns lost to this on one run): ReportProgress
+            # is a reflection/UX aid, NOT a safety gate (the send-guard, completion
+            # gate and act-and-confirm are separate and untouched). Let the action
+            # run, synthesize a minimal goal so the UX card + tracking aren't blank,
+            # and remind once on the result. Genuine runaway is still caught by the
+            # loop detector and MAX_TURNS, which is what actually bounds a loop.
             report_progress_violation = has_action_tools and not has_report_progress
+            rp_reminder_pending = False
             if report_progress_violation:
-                consecutive_violations += 1
-                logger.warning(
-                    f"[browser-agent {session_id}] ReportProgress violation "
-                    f"({consecutive_violations}/{MAX_CONSECUTIVE_VIOLATIONS}): "
-                    f"action tools called without brain state"
+                rp_violations += 1
+                rp_reminder_pending = True
+                if not current_next_goal or current_next_goal == task:
+                    _synth = next((t.name for t in tool_uses if t.name in _ACTION_TOOLS_REQUIRING_REPORT), "act")
+                    current_next_goal = f"(continuing) {_synth.replace('Browser', '').lower()}"
+                logger.info(
+                    f"[browser-agent {session_id}] ReportProgress omitted; running the action "
+                    f"anyway and reminding (rp_violations={rp_violations})"
                 )
-                if consecutive_violations >= MAX_CONSECUTIVE_VIOLATIONS:
-                    logger.error(
-                        f"[browser-agent {session_id}] hit "
-                        f"{MAX_CONSECUTIVE_VIOLATIONS} consecutive ReportProgress "
-                        f"violations; aborting to prevent runaway loop"
-                    )
-                    # Surface a user-visible error message so the frontend
-                    # shows something coherent instead of just stopping.
-                    err_msg = Message(
-                        role="assistant",
-                        content=(
-                            "I got stuck repeating the same action without "
-                            "thinking it through. Stopping here so I don't "
-                            "loop. Feel free to ask me to try again."
-                        ),
-                    )
-                    session.messages.append(err_msg)
-                    await ws_manager.send_to_session(session_id, "agent:message", {
-                        "session_id": session_id,
-                        "message": err_msg.model_dump(mode="json"),
-                    })
-                    break
-            else:
-                # Reset on a clean turn; only CONSECUTIVE violations
-                # count toward the limit. A single bad turn followed by
-                # a good one shouldn't kill the agent.
-                consecutive_violations = 0
             # Stable sort: ReportProgress first, then everything else in order.
             tool_uses_sorted = sorted(
                 tool_uses,
@@ -1092,42 +1075,6 @@ async def run_browser_agent(
                         "type": "tool_result",
                         "tool_use_id": tu.id,
                         "content": [{"type": "text", "text": "Progress recorded."}],
-                    })
-                    continue
-
-                # Reject action tools when ReportProgress is missing this turn.
-                # We MUST still emit a tool_result for every tool_use_id or the
-                # next API request 400s.
-                if (
-                    report_progress_violation
-                    and tu.name in _ACTION_TOOLS_REQUIRING_REPORT
-                ):
-                    rejection_text = (
-                        "REJECTED: You called an action tool without first calling "
-                        "ReportProgress in the same turn. ReportProgress is REQUIRED "
-                        "before every batch of action tools; it's how you reflect "
-                        "on what just happened and articulate your next goal. Try "
-                        "again: emit ReportProgress and your action tool(s) in the "
-                        "same response."
-                    )
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tu.id,
-                        "content": [{"type": "text", "text": rejection_text}],
-                        "is_error": True,
-                    })
-                    result_msg = Message(
-                        role="tool_result",
-                        content={
-                            "text": rejection_text,
-                            "tool_name": tu.name,
-                            "elapsed_ms": 0,
-                        },
-                    )
-                    session.messages.append(result_msg)
-                    await ws_manager.send_to_session(session_id, "agent:message", {
-                        "session_id": session_id,
-                        "message": result_msg.model_dump(mode="json"),
                     })
                     continue
 
@@ -1477,6 +1424,14 @@ async def run_browser_agent(
                     # later solo re-list is still caught as redundant.
                     fresh_state_pending = True
 
+                # One gentle nudge per violating turn, folded onto the action that
+                # ran, so the model self-corrects next turn without us costing it one.
+                if rp_reminder_pending and tu.name in _ACTION_TOOLS_REQUIRING_REPORT:
+                    rp_reminder_pending = False
+                    result["text"] = (f"{result.get('text') or ''}\n\n[note] Action ran. Next turn, "
+                                       "include ReportProgress (working_memory + next_goal) alongside "
+                                       "your action so your plan stays visible.")
+
                 # Auto-dismiss a blocking junk popup (cookie wall / upsell /
                 # coachmark) before it costs the model a turn. Mechanical, once
                 # per URL, only on the tight throwaway-dismiss vocabulary that
@@ -1824,7 +1779,7 @@ async def run_browser_agent(
             f"[browser-time {session_id}] wall={_wall_ms}ms llm={llm_ms_total}ms "
             f"tools={_tools_ms_total}ms other={max(0, _wall_ms - llm_ms_total - _tools_ms_total)}ms "
             f"auto_scans={auto_scan_count} hint_steps={len(route_hint_keys)} "
-            f"tool_errors={_err_tools} recovery_attaches={recovery_attaches}"
+            f"tool_errors={_err_tools} recovery_attaches={recovery_attaches} rp_violations={rp_violations}"
         )
         _nt = turn + 1
         # merge-verify telemetry: read-only tool calls AFTER the last state-changing

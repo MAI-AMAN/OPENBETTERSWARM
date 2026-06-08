@@ -187,6 +187,27 @@ def test_action_with_expect_is_confirmed(monkeypatch):
     assert "Confirmed: 'Submitted' is now present." in all_msgs
 
 
+def test_missing_report_progress_runs_the_action_and_reminds_not_rejects(monkeypatch):
+    # The model acts WITHOUT ReportProgress. Old behavior rejected the turn (wasted
+    # a round-trip); new behavior runs the action and folds in a one-line reminder.
+    BH._browser_history.clear(); BH._domain_notes.clear()
+    primary = FakeLLM([
+        Resp([_tu("BrowserClickIndex", index=2)]),  # NO ReportProgress this turn
+        Resp([Blk("text", "done")], stop_reason="end_turn"),
+    ])
+    aux = FakeAux()
+    sent = _install(monkeypatch, primary, aux)
+
+    asyncio.run(BA.run_browser_agent(task="click result two", browser_id="b1", model="sonnet"))
+
+    # the action actually executed (a click_index reached the browser), not rejected
+    assert any(c["action"] == "click_index" for c in sent), "the action was not run"
+    # the model was reminded (folded onto the result), never told 'REJECTED'
+    all_msgs = json.dumps([c["messages"] for c in primary.calls])
+    assert "include ReportProgress" in all_msgs
+    assert "REJECTED" not in all_msgs
+
+
 def test_aux_adjudication_fires_even_when_loop_detector_trips(monkeypatch):
     # Repeated IDENTICAL failing clicks trip the exact-repeat loop detector AND
     # reach stagnation exhaustion on the same turn. The aux escape hatch must
