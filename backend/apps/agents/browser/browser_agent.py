@@ -245,40 +245,50 @@ async def _post_action_state(
         )
         if settle.get("hung"):
             return ""
-    # Composer fill: the Send button lazy-renders a beat LATER than the text commits
-    # (measured: not in the AX tree even at 2.5s, esp. under load), so a re-list now
-    # misses it and the model burns a turn re-listing for it, or worse can't find it
-    # to send. This is a target_only wait, it returns the INSTANT Send appears, so the
-    # generous cap costs nothing on a fast render and just adds patience on a slow one.
     _composer_fill = _is_composer_fill(tool_name, tool_input)
+    params = {"goal": goal} if goal else {}
+    lst = None
+    _send_si = None
     if _composer_fill:
+        # The Send button lazy-renders a beat LATER than the text commits (measured:
+        # not in the AX tree even at 2.5s, worse under load), and a single re-list races
+        # that and loses, the old handoff never fired (send-ready=0 across 10 A/B legs).
+        # So POLL the actual interactives list for a REAL Send button and stop the instant
+        # it appears; this checks for the exact thing we hand over, not just 'Send' text.
+        _deadline = time.monotonic() + 6.0
+        while True:
+            try:
+                _l = await asyncio.wait_for(
+                    wait_exec("BrowserListInteractives", params, browser_id, tab_id), timeout=5.0)
+            except Exception:
+                break
+            if isinstance(_l, dict) and "error" not in _l and _l.get("text"):
+                lst = _l
+                _send_si = _send_index_in_state(_l["text"])
+                if _send_si:
+                    break
+            if time.monotonic() >= _deadline:
+                break
+            await asyncio.sleep(0.6)
+        logger.info(f"[browser-sendwait] composer fill: send_button_found={bool(_send_si)}")
+    else:
         try:
-            await browser_wait.smart_wait(wait_exec, browser_id, tab_id, 6000,
-                                          until="Send", target_only=True)
+            lst = await asyncio.wait_for(
+                wait_exec("BrowserListInteractives", params, browser_id, tab_id), timeout=5.0)
         except Exception:
-            pass
-    try:
-        params = {"goal": goal} if goal else {}
-        lst = await asyncio.wait_for(
-            wait_exec("BrowserListInteractives", params, browser_id, tab_id), timeout=5.0,
-        )
-    except Exception:
-        return ""
+            return ""
     if not isinstance(lst, dict) or "error" in lst or not lst.get("text"):
         return ""
     state = lst["text"] if seen_lines is None else _delta_state(lst["text"], seen_lines)
     out = f"\n\n{PAGE_STATE_MARKER}\n{_truncate_state(state)}"
-    # Hand the Send button's index over after a composer fill so the model clicks it
-    # directly instead of scanning the list or hunting via CSS/JS/screenshots. This is
-    # the POINTER; the wait above is what makes Send actually present to point at, the
-    # two work together (removing this brought the Send-hunt back, observed live).
-    if _composer_fill:
-        _si = _send_index_in_state(lst["text"])
-        if _si:
-            out = (f"\n\n[send-ready] Your message is typed and the Send button is index "
-                   f"{_si[0]} below. To deliver, click it SOLO with BrowserClickIndex + an "
-                   f"`expect` proof. Do NOT hunt for it with CSS/JS/screenshots, it is right here."
-                   ) + out
+    # Hand the Send button's index over so the model clicks it directly instead of
+    # scanning the list or hunting via CSS/JS/screenshots (the polled list above is what
+    # makes Send actually present to point at, the two work together).
+    if _send_si:
+        out = (f"\n\n[send-ready] Your message is typed and the Send button is index "
+               f"{_send_si[0]} below. To deliver, click it SOLO with BrowserClickIndex + an "
+               f"`expect` proof. Do NOT hunt for it with CSS/JS/screenshots, it is right here."
+               ) + out
     return out
 
 
