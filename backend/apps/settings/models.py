@@ -50,7 +50,7 @@ class AppSettings(BaseModel):
     openrouter_api_key: Optional[str] = None
     custom_providers: list["CustomProvider"] = Field(default_factory=list)
     auto_select_mode_on_new_agent: bool = False
-    expand_new_chats_in_dashboard: bool = False
+    expand_new_chats_in_dashboard: bool = True
     auto_reveal_sub_agents: bool = True
     dev_mode: bool = False
     allow_experimental_updates: bool = False

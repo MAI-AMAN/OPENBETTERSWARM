@@ -117,7 +117,7 @@ const initialState: SettingsState = {
     anthropic_api_key: null,
     browser_homepage: 'https://duckduckgo.com',
     auto_select_mode_on_new_agent: false,
-    expand_new_chats_in_dashboard: false,
+    expand_new_chats_in_dashboard: true,
     auto_reveal_sub_agents: true,
     dev_mode: false,
     allow_experimental_updates: false,
