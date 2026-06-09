@@ -17,6 +17,9 @@ const SETTLE_MS = 800;
 const SUSPEND_MARGIN_PX = 320;
 const RESUME_MARGIN_PX = 96;
 const SNAPSHOT_MAX_W = 1024;
+// Below this on-screen width a live page is indistinguishable from its placeholder,
+// so booted-parked cards on a zoomed-out canvas stay parked until zoomed into.
+const RESUME_MIN_CARD_PX = 220;
 
 interface Viewport {
   panX: number;
@@ -96,7 +99,9 @@ export function useWebviewSuspend(
 
     for (const id of Object.keys(suspended)) {
       const card = browserCards[id];
-      if (card && cardIntersectsViewport(card, vpRef.current, RESUME_MARGIN_PX)) {
+      if (!card) continue;
+      const bigEnough = card.width * zoom >= RESUME_MIN_CARD_PX;
+      if ((bigEnough && cardIntersectsViewport(card, vpRef.current, RESUME_MARGIN_PX)) || agentNeedsLive(id, card)) {
         dispatch(resumeBrowserCard(id));
       }
     }

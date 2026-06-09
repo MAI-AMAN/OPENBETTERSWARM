@@ -980,6 +980,13 @@ const dashboardLayoutSlice = createSlice({
           state.viewCards = action.payload.viewCards;
           state.browserCards = action.payload.browserCards;
           state.notes = action.payload.notes || {};
+          // Cards boot parked (no guest process, title placeholder); the suspend
+          // hook wakes viewport-sized and agent-driven ones on its first pass.
+          // Beats mounting 100 webviews just to suspend 92 of them.
+          state.suspendedBrowserCards = {};
+          for (const id of Object.keys(action.payload.browserCards)) {
+            state.suspendedBrowserCards[id] = { dataUrl: '', capturedAt: 0 };
+          }
         } else {
           const occupied = collectOccupiedRects(state, action.payload.expandedSessionIds);
           addMissingCards(state.cards, action.payload.cards, occupied);

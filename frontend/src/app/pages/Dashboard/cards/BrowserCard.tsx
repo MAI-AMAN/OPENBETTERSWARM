@@ -1077,21 +1077,40 @@ const BrowserCard: React.FC<Props> = ({
         )}
         {isElectron ? (
           suspendedSnap ? (
-            <Box
-              component="img"
-              src={suspendedSnap.dataUrl}
-              alt=""
-              onClick={() => dispatch(resumeBrowserCard(browserId))}
-              sx={{
-                position: 'absolute',
-                inset: 0,
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-                objectPosition: 'top left',
-                cursor: 'pointer',
-              }}
-            />
+            suspendedSnap.dataUrl ? (
+              <Box
+                component="img"
+                src={suspendedSnap.dataUrl}
+                alt=""
+                onClick={() => dispatch(resumeBrowserCard(browserId))}
+                sx={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  objectPosition: 'top left',
+                  cursor: 'pointer',
+                }}
+              />
+            ) : (
+              <Box
+                onClick={() => dispatch(resumeBrowserCard(browserId))}
+                sx={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  bgcolor: c.bg.surface,
+                }}
+              >
+                <Typography sx={{ color: c.text.ghost, fontSize: '0.9rem', px: 2, textAlign: 'center' }}>
+                  {activeTitle || activeUrl}
+                </Typography>
+              </Box>
+            )
           ) : (
           tabs.map((tab) => (
             <webview
