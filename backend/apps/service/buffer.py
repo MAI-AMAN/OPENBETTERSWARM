@@ -72,17 +72,21 @@ def enqueue(spool_path: str, kind: str, payload: dict, *, now: float) -> None:
             target = int(_MAX_BYTES * _TRIM_TARGET_FRACTION)
             # Delete oldest rows until we're back under target. Use a
             # reasonable batch size so we don't block forever.
+            dropped = 0
             for _ in range(64):
                 row = c.execute("SELECT id FROM spool ORDER BY id ASC LIMIT 1").fetchone()
                 if not row:
                     break
                 c.execute("DELETE FROM spool WHERE id = ?", (row[0],))
+                dropped += 1
                 try:
                     new_size = os.path.getsize(spool_path)
                 except OSError:
                     new_size = 0
                 if new_size <= target:
                     break
+            if dropped:
+                logger.warning("Spool over %d MB cap; dropped %d oldest entries", _MAX_BYTES // (1024 * 1024), dropped)
             # VACUUM is expensive; only run if we still appear oversized after
             # trimming, otherwise free pages get reused on next insert.
             try:

@@ -192,15 +192,24 @@ def _base_url() -> str:
         return _DEFAULT_BASE
 
 
-async def _post(path: str, body: dict) -> bool:
+async def _post(path: str, body: dict) -> int | None:
     url = f"{_base_url()}{path}"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as c:
             r = await c.post(url, json=body)
-        return 200 <= r.status_code < 500
+        return r.status_code
     except Exception as e:
         logger.debug("service POST %s failed: %s", path, e)
-        return False
+        return None
+
+
+def _delivered(status: int | None) -> bool:
+    return status is not None and 200 <= status < 300
+
+
+# 429/timeouts/5xx/network are worth retrying; other 4xx means the payload itself is rejected and retrying forever would just poison the spool.
+def _retryable(status: int | None) -> bool:
+    return status is None or status >= 500 or status in (408, 429)
 
 
 async def _post_or_spool(path: str, body: dict, kind: str) -> None:
@@ -217,9 +226,11 @@ async def _post_or_spool(path: str, body: dict, kind: str) -> None:
             return
         _inflight += 1
     try:
-        ok = await _post(path, body)
-        if not ok:
+        status = await _post(path, body)
+        if _retryable(status):
             buffer.enqueue(_spool_path(), f"{kind}:{path}", body, now=time.time())
+        elif not _delivered(status):
+            logger.warning("service POST %s rejected with HTTP %s; payload dropped", path, status)
     finally:
         async with _inflight_lock:
             _inflight = max(0, _inflight - 1)
@@ -236,11 +247,14 @@ async def drain_spool(batch_size: int = 50) -> int:
             if not path:
                 succeeded.append(rid)
                 continue
-            ok = await _post(path, body)
-            if ok:
+            status = await _post(path, body)
+            if _delivered(status):
                 succeeded.append(rid)
-            else:
+            elif _retryable(status):
                 break
+            else:
+                logger.warning("service replay %s rejected with HTTP %s; dropping spooled row", path, status)
+                succeeded.append(rid)
         if succeeded:
             buffer.acknowledge(_spool_path(), succeeded)
         return len(succeeded)
