@@ -41,11 +41,17 @@ function _flush(): void {
   const batch = _queue.splice(0);
   // Ship whole queue in one POST; /service/submit accepts a single object or array.
   const body = JSON.stringify(batch.length === 1 ? batch[0] : batch);
+  // keepalive lets the request outlive a closing window, so the last batch isn't eaten on quit.
   fetch(`${API_BASE}/service/submit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
+    keepalive: true,
   }).catch(() => {});
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => _flush());
 }
 
 export function sync(data: Record<string, unknown> = {}, opts: { immediate?: boolean } = {}): void {
