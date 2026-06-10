@@ -79,7 +79,8 @@ const AppShell: React.FC = () => {
   const location = useLocation();
   const [dashboardsExpanded, setDashboardsExpanded] = useState(true);
   const [appsExpanded, setAppsExpanded] = useState(true);
-  const [customizationExpanded, setCustomizationExpanded] = useState(true);
+  // Collapsed by default: config rows are progressive disclosure, not daily nav. Onboarding reads data-expanded and clicks to open when it needs them.
+  const [customizationExpanded, setCustomizationExpanded] = useState(false);
   // Starts collapsed so a fresh boot lands on a clean canvas; the toggle brings it back.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [renamingDashboardId, setRenamingDashboardId] = useState<string | null>(null);
