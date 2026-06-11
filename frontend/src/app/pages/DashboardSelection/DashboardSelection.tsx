@@ -11,7 +11,7 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import AddIcon from '@mui/icons-material/Add';
-import DashboardIcon from '@mui/icons-material/GridViewOutlined';
+import DashboardIcon from '@mui/icons-material/SpaceDashboardOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { Skeleton } from '@/app/components/feedback/Loading';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';

@@ -15,7 +15,7 @@ import Alert from '@mui/material/Alert';
 import InputBase from '@mui/material/InputBase';
 // One outlined icon language for the sidebar: thin monoline glyphs (not the
 // filled Material clip-art) so the rail reads as designed, not assembled.
-import DashboardIcon from '@mui/icons-material/GridViewOutlined';
+import DashboardIcon from '@mui/icons-material/SpaceDashboardOutlined';
 import PsychologyIcon from '@mui/icons-material/PsychologyOutlined';
 import BuildIcon from '@mui/icons-material/BuildOutlined';
 import TuneIcon from '@mui/icons-material/TuneOutlined';
@@ -24,7 +24,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsIcon from '@mui/icons-material/SettingsOutlined';
 import ExtensionIcon from '@mui/icons-material/PaletteOutlined';
-import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
+import ViewSidebarOutlinedIcon from '@mui/icons-material/VerticalSplitOutlined';
 import ArrowBackOutlinedIcon from '@mui/icons-material/ArrowBackOutlined';
 import ArrowForwardOutlinedIcon from '@mui/icons-material/ArrowForwardOutlined';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
