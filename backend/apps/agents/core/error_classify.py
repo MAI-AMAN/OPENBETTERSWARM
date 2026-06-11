@@ -77,6 +77,26 @@ def _is_auth_error(exc: BaseException, extra_text: str = "") -> bool:
     ))
 
 
+def _is_unknown_model_error(exc: BaseException, extra_text: str = "") -> bool:
+    """True when the upstream rejects the model code itself (e.g. a ChatGPT/Codex
+    subscription whose plan doesn't expose the GPT model id we send: code 1211
+    'Unknown Model, please check the model code'). The fix isn't retry, it's a
+    different model or an API key, so we surface that instead of the raw JSON.
+    """
+    combined = f"{exc!s}\n{extra_text}".strip()
+    if not combined:
+        return False
+    return bool(re.search(
+        r"unknown\s+model"
+        r"|check\s+the\s+model\s+code"
+        r"|\b1211\b"
+        r"|model[_\s-]?not[_\s-]?found"
+        r"|does\s+not\s+exist.*model|model.*does\s+not\s+exist",
+        combined,
+        re.IGNORECASE,
+    ))
+
+
 def _is_transient_capacity_error(exc: BaseException, extra_text: str = "") -> bool:
     # The Claude CLI's underlying ProcessError stringifies to a generic
     # "Command failed with exit code 1 / Check stderr output for details";

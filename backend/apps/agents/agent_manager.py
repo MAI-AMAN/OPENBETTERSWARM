@@ -32,6 +32,7 @@ from backend.apps.agents.core.error_classify import (
     _is_auth_error,
     _is_long_context_error,
     _is_transient_capacity_error,
+    _is_unknown_model_error,
 )
 from backend.apps.agents.manager.session.session_store import (
     _delete_session_file,
@@ -3009,7 +3010,42 @@ class AgentManager:
                     "session_id": session_id,
                     "message": error_msg.model_dump(mode="json"),
                 })
+            elif _is_unknown_model_error(e, extra_text=_stderr_tail):
+                # Upstream rejected the model code itself (e.g. Codex 1211 on a
+                # ChatGPT plan that lacks our GPT ids). Track it; the friendly
+                # "add an API key / pick another model" card is rendered frontend-side.
+                try:
+                    from backend.apps.service.client import submit_diagnostic
+                    submit_diagnostic({
+                        "kind": "model_error",
+                        "subkind": "unknown_model",
+                        "model": session.model,
+                        "provider": session.provider,
+                        "connection_mode": getattr(load_settings(), "connection_mode", "own_key"),
+                        "error_preview": (str(e) or "")[:400],
+                    })
+                except Exception:
+                    logger.debug("submit_diagnostic model_error failed", exc_info=True)
+                error_msg = Message(role="system", content=f"Error: {str(e)}", branch_id=session.active_branch_id)
+                session.messages.append(error_msg)
+                await ws_manager.send_to_session(session_id, "agent:message", {
+                    "session_id": session_id,
+                    "message": error_msg.model_dump(mode="json"),
+                })
             else:
+                # Track unclassified agent failures too so we stop flying blind on them.
+                try:
+                    from backend.apps.service.client import submit_diagnostic
+                    submit_diagnostic({
+                        "kind": "model_error",
+                        "subkind": "unclassified",
+                        "model": session.model,
+                        "provider": session.provider,
+                        "connection_mode": getattr(load_settings(), "connection_mode", "own_key"),
+                        "error_preview": (str(e) or "")[:400],
+                    })
+                except Exception:
+                    logger.debug("submit_diagnostic model_error failed", exc_info=True)
                 error_msg = Message(role="system", content=f"Error: {str(e)}", branch_id=session.active_branch_id)
                 session.messages.append(error_msg)
                 await ws_manager.send_to_session(session_id, "agent:message", {

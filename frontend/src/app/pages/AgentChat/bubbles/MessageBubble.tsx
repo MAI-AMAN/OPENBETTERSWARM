@@ -101,6 +101,16 @@ function parseOpenSwarmError(text: string, ctx?: OverflowContext): OpenSwarmErro
       ctaAction: 'upgrade',
     };
   }
+  if (/unknown model|check the model code|\b1211\b|model_not_found/i.test(text)) {
+    return {
+      kind: 'auth',
+      title: "That model isn't available on your plan",
+      detail:
+        "Your connected subscription doesn't include this model. Add an API key for it in Settings, or pick a different model.",
+      ctaLabel: 'Open Settings',
+      ctaAction: 'settings',
+    };
+  }
   if (/at capacity|Try again shortly|503|service unavailable/i.test(text)) {
     return {
       kind: 'network',
