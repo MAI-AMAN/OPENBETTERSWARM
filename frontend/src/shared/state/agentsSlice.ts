@@ -282,13 +282,19 @@ export interface LaunchAndSendPayload {
 
 export const fetchSession = createAsyncThunk(
   'agents/fetchSession',
-  async (sessionId: string, { rejectWithValue }) => {
+  async (sessionId: string, { rejectWithValue, getState }) => {
+    // Snapshot whether a stream is live for this session BEFORE the await, so the
+    // merge reducer can treat a streaming session as "live" and keep the just-sent
+    // user bubble (streaming lives in streamingSlice and never flips session.status
+    // to running, so the status-only liveness check missed mid-stream reopens).
+    const streamingActive = !!(getState() as { streaming?: { bySession?: Record<string, unknown> } }).streaming?.bySession?.[sessionId];
     const res = await fetch(`${AGENTS_API}/sessions/${sessionId}`);
     if (!res.ok) {
       // 404: rehydrating a deleted/crashed session; structured reject lets .rejected purge state.
       return rejectWithValue({ sessionId, status: res.status });
     }
     const session = await res.json();
+    (session as AgentSession & { _streamingActive?: boolean })._streamingActive = streamingActive;
     return session as AgentSession;
   }
 );
@@ -1259,7 +1265,11 @@ const agentsSlice = createSlice({
         // lacks the new turn; trusting only the snapshot wiped the user bubble
         // until the run finished.
         const isLive = (s?: string) => s === 'running' || s === 'waiting_approval';
-        const liveStatus = isLive(session.status) || isLive(existing?.status);
+        // A streaming session counts as live even if neither status says 'running'
+        // (streaming lives in streamingSlice). Without this, a mid-stream reopen
+        // dropped the just-sent user bubble until the turn finished.
+        const streamingActive = !!(session as AgentSession & { _streamingActive?: boolean })._streamingActive;
+        const liveStatus = streamingActive || isLive(session.status) || isLive(existing?.status);
         const incomingClientIds = new Set(
           incomingMsgs.map((m) => m.client_message_id).filter(Boolean),
         );
@@ -1285,6 +1295,7 @@ const agentsSlice = createSlice({
           if (at === -1) mergedMessages.push(m);
           else mergedMessages.splice(at, 0, m);
         }
+        delete (session as AgentSession & { _streamingActive?: boolean })._streamingActive;
         state.sessions[session.id] = {
           ...session,
           messages: mergedMessages,
