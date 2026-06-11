@@ -116,7 +116,9 @@ const slice = createSlice({
       state.startedAt = Date.now();
       state.completedSteps = action.payload.preCompleted;
       state.currentStepId = action.payload.currentStepId;
-      state.panelMode = 'pill';
+      // Default expanded on first init (matches initialState's documented intent);
+      // returning users skip this branch (initialized) so their saved choice holds.
+      state.panelMode = 'expanded';
       state.dismissedAt = null;
       state.perStepState = {};
       state.running = false;
