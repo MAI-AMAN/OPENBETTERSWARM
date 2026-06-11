@@ -45,7 +45,9 @@ const ViewCard: React.FC<Props> = ({ output, onClick, onDelete, onRun }) => {
       <Box
         sx={{
           height: 160,
-          bgcolor: c.accent.primary + '18',
+          // Whisper of warmth fading into the card surface, no hard tint block,
+          // so preview and title read as one continuous panel (matches dashboards).
+          background: `radial-gradient(120% 90% at 50% 0%, ${c.accent.primary}1F 0%, transparent 62%)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -70,9 +72,9 @@ const ViewCard: React.FC<Props> = ({ output, onClick, onDelete, onRun }) => {
         ) : (
           <Icon
             sx={{
-              fontSize: 48,
-              color: c.accent.primary,
-              opacity: 0.7,
+              fontSize: 40,
+              color: c.text.tertiary,
+              opacity: 0.45,
             }}
           >
             {output.icon}

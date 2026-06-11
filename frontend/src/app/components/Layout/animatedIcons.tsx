@@ -31,21 +31,3 @@ export function AnimatedPanelLeft({ size = 18 }: Props) {
     </motion.svg>
   );
 }
-
-// Plus: both strokes redraw from nothing, the classic "new" flourish.
-export function AnimatedPlus({ size = 16 }: Props) {
-  return (
-    <motion.svg width={size} height={size} {...svgBase} initial="rest" animate="rest" whileHover="hover">
-      <motion.line
-        x1="12" y1="5" x2="12" y2="19"
-        variants={{ rest: { pathLength: 1 }, hover: { pathLength: [0, 1] } }}
-        transition={{ duration: 0.34, ease: 'easeOut' }}
-      />
-      <motion.line
-        x1="5" y1="12" x2="19" y2="12"
-        variants={{ rest: { pathLength: 1 }, hover: { pathLength: [0, 1] } }}
-        transition={{ duration: 0.34, ease: 'easeOut', delay: 0.06 }}
-      />
-    </motion.svg>
-  );
-}

@@ -603,20 +603,20 @@ const IdlePill: React.FC<{ c: ReturnType<typeof useClaudeTokens>; onClick: () =>
         sx={{
           display: 'flex',
           alignItems: 'center',
-          gap: 0.75,
-          px: 1.25,
-          height: 24,
+          gap: 1,
+          px: 1.5,
+          height: 30,
           userSelect: 'none',
           cursor: 'pointer',
           transition: 'background 0.15s',
           '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
         }}
       >
-        <SearchIcon sx={{ fontSize: 13, color: c.text.muted, flexShrink: 0 }} />
+        <SearchIcon sx={{ fontSize: 16, color: c.text.muted, flexShrink: 0 }} />
         <Typography
           sx={{
             color: c.text.muted,
-            fontSize: '0.66rem',
+            fontSize: '0.78rem',
             fontWeight: 400,
             lineHeight: 1,
             whiteSpace: 'nowrap',
@@ -628,7 +628,7 @@ const IdlePill: React.FC<{ c: ReturnType<typeof useClaudeTokens>; onClick: () =>
         <Typography
           sx={{
             color: c.text.ghost,
-            fontSize: '0.6rem',
+            fontSize: '0.7rem',
             fontFamily: c.font.mono,
             lineHeight: 1,
             opacity: 0.7,

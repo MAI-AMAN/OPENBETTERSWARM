@@ -23,8 +23,8 @@ import { LayoutGrid } from 'lucide-react';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { Settings as LucideSettings } from 'lucide-react';
 import { Palette } from 'lucide-react';
-import { ArrowLeft, ArrowRight } from 'lucide-react';
-import { AnimatedPanelLeft, AnimatedPlus } from './animatedIcons';
+import { ArrowLeft, ArrowRight, Plus } from 'lucide-react';
+import { AnimatedPanelLeft } from './animatedIcons';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import SystemUpdateAltIcon from '@mui/icons-material/SystemUpdateAlt';
 import CloseIcon from '@mui/icons-material/Close';
@@ -451,14 +451,14 @@ const AppShell: React.FC = () => {
             component="img"
             src="./logo.png"
             alt="OpenSwarm"
-            sx={{ width: 16, height: 16, borderRadius: 0.5, opacity: 0.6 }}
+            sx={{ width: 20, height: 20, borderRadius: 0.5, opacity: 0.85 }}
           />
           <Typography
             sx={{
-              color: c.text.tertiary,
-              fontSize: '0.72rem',
-              fontWeight: 500,
-              letterSpacing: 0.3,
+              color: c.text.secondary,
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              letterSpacing: 0.2,
               lineHeight: 1,
             }}
           >
@@ -682,7 +682,7 @@ const AppShell: React.FC = () => {
                     '&:hover': { color: c.accent.primary, bgcolor: `${c.accent.primary}14` },
                   }}
                 >
-                  <AnimatedPlus size={15} />
+                  <Plus size={15} />
                 </IconButton>
               </Tooltip>
               {dashboardList.length > 0 && (
@@ -939,7 +939,7 @@ const AppShell: React.FC = () => {
                     '&:hover': { color: c.accent.primary, bgcolor: `${c.accent.primary}14` },
                   }}
                 >
-                  <AnimatedPlus size={15} />
+                  <Plus size={15} />
                 </IconButton>
               </Tooltip>
               {appsList.length > 0 && (
