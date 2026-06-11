@@ -1072,21 +1072,21 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
           flexShrink: 0,
           cursor: 'col-resize',
           position: 'relative',
-          // Above both panels so neither one's background clips the overlapping
-          // line (the right panel paints later and was half-covering it, which
-          // made the line look thicker only where the header is transparent).
-          zIndex: 2,
           bgcolor: 'transparent',
           transition: 'background-color 0.15s',
+          // Draw the line on the CHAT side of the seam, never centered. The app
+          // preview is an Electron <webview> (its own compositor layer that floats
+          // above normal DOM and ignores z-index), so a centered line had its
+          // right half swallowed by the webview in the body but not in the
+          // header, the long-standing thick-at-top look. Anchoring left of the
+          // seam keeps the whole line over plain DOM, so it's uniform.
           '&::after': {
             content: '""',
             position: 'absolute',
             top: 0,
             bottom: 0,
-            left: '50%',
-            transform: 'translateX(-50%)',
+            right: '50%',
             width: 1,
-            // Invisible at rest; otherwise the border line forms a T-junction with the chat header.
             bgcolor: 'transparent',
             transition: 'width 0.15s, background-color 0.15s',
           },
