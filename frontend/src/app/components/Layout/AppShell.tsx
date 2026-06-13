@@ -117,6 +117,8 @@ const AppShell: React.FC = () => {
   const availableVersion = useAppSelector((state) => state.update.availableVersion);
   const downloadPercent = useAppSelector((state) => state.update.downloadPercent);
   const installing = useAppSelector((state) => state.update.installing);
+  // Windows' Squirrel never reports a version, and a mid-download cache-clear reload wipes it, so render the name version-less instead of "OpenSwarm null".
+  const verSuffix = availableVersion ? ` ${availableVersion}` : '';
 
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(() => {
     try { return localStorage.getItem(UPDATE_DISMISS_KEY); } catch { return null; }
@@ -551,9 +553,9 @@ const AppShell: React.FC = () => {
         >
           <SystemUpdateAltIcon sx={{ fontSize: 16, color: c.accent.primary, flexShrink: 0 }} />
           <Typography sx={{ fontSize: '0.8rem', color: c.text.secondary, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {updateStatus === 'available' && `OpenSwarm ${availableVersion} is available`}
-            {updateStatus === 'downloading' && `Downloading OpenSwarm ${availableVersion}…`}
-            {updateStatus === 'downloaded' && `OpenSwarm ${availableVersion} will install when you quit`}
+            {updateStatus === 'available' && `OpenSwarm${verSuffix} is available`}
+            {updateStatus === 'downloading' && `Downloading OpenSwarm${verSuffix}…`}
+            {updateStatus === 'downloaded' && `OpenSwarm${verSuffix} will install when you quit`}
           </Typography>
           {updateStatus === 'downloading' && (
             <LinearProgress
@@ -1226,8 +1228,8 @@ const AppShell: React.FC = () => {
             '& .MuiAlert-icon': { color: c.accent.primary },
           }}
         >
-          {updateStatus === 'available' && `OpenSwarm ${availableVersion} is available`}
-          {updateStatus === 'downloaded' && `OpenSwarm ${availableVersion} downloaded; restart to update`}
+          {updateStatus === 'available' && `OpenSwarm${verSuffix} is available`}
+          {updateStatus === 'downloaded' && `OpenSwarm${verSuffix} downloaded; restart to update`}
         </Alert>
       </Snackbar>
     </Box>
