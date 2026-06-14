@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import { LayoutDashboard } from 'lucide-react';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded';
 import LanguageIcon from '@mui/icons-material/Language';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
+import DashboardGlyph from './DashboardGlyph';
 import ShareButton from '@/app/components/share/ShareButton';
 import type { AgentSession } from '@/shared/state/agentsSlice';
 import type { CardPosition, ViewCardPosition, BrowserCardPosition } from '@/shared/state/dashboardLayoutSlice';
@@ -127,8 +127,8 @@ const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           '&:hover': hasItems ? { bgcolor: `${c.bg.surface}99` } : {},
         }}
       >
-        <Box sx={{ display: 'flex', color: c.accent.primary, flexShrink: 0 }}>
-          <LayoutDashboard size={16} strokeWidth={1.75} />
+        <Box sx={{ display: 'flex', flexShrink: 0 }}>
+          <DashboardGlyph name={dashboardName} size={16} />
         </Box>
         <Typography
           noWrap
