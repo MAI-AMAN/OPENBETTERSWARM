@@ -51,6 +51,7 @@ import {
   RegistrySkillDetail,
 } from '@/shared/state/skillRegistrySlice';
 import { onboardingBus } from '@/app/components/Onboarding/eventBus';
+import ShareButton from '@/app/components/share/ShareButton';
 import SkillBuilderChat, { SkillPreviewData } from './SkillBuilderChat';
 
 interface SkillForm {
@@ -619,6 +620,7 @@ const Skills: React.FC = () => {
                 )}
               </Box>
               <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                <ShareButton target={{ kind: 'skill', id: selectedLocal.id, name: selectedLocal.name }} />
                 <Tooltip title="Edit">
                   <IconButton size="small" onClick={() => openEdit(selectedLocal)} sx={{ color: c.text.tertiary, '&:hover': { color: c.accent.primary } }}>
                     <EditIcon sx={{ fontSize: 18 }} />
