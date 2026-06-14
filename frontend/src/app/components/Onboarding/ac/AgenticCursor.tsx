@@ -62,12 +62,34 @@ const IS_WIN = typeof navigator !== 'undefined' && navigator.userAgent.includes(
 // before the next step's instant write lands.
 const WIN_EASE_MS = 420;
 
+// A little spark when the cursor pops into existence: short orange lines shoot out from the
+// tip and fade. Re-keyed on each pop so it replays. One-shot per mount (no infinite loop).
+const BURST_SPOKES = 8;
+const CursorBurst: React.FC<{ color: string }> = ({ color }) => (
+  <>
+    {Array.from({ length: BURST_SPOKES }).map((_, i) => (
+      <div
+        key={i}
+        style={{ position: 'absolute', left: 3, top: 3, transform: `rotate(${(i / BURST_SPOKES) * 360}deg)` }}
+      >
+        <motion.div
+          initial={{ y: -1, opacity: 0.95, scaleY: 0.35 }}
+          animate={{ y: -15, opacity: 0, scaleY: 1 }}
+          transition={{ duration: 0.45, ease: 'easeOut' }}
+          style={{ position: 'absolute', left: -1, top: 0, width: 2, height: 8, borderRadius: 2, background: color }}
+        />
+      </div>
+    ))}
+  </>
+);
+
 const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
   const c = useClaudeTokens();
   const controls = useAnimationControls();
   const storePos = useCursorPosition();
   const posRef = useRef({ x: 0, y: 0 });
   const [visible, setVisible] = useState(false);
+  const [burstKey, setBurstKey] = useState(0);
   const [popup, setPopup] = useState<PopupState | null>(null);
   const [multiChoice, setMultiChoice] = useState<MultiChoiceState | null>(null);
 
@@ -97,6 +119,7 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
       writePos(from.x, from.y, true);
       controls.set({ x: from.x, y: from.y, opacity: 0, scale: 0.3 });
       setVisible(true);
+      setBurstKey((k) => k + 1); // replay the orange spark on each pop
       // A little "pop!": scale overshoots past 1 then settles, while opacity snaps in.
       await controls.start({
         opacity: 1,
@@ -308,22 +331,28 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
         }}
       >
         {visible && (
-          <motion.div
-            animate={{
-              scale: [1, 1.04, 1],
-            }}
-            transition={{
-              duration: 1.8,
-              repeat: Infinity,
-              ease: 'easeInOut',
-            }}
-            style={{
-              transform: 'translate(-2px, -2px)',
-              filter: `drop-shadow(0 0 6px ${c.accent.primary}cc) drop-shadow(0 0 14px ${c.accent.primary}55)`,
-            }}
-          >
-            <CursorArrow color={c.accent.primary} />
-          </motion.div>
+          <>
+            {/* Orange spark behind the arrow, replays each pop via burstKey. */}
+            <div key={burstKey} style={{ position: 'absolute', top: 0, left: 0 }}>
+              <CursorBurst color={c.accent.primary} />
+            </div>
+            <motion.div
+              animate={{
+                scale: [1, 1.04, 1],
+              }}
+              transition={{
+                duration: 1.8,
+                repeat: Infinity,
+                ease: 'easeInOut',
+              }}
+              style={{
+                transform: 'translate(-2px, -2px)',
+                filter: `drop-shadow(0 0 6px ${c.accent.primary}cc) drop-shadow(0 0 14px ${c.accent.primary}55)`,
+              }}
+            >
+              <CursorArrow color={c.accent.primary} />
+            </motion.div>
+          </>
         )}
       </motion.div>
 

@@ -8,19 +8,23 @@ import { STARTER_CATEGORIES } from '@/shared/starterCategories';
 
 const GREETING = "Hi, I'm your AI team. What do you want done?";
 
-// One-shot typewriter for a fixed string (no infinite loop; stops at the end).
-function useTypewriter(text: string, speedMs = 26): { shown: string; done: boolean } {
+// One-shot typewriter for a fixed string (no infinite loop; stops at the end). startDelayMs
+// holds the start so the header title can stream first (sequential reveal).
+function useTypewriter(text: string, speedMs = 45, startDelayMs = 0): { shown: string; done: boolean } {
   const [shown, setShown] = React.useState('');
   React.useEffect(() => {
     setShown('');
-    let i = 0;
-    const id = window.setInterval(() => {
-      i += 1;
-      setShown(text.slice(0, i));
-      if (i >= text.length) window.clearInterval(id);
-    }, speedMs);
-    return () => window.clearInterval(id);
-  }, [text, speedMs]);
+    let interval: number | undefined;
+    const startTimer = window.setTimeout(() => {
+      let i = 0;
+      interval = window.setInterval(() => {
+        i += 1;
+        setShown(text.slice(0, i));
+        if (i >= text.length) window.clearInterval(interval);
+      }, speedMs);
+    }, startDelayMs);
+    return () => { window.clearTimeout(startTimer); if (interval) window.clearInterval(interval); };
+  }, [text, speedMs, startDelayMs]);
   return { shown, done: shown.length >= text.length };
 }
 
@@ -32,7 +36,9 @@ const WelcomeQuickReplies: React.FC<{
   onPick: (prompt: string) => void;
   onPickBuilder: (prompt: string) => void;
 }> = ({ c, onPick, onPickBuilder }) => {
-  const { shown: greeting, done: greetingDone } = useTypewriter(GREETING);
+  // Slow + delayed so it reads as a sequence: card pops, the header title streams, THEN
+  // the greeting types, THEN the chips pop in.
+  const { shown: greeting, done: greetingDone } = useTypewriter(GREETING, 46, 650);
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const currentCategory = STARTER_CATEGORIES.find((cat) => cat.id === expanded);
   const isAppBuilder = currentCategory?.target === 'app-builder';
@@ -82,7 +88,7 @@ const WelcomeQuickReplies: React.FC<{
                       onClick={() => setExpanded(cat.id)}
                       initial={{ opacity: 0, scale: 0.82 }}
                       animate={{ opacity: 1, scale: 1 }}
-                      transition={{ type: 'spring', stiffness: 520, damping: 24, delay: 0.08 + i * 0.07 }}
+                      transition={{ type: 'spring', stiffness: 420, damping: 22, delay: 0.18 + i * 0.14 }}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 8,
                         padding: '10px 14px',
