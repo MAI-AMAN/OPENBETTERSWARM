@@ -120,6 +120,41 @@ def test_app_export_drops_machine_env(tmp_path, monkeypatch):
     assert b"/Users/SECRET" not in b"".join(files.values())
 
 
+def test_workflow_sanitize_disables_schedule_and_strips_pii():
+    from backend.apps.swarm.entities.workflows import _sanitize_workflow
+    raw = {
+        "id": "wf123",
+        "title": "Daily digest",
+        "steps": [{"id": "s1", "text": "do thing"}],
+        "schedule": {"enabled": True, "runs_count": 5, "next_run_at": "2026-01-01T00:00:00", "hour": 9},
+        "permissions": [{"kind": "text", "after_minutes": 30, "phone": "+15551234567"}],
+        "source_session_id": "sess1",
+        "dashboard_id": "dash1",
+        "last_run_status": "success",
+        "mode": "agent",
+        "provider": "anthropic",
+    }
+    out = _sanitize_workflow(raw)
+    # An imported workflow must not auto-run or carry the sharer's identity.
+    assert out["schedule"]["enabled"] is False
+    assert out["schedule"]["runs_count"] == 0
+    assert out["schedule"]["hour"] == 9  # cadence shape preserved
+    assert out["permissions"][0]["phone"] is None
+    for dropped in ("id", "source_session_id", "dashboard_id", "last_run_status"):
+        assert dropped not in out
+    assert out["title"] == "Daily digest"
+
+
+def test_workflow_unavailable_on_this_branch():
+    # The workflow store isn't on eric/dev, so load() degrades gracefully and
+    # importing a workflow bundle fails with a clear message (no half-write).
+    from backend.apps.swarm.entities.workflows import WorkflowExportable
+    from backend.apps.swarm.exportable import RemapTable
+    assert WorkflowExportable.load("anything") is None
+    with pytest.raises(BundleError):
+        WorkflowExportable.import_({"title": "x"}, {}, RemapTable())
+
+
 def _zip_with(name, data=b"x"):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
