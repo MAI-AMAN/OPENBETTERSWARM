@@ -2,10 +2,11 @@ import { Search, Hammer, Globe, Plug } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 // Two-level starters shared by the empty-state and the first-run welcome chat: pick a
-// category, then a concrete prompt. These are chosen to SHOWCASE what makes OpenSwarm
-// different from a plain chatbot, real apps (App Builder), the browser agent, your own
-// tools (MCPs), the file harness (PDFs/exports), and parallel agents on the canvas. Every
-// prompt is one-click-runnable (no [placeholders]) and reads plainly for a non-dev.
+// category, then a concrete prompt. Chosen to SHOWCASE what only OpenSwarm can do, and to
+// feel PERSONAL: the agents can see the user's own computer/files, drive the browser, plug
+// into their apps (MCPs), build real apps, and run agents in parallel, none of which a plain
+// chatbot can do out of the box. Many prompts deliberately touch the user's own stuff so it
+// matters to them. One-click-runnable (no [placeholders]); reads plainly for a non-dev.
 // target 'app-builder' opens the App Builder (live preview); the rest run as an agent.
 export type StarterCategory = {
   id: string;
@@ -17,32 +18,32 @@ export type StarterCategory = {
 
 export const STARTER_CATEGORIES: StarterCategory[] = [
   {
-    // Web research that ends in a real artifact + parallel agents on the canvas.
+    // Deep web research that ends in a real artifact (PDF, slideshow) + the parallel canvas.
     id: 'research', label: 'Research', Icon: Search,
     prompts: [
       'Plan a 3-day Tokyo trip and turn it into a printable PDF itinerary',
+      'Make a slideshow presentation on black holes',
+      "Look at what I've been working on lately and write me a quick recap",
       'Send 3 agents to plan my weekend at once: where to eat, what to do, what to watch',
-      'Break down how black holes really work into a printable one-page cheat sheet',
-      'Find the strangest world record I could actually break and how to pull it off',
     ],
   },
   {
-    // The App Builder is a full app (logic + data + live preview), not a toy snippet.
+    // Full live apps built from the user's OWN stuff, not toy snippets a chatbot just prints.
     id: 'build', label: 'Build an app', Icon: Hammer, target: 'app-builder',
     prompts: [
-      'Build a mini Minecraft I can walk around in',
-      'Build a drum machine I can actually make beats on',
-      'Build a live dashboard that pulls real weather and news',
+      'Make me Minecraft I can play right now',
+      'Build me a personal site from my resume',
+      'Turn a spreadsheet on my computer into a live dashboard',
       'Build a habit tracker that remembers my streaks between visits',
     ],
   },
   {
-    // The browser agent: OpenSwarm's most powerful tool, it actually drives the web.
+    // The browser agent: OpenSwarm's most powerful tool, it actually drives the web for you.
     id: 'browse', label: 'Use the web', Icon: Globe,
     prompts: [
       'Send an agent to find the cheapest flights to Tokyo and show me the best options',
-      'Have an agent pull a clean list of the top-rated coffee shops in a city',
-      'Find 3 well-reviewed standing desks online and screenshot the best one',
+      'Have an agent hunt down the best price on something I want to buy',
+      'Find and screenshot the top-rated coffee shops in my city',
       'Watch an agent sign me up for a free newsletter on a site',
     ],
   },
