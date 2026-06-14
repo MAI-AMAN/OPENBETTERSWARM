@@ -155,6 +155,68 @@ def test_workflow_unavailable_on_this_branch():
         WorkflowExportable.import_({"title": "x"}, {}, RemapTable())
 
 
+def test_session_export_strips_transcript_and_secrets():
+    from backend.apps.swarm.entities.sessions import SessionExportable
+    data = {
+        "name": "A", "provider": "anthropic", "model": "sonnet", "mode": "agent",
+        "system_prompt": "hi", "allowed_tools": ["Read"],
+        "messages": [{"role": "user", "content": "private chat"}],
+        "active_mcps": ["Gmail"], "cwd": "/Users/me/repo", "cost_usd": 9.9, "sdk_session_id": "x",
+    }
+    ex = SessionExportable("s1", "A", data)
+    out = ex.serialize(None)
+    for gone in ("messages", "cwd", "active_mcps", "cost_usd", "sdk_session_id"):
+        assert gone not in out
+    assert out["model"] == "sonnet" and out["mode"] == "agent"
+    reqs = ex.requirements()
+    assert any(r.kind.value == "mcp_action" and r.key == "Gmail" for r in reqs)
+
+
+def test_dashboard_serialize_rewrites_refs_to_bundle_ids():
+    from backend.apps.swarm.entities.dashboards import DashboardExportable
+    from backend.apps.swarm.models import EntityType
+
+    class Ctx:
+        def bundle_id_for(self, t: EntityType, lid: str):
+            return {("session", "S"): "SBID", ("app", "A"): "ABID"}.get((t.value, lid))
+
+    data = {"name": "D", "layout": {
+        "cards": {"S": {"session_id": "S", "x": 1}},
+        "view_cards": {"A": {"output_id": "A", "x": 2}},
+        "browser_cards": {"b1": {"browser_id": "b1", "url": "u", "spawned_by": "S"}},
+        "expanded_session_ids": ["S"],
+    }}
+    L = DashboardExportable("d1", "D", data).serialize(Ctx())["layout"]
+    assert L["cards"]["SBID"]["session_id"] == "SBID"
+    assert L["view_cards"]["ABID"]["output_id"] == "ABID"
+    assert L["browser_cards"]["b1"]["spawned_by"] == "SBID"
+    assert L["expanded_session_ids"] == ["SBID"]
+
+
+def test_dashboard_import_remaps_to_fresh_local_ids(monkeypatch):
+    from backend.apps.swarm.entities import dashboards as dmod
+    from backend.apps.swarm.exportable import RemapTable
+
+    written: dict = {}
+    monkeypatch.setattr(dmod, "_write", lambda did, doc: written.update({did: doc}))
+    monkeypatch.setattr(dmod, "_retag_sessions", lambda ids, did: None)
+    remap = RemapTable()
+    remap.assign("SBID", "newsess")
+    remap.assign("ABID", "newapp")
+    payload = {"name": "D", "layout": {
+        "cards": {"SBID": {"session_id": "SBID"}},
+        "view_cards": {"ABID": {"output_id": "ABID"}},
+        "browser_cards": {"b1": {"browser_id": "b1", "spawned_by": "SBID"}},
+        "expanded_session_ids": ["SBID", "ORPHAN"],
+    }}
+    did = dmod.DashboardExportable.import_(payload, {}, remap)
+    L = written[did]["layout"]
+    assert L["cards"]["newsess"]["session_id"] == "newsess"
+    assert "newapp" in L["view_cards"]
+    assert list(L["browser_cards"].values())[0]["spawned_by"] == "newsess"
+    assert L["expanded_session_ids"] == ["newsess"]  # the dangling ref is dropped
+
+
 def _zip_with(name, data=b"x"):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
