@@ -30,10 +30,10 @@ export const STARTER_CATEGORIES: StarterCategory[] = [
     // The App Builder is a full app (logic + data + live preview), not a toy snippet.
     id: 'build', label: 'Build an app', Icon: Hammer, target: 'app-builder',
     prompts: [
-      'Build a working expense tracker app with live charts',
-      'Make a Snake game I can actually play right now',
-      'Build a habit tracker that remembers my streaks between visits',
       'Build a mini Minecraft I can walk around in',
+      'Build a drum machine I can actually make beats on',
+      'Build a live dashboard that pulls real weather and news',
+      'Build a habit tracker that remembers my streaks between visits',
     ],
   },
   {
