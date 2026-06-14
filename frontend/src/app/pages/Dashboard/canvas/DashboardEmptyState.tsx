@@ -87,13 +87,18 @@ const DashboardEmptyState: React.FC<{
   // context switch); the others use the default mode.
   const launch = (prompt: string) => {
     if (launching) return;
-    if (onStarter) {
-      onStarter(prompt, isAppBuilder ? 'view-builder' : undefined);
+    // App Builder opens its own surface, so prefill its composer (the user reviews,
+    // then builds). Everything else fires immediately: a pick is one tap to a running agent.
+    if (isAppBuilder) {
+      if (onStarter) onStarter(prompt, 'view-builder');
       return;
     }
-    if (!onLaunch) return;
-    setLaunching(true); // empty state unmounts on first session, but guard a fast double-click
-    onLaunch(prompt, mode, model);
+    if (onLaunch) {
+      setLaunching(true); // empty state unmounts on first session, but guard a fast double-click
+      onLaunch(prompt, mode, model);
+      return;
+    }
+    if (onStarter) onStarter(prompt);
   };
 
   return (
@@ -109,8 +114,8 @@ const DashboardEmptyState: React.FC<{
       }}
     >
       <style>{`@keyframes empty-state-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
-      <Typography sx={{ color: c.text.tertiary, fontSize: '1.25rem', mb: 1 }}>
-        No agents running
+      <Typography sx={{ color: c.text.secondary, fontSize: '1.45rem', fontWeight: 500, mb: 1 }}>
+        What do you want done?
       </Typography>
       <Typography
         sx={{
@@ -127,12 +132,12 @@ const DashboardEmptyState: React.FC<{
           animation: active ? 'empty-state-shimmer 6s linear infinite' : 'none',
         }}
       >
-        Click the
+        Tell the
         {/* Literal toolbar glyph; the shimmer's transparent color would hide it, so reset color here. */}
         <Box component="span" sx={{ display: 'inline-flex', color: c.text.tertiary }}>
           <ChatBubbleTeardrop sx={{ fontSize: 15 }} />
         </Box>
-        below to launch your first agent
+        below and I'll put a team on it
       </Typography>
 
       {showChips && (
