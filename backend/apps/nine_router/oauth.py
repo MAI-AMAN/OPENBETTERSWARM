@@ -10,7 +10,7 @@ import os
 
 import httpx
 
-from .process import NINE_ROUTER_API, NINE_ROUTER_PORT, NINE_ROUTER_V1
+from .process import NINE_ROUTER_API, NINE_ROUTER_PORT, NINE_ROUTER_V1, cli_auth_headers
 from backend.apps.oauth_state import _pending_oauth, _mark_oauth_completed
 
 logger = logging.getLogger(__name__)
@@ -263,7 +263,7 @@ async def start_oauth(provider: str) -> dict:
     For device_code providers (github, qwen, kiro): returns {user_code, verification_uri, device_code}
     For authorization_code providers (claude, codex, gemini-cli): returns {authUrl, codeVerifier, state}
     """
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, headers=cli_auth_headers()) as client:
         try:
             r = await client.get(f"{NINE_ROUTER_API}/oauth/{provider}/device-code")
             if r.status_code == 200:
@@ -310,7 +310,7 @@ async def poll_oauth(provider: str, device_code: str, code_verifier: str | None 
     if extra_data:
         body["extraData"] = extra_data
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, headers=cli_auth_headers()) as client:
         r = await client.post(
             f"{NINE_ROUTER_API}/oauth/{provider}/poll",
             json=body,
@@ -321,7 +321,7 @@ async def poll_oauth(provider: str, device_code: str, code_verifier: str | None 
 
 async def exchange_oauth(provider: str, code: str, redirect_uri: str, code_verifier: str, state: str = "") -> dict:
     """Exchange OAuth code for tokens via 9Router."""
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, headers=cli_auth_headers()) as client:
         r = await client.post(
             f"{NINE_ROUTER_API}/oauth/{provider}/exchange",
             json={
