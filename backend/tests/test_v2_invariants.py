@@ -523,6 +523,33 @@ def test_resolve_sdk_gemini_prefers_antigravity_over_api_key():
         assert registry.resolve_model_id_for_sdk("gemini-3-flash", s2) == "gc/gemini-3-flash-preview"
 
 
+def test_error_classify_schema_translation_400_is_not_auth():
+    """A 9Router tool-schema translation 400 can carry provider/connection
+    wording that trips the auth regex, so it used to surface a misleading
+    'reconnect your subscription' card for what is really a schema bug. The
+    translation guard must win: schema 400 -> not auth; a real auth failure
+    with no translation signature still reads as auth."""
+    from backend.apps.agents.core.error_classify import _is_auth_error, _is_translation_error
+    both = Exception("provider not connected: 400 INVALID_ARGUMENT at "
+                     "tools[0].function_declarations[0].parameters")
+    assert _is_translation_error(both)
+    assert not _is_auth_error(both), "schema-400 must not be classified as auth"
+    # Pure auth failures (no translation signature) still classify as auth.
+    assert _is_auth_error(Exception("provider not connected: gemini"))
+    assert _is_auth_error(Exception("401 invalid authentication credentials"))
+    assert not _is_translation_error(Exception("401 invalid authentication credentials"))
+
+
+def test_error_classify_gemini_resource_exhausted_is_transient():
+    """gemini-cli's free-tier 429 surfaces as RESOURCE_EXHAUSTED; it must count
+    as transient so the existing backoff/retry catches it instead of dying as a
+    hard first-message error. A 403 (hard auth/quota) must still NOT retry."""
+    from backend.apps.agents.core.error_classify import _is_transient_capacity_error
+    assert _is_transient_capacity_error(Exception("429 RESOURCE_EXHAUSTED: Quota exceeded"))
+    assert _is_transient_capacity_error(Exception("RESOURCE_EXHAUSTED"))
+    assert not _is_transient_capacity_error(Exception("403 permission denied"))
+
+
 def test_banned_models_not_offered():
     """Claude Fable (banned) and Gemini 3.1 Pro (no working lane: AG can't serve
     it, AI Studio key 429s pro-preview) were pulled from the picker. Guard so a
