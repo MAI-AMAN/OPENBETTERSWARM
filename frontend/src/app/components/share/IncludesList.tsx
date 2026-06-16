@@ -7,11 +7,23 @@
 import React, { useState } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
+import Tooltip from '@mui/material/Tooltip';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
+import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 
 import { BundleSummary } from './shareTypes';
+
+// One glyph per requirement kind, so a row of needs reads as icons + names
+// instead of a stack of explanatory sentences. The sentence moves to a hover.
+const REQ_ICON: Record<string, React.ReactNode> = {
+  mcp_action: <ExtensionOutlinedIcon sx={{ fontSize: 14 }} />,
+  api_key: <KeyOutlinedIcon sx={{ fontSize: 14 }} />,
+  builtin_mode: <TuneOutlinedIcon sx={{ fontSize: 14 }} />,
+};
 
 const KIND_LABEL: Record<string, string> = {
   skill: 'Skill',
@@ -127,9 +139,33 @@ const IncludesList: React.FC<{ summary: BundleSummary }> = ({ summary }) => {
 
       {summary.requirements.length > 0 && (
         <Box sx={{ mt: 0.75, pt: 0.75, borderTop: `1px solid ${c.border.subtle}` }}>
-          {summary.requirements.map((r, i) => (
-            <Row key={`req-${i}`} tag="Needs" name={r.label} detail={r.detail} faded />
-          ))}
+          <Typography
+            sx={{
+              fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.06em',
+              textTransform: 'uppercase', color: c.text.tertiary, mb: 0.75,
+            }}
+          >
+            Needs
+          </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+            {summary.requirements.map((r, i) => (
+              <Tooltip key={`req-${i}`} title={r.detail || ''} placement="top" arrow disableInteractive>
+                <Box
+                  sx={{
+                    display: 'inline-flex', alignItems: 'center', gap: 0.5,
+                    px: 1, py: 0.4, borderRadius: '999px',
+                    border: `1px solid ${c.border.subtle}`, bgcolor: c.bg.elevated,
+                    color: c.text.tertiary, cursor: 'default',
+                  }}
+                >
+                  {REQ_ICON[r.kind] || <ExtensionOutlinedIcon sx={{ fontSize: 14 }} />}
+                  <Typography sx={{ fontSize: '0.76rem', color: c.text.secondary, whiteSpace: 'nowrap' }}>
+                    {r.label}
+                  </Typography>
+                </Box>
+              </Tooltip>
+            ))}
+          </Box>
         </Box>
       )}
     </Box>
