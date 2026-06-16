@@ -168,21 +168,73 @@ def test_workflow_unavailable_on_this_branch():
         WorkflowExportable.import_({"title": "x"}, {}, RemapTable())
 
 
-def test_session_export_strips_transcript_and_secrets():
+def test_session_export_carries_transcript_drops_runtime_and_secrets():
     from backend.apps.swarm.entities.sessions import SessionExportable
+    from backend.apps.swarm.redact import scrub_payload
     data = {
         "name": "A", "provider": "anthropic", "model": "sonnet", "mode": "agent",
         "system_prompt": "hi", "allowed_tools": ["Read"],
-        "messages": [{"role": "user", "content": "private chat"}],
+        "messages": [
+            {"id": "m1", "role": "user", "content": "private chat", "branch_id": "main"},
+            {"id": "m2", "role": "assistant", "content": "token is sk-ant-abcdefghij0123456789"},
+        ],
+        "branches": {"main": {"id": "main", "parent_branch_id": None, "fork_point_message_id": None}},
+        "active_branch_id": "main",
+        "tool_group_meta": {"g1": {"label": "x"}},
         "active_mcps": ["Gmail"], "cwd": "/Users/me/repo", "cost_usd": 9.9, "sdk_session_id": "x",
     }
     ex = SessionExportable("s1", "A", data)
     out = ex.serialize(None)
-    for gone in ("messages", "cwd", "active_mcps", "cost_usd", "sdk_session_id"):
+    # The transcript now rides along, that's the point of sharing an agent.
+    assert out["messages"][0]["content"] == "private chat"
+    assert out["active_branch_id"] == "main" and "main" in out["branches"]
+    assert out["tool_group_meta"] == {"g1": {"label": "x"}}
+    # Runtime, identity, and gate state still never leave.
+    for gone in ("cwd", "active_mcps", "cost_usd", "sdk_session_id"):
         assert gone not in out
-    assert out["model"] == "sonnet" and out["mode"] == "agent"
+    # The closure runs scrub_payload on every payload, so a secret-shaped
+    # string sitting in the transcript is redacted before it ships.
+    assert "sk-ant-" not in json.dumps(scrub_payload(out))
     reqs = ex.requirements()
     assert any(r.kind.value == "mcp_action" and r.key == "Gmail" for r in reqs)
+
+
+def test_session_import_restores_transcript_without_granting_mcp(monkeypatch):
+    from backend.apps.swarm.entities.sessions import SessionExportable
+    from backend.apps.swarm.exportable import RemapTable
+    from backend.apps.agents.manager.session import session_store
+    saved: dict = {}
+    monkeypatch.setattr(session_store, "_save_session", lambda sid, doc: saved.update({sid: doc}))
+    payload = {
+        "name": "A", "model": "sonnet", "mode": "agent",
+        "messages": [{"id": "m1", "role": "user", "content": "hi", "branch_id": "main"}],
+        "branches": {"main": {"id": "main", "parent_branch_id": None, "fork_point_message_id": None}},
+        "active_branch_id": "main",
+        "tool_group_meta": {"g1": {"label": "x"}},
+    }
+    sid = SessionExportable.import_(payload, {}, RemapTable())
+    doc = saved[sid]
+    assert doc["messages"][0]["content"] == "hi"
+    assert doc["active_branch_id"] == "main"
+    assert doc["tool_group_meta"] == {"g1": {"label": "x"}}
+    # The gate stays shut: a shared agent never arrives with MCP access.
+    assert doc["active_mcps"] == []
+    # The dashboard import re-points this; it must never be the sharer's id.
+    assert doc["dashboard_id"] is None
+
+
+def test_session_import_old_bundle_without_transcript(monkeypatch):
+    # A bundle made before transcripts were carried has no messages; it must
+    # still import as a valid empty-history agent (single main branch), not crash.
+    from backend.apps.swarm.entities.sessions import SessionExportable
+    from backend.apps.swarm.exportable import RemapTable
+    from backend.apps.agents.manager.session import session_store
+    saved: dict = {}
+    monkeypatch.setattr(session_store, "_save_session", lambda sid, doc: saved.update({sid: doc}))
+    sid = SessionExportable.import_({"name": "Old", "model": "sonnet"}, {}, RemapTable())
+    doc = saved[sid]
+    assert doc["messages"] == []
+    assert doc["active_branch_id"] == "main" and "main" in doc["branches"]
 
 
 def test_dashboard_serialize_rewrites_refs_to_bundle_ids():

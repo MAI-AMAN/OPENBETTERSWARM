@@ -1,10 +1,12 @@
-"""SessionExportable: an agent card on a shared dashboard. We carry only the
-recipe (name, model, mode, system prompt, allowed tools) and deliberately DROP
-the chat transcript (privacy + size), runtime state, costs, the worktree path,
-and active_mcps (importing must never silently grant tool access, per the gate).
-Its MCP/actions, provider, and built-in mode become import requirements so the
-importer is walked through enabling them. The dashboard re-points dashboard_id
-after import."""
+"""SessionExportable: an agent card on a shared dashboard. We carry the recipe
+(name, model, mode, system prompt, allowed tools) AND the chat transcript so a
+shared agent arrives with the conversation that produced it, that's the whole
+point of sharing one. The transcript rides through the same scrub layer as every
+payload, so any secret-shaped string in it is redacted before it leaves. We still
+DROP runtime state, costs, the worktree path, and active_mcps: importing must
+never silently grant tool access, per the gate. Its MCP/actions, provider, and
+built-in mode become import requirements so the importer is walked through
+enabling them. The dashboard re-points dashboard_id after import."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -14,7 +16,14 @@ from ..exportable import DepRef, ExportContext, RemapTable
 from ..models import EntityType, Requirement, RequirementKind
 
 _BUILTIN_MODES = {"agent", "ask", "plan", "view-builder", "skill-builder"}
-_KEEP = ("name", "provider", "model", "mode", "system_prompt", "allowed_tools", "max_turns", "thinking_level")
+# Transcript fields ride along so the shared agent keeps its history; ids inside
+# (message ids, branch ids, their parent/fork refs) are self-consistent within
+# the one session file, so they carry verbatim with no remap.
+_KEEP = (
+    "name", "provider", "model", "mode", "system_prompt", "allowed_tools",
+    "max_turns", "thinking_level",
+    "messages", "branches", "active_branch_id", "tool_group_meta",
+)
 
 
 class SessionExportable:
@@ -70,6 +79,14 @@ class SessionExportable:
         from backend.apps.agents.manager.session.session_store import _save_session
         sid = uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
+        # Older bundles (made before transcripts were carried) have no messages;
+        # fall back to a single empty main branch so the imported agent is valid.
+        branches = payload.get("branches") or {
+            "main": {"id": "main", "parent_branch_id": None, "fork_point_message_id": None, "created_at": now}
+        }
+        active_branch_id = payload.get("active_branch_id") or "main"
+        if active_branch_id not in branches:
+            active_branch_id = next(iter(branches), "main")
         doc = {
             "id": sid,
             "name": payload.get("name") or "Agent",
@@ -81,9 +98,10 @@ class SessionExportable:
             "allowed_tools": payload.get("allowed_tools") or [],
             "max_turns": payload.get("max_turns"),
             "thinking_level": payload.get("thinking_level") or "auto",
-            "messages": [],
-            "branches": {"main": {"id": "main", "parent_branch_id": None, "fork_point_message_id": None, "created_at": now}},
-            "active_branch_id": "main",
+            "messages": payload.get("messages") or [],
+            "branches": branches,
+            "active_branch_id": active_branch_id,
+            "tool_group_meta": payload.get("tool_group_meta") or {},
             "active_mcps": [],
             "dashboard_id": None,  # the dashboard import re-points this
             "browser_id": None,
