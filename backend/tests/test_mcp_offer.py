@@ -6,12 +6,14 @@ anything that could widen the MCP surface on its own. These tests make a bad off
 loudly instead of shipping a silent gate bypass.
 """
 
+import asyncio
 from types import SimpleNamespace
 
 import backend.apps.agents.core.mcp_preflight as pf
 from backend.apps.agents.core.mcp_preflight import (
     CURATED_SHORTLIST,
     offer_for_gated_server,
+    run_preflight,
 )
 
 VETTED = {e["id"] for e in CURATED_SHORTLIST}
@@ -65,3 +67,37 @@ def test_offer_carries_no_activate_capability(monkeypatch):
         o = offer_for_gated_server(entry["id"], s)
         assert o is not None
         assert set(o.keys()) == OFFER_SHAPE, f"offer for {entry['id']} grew an unexpected field"
+
+
+# --- require_vague: the MCPSearch path keeps suggestions on a concrete prompt ----------------
+
+def _stub_classifier(is_vague, ids):
+    async def _fake(settings, prompt, available, task_id=None):
+        return {"is_vague": is_vague, "suggestions": [{"id": i, "reason": "fits"} for i in ids]}
+    return _fake
+
+
+def test_preflight_default_suppresses_suggestions_on_concrete_prompt(monkeypatch):
+    # Launch path: a concrete (non-vague) prompt must NOT interrupt with a card.
+    monkeypatch.setattr(pf, "load_all_tools", lambda: [])
+    monkeypatch.setattr(pf, "_call_classifier", _stub_classifier(False, ["Google Workspace"]))
+    out = asyncio.run(run_preflight("refactor foo.ts to use the new client", timeout_s=5))
+    assert out["suggestions"] == []
+
+
+def test_preflight_require_vague_false_keeps_suggestions(monkeypatch):
+    # MCPSearch path: the agent already proved it needs an integration, so keep the suggestion
+    # even though the prompt is concrete (is_vague False).
+    monkeypatch.setattr(pf, "load_all_tools", lambda: [])
+    monkeypatch.setattr(pf, "_call_classifier", _stub_classifier(False, ["Google Workspace"]))
+    out = asyncio.run(run_preflight("check my unread emails", timeout_s=5, require_vague=False))
+    assert [s["id"] for s in out["suggestions"]] == ["Google Workspace"]
+    assert set(out["suggestions"][0].keys()) == OFFER_SHAPE
+
+
+def test_preflight_require_vague_false_still_drops_hallucinated_ids(monkeypatch):
+    # require_vague=False must NOT loosen the vetted-id revalidation: a made-up id is still dropped.
+    monkeypatch.setattr(pf, "load_all_tools", lambda: [])
+    monkeypatch.setattr(pf, "_call_classifier", _stub_classifier(False, ["TotallyFakeServer"]))
+    out = asyncio.run(run_preflight("do the thing", timeout_s=5, require_vague=False))
+    assert out["suggestions"] == []

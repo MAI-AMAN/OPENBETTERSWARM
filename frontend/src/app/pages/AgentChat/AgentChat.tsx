@@ -1526,81 +1526,6 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
             }}
           >
             <Box>
-            {(session.mcp_suggestions && session.mcp_suggestions.length > 0) && (
-              <Box sx={{ mt: 1, mb: 1, px: 0.5, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                {session.mcp_suggestions.map((s) => (
-                  <Box key={s.id} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography variant="caption" sx={{ color: c.text.secondary, flex: 1, minWidth: 0 }}>
-                      Connect{' '}
-                      <Box component="span" sx={{ color: c.text.primary, fontWeight: 500 }}>{s.title}</Box>
-                      {' '}so the agent can do this
-                    </Typography>
-                    <Typography
-                      component="button"
-                      variant="caption"
-                      disabled={activatingMcp === s.id}
-                      onClick={async () => {
-                        if (activatingMcp) return;
-                        setActivateError(null);
-                        setActivatingMcp(s.id);
-                        try {
-                          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-                          const tok = (() => { try { return getAuthToken(); } catch { return ''; } })();
-                          if (tok) headers['Authorization'] = `Bearer ${tok}`;
-                          const r = await fetch(`${API_BASE}/mcp-meta/activate`, {
-                            method: 'POST',
-                            headers,
-                            body: JSON.stringify({
-                              server_name: s.id.toLowerCase().replace(/\s+/g, '-'),
-                              reason: s.reason || 'preflight suggestion',
-                              parent_session_id: session.id,
-                            }),
-                          });
-                          const body = await r.json().catch(() => ({} as any));
-                          if (!r.ok) {
-                            setActivateError(`Activation failed (${r.status})`);
-                          } else if (body?.status === 'unknown_server') {
-                            // Not yet connected; jump to Actions so the user can finish OAuth.
-                            navigate('/actions');
-                          } else if (id) {
-                            dispatch(clearMcpSuggestions({ sessionId: id }));
-                          }
-                        } catch (e: any) {
-                          setActivateError(e?.message || 'Activation failed');
-                        } finally {
-                          setActivatingMcp(null);
-                        }
-                      }}
-                      sx={{
-                        border: 'none',
-                        background: 'none',
-                        p: 0,
-                        color: c.accent.primary,
-                        cursor: activatingMcp === s.id ? 'wait' : 'pointer',
-                        opacity: activatingMcp === s.id ? 0.5 : 1,
-                        '&:hover': { textDecoration: activatingMcp ? 'none' : 'underline' },
-                        flexShrink: 0,
-                      }}
-                    >
-                      {activatingMcp === s.id ? 'Connecting…' : 'Connect'}
-                    </Typography>
-                  </Box>
-                ))}
-                {activateError && (
-                  <Typography variant="caption" sx={{ display: 'block', color: c.status.error }}>
-                    {activateError}
-                  </Typography>
-                )}
-                <Box
-                  role="button"
-                  aria-label="Dismiss"
-                  onClick={() => id && dispatch(clearMcpSuggestions({ sessionId: id }))}
-                  sx={{ alignSelf: 'flex-start', color: c.text.muted, cursor: 'pointer', fontSize: '0.72rem', '&:hover': { color: c.text.secondary } }}
-                >
-                  Dismiss
-                </Box>
-              </Box>
-            )}
             {session.context_overflow && (() => {
               const reason = session.context_overflow.reason;
               const isAuth = reason === 'openswarm_pro_auth_expired' || reason === 'anthropic_auth_invalid' || reason === 'auth_error';
@@ -1775,6 +1700,84 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
                   turnLabel={session.turn_label?.label}
                   onStreamGrew={stickToBottomIfNeeded}
                 />
+              </Box>
+            )}
+            {/* Connect offer sits BELOW the latest reply (where the eye is), not at the top of the
+                transcript where the auto-scroll-to-bottom buries it. Suggest-only; activation is the
+                user's click through the gated MCPActivate endpoint. */}
+            {(session.mcp_suggestions && session.mcp_suggestions.length > 0) && (
+              <Box sx={{ mt: 1, mb: 1, px: 0.5, display: 'flex', flexDirection: 'column', gap: 0.5, overflowAnchor: 'none' }}>
+                {session.mcp_suggestions.map((s) => (
+                  <Box key={s.id} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="caption" sx={{ color: c.text.secondary, flex: 1, minWidth: 0 }}>
+                      Connect{' '}
+                      <Box component="span" sx={{ color: c.text.primary, fontWeight: 500 }}>{s.title}</Box>
+                      {' '}so the agent can do this
+                    </Typography>
+                    <Typography
+                      component="button"
+                      variant="caption"
+                      disabled={activatingMcp === s.id}
+                      onClick={async () => {
+                        if (activatingMcp) return;
+                        setActivateError(null);
+                        setActivatingMcp(s.id);
+                        try {
+                          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                          const tok = (() => { try { return getAuthToken(); } catch { return ''; } })();
+                          if (tok) headers['Authorization'] = `Bearer ${tok}`;
+                          const r = await fetch(`${API_BASE}/mcp-meta/activate`, {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify({
+                              server_name: s.id.toLowerCase().replace(/\s+/g, '-'),
+                              reason: s.reason || 'preflight suggestion',
+                              parent_session_id: session.id,
+                            }),
+                          });
+                          const body = await r.json().catch(() => ({} as any));
+                          if (!r.ok) {
+                            setActivateError(`Activation failed (${r.status})`);
+                          } else if (body?.status === 'unknown_server') {
+                            // Not yet connected; jump to Actions so the user can finish OAuth.
+                            navigate('/actions');
+                          } else if (id) {
+                            dispatch(clearMcpSuggestions({ sessionId: id }));
+                          }
+                        } catch (e: any) {
+                          setActivateError(e?.message || 'Activation failed');
+                        } finally {
+                          setActivatingMcp(null);
+                        }
+                      }}
+                      sx={{
+                        border: 'none',
+                        background: 'none',
+                        p: 0,
+                        color: c.accent.primary,
+                        cursor: activatingMcp === s.id ? 'wait' : 'pointer',
+                        opacity: activatingMcp === s.id ? 0.5 : 1,
+                        '&:hover': { textDecoration: activatingMcp ? 'none' : 'underline' },
+                        flexShrink: 0,
+                      }}
+                    >
+                      {activatingMcp === s.id ? 'Connecting…' : 'Connect'}
+                    </Typography>
+                  </Box>
+                ))}
+                {activateError && (
+                  <Typography variant="caption" sx={{ display: 'block', color: c.status.error }}>
+                    {activateError}
+                  </Typography>
+                )}
+                <Box
+                  role="button"
+                  aria-label="Dismiss"
+                  onClick={() => id && dispatch(clearMcpSuggestions({ sessionId: id }))}
+                  sx={{ alignSelf: 'flex-start', color: c.text.muted, cursor: 'pointer', fontSize: '0.72rem', '&:hover': { color: c.text.secondary } }}
+                >
+                  Dismiss
+                </Box>
               </Box>
             )}
             {/* First-run welcome chips: sit UNDER the streamed greeting, appear once it finishes,

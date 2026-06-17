@@ -86,8 +86,10 @@ def _is_obviously_local(prompt: str) -> bool:
     return False
 
 
-async def run_preflight(prompt: str, timeout_s: float = 2.0, task_id: str | None = None) -> dict:
-    """Classify the prompt and return {is_vague, suggestions}; never raises."""
+async def run_preflight(prompt: str, timeout_s: float = 8.0, task_id: str | None = None, require_vague: bool = True) -> dict:
+    """Classify the prompt and return {is_vague, suggestions}; never raises. require_vague=False
+    keeps suggestions even on a concrete prompt: used when the agent already proved it needs an
+    integration (it called MCPSearch), so the "don't interrupt concrete tasks" guard no longer applies."""
     default: dict[str, Any] = {"is_vague": False, "suggestions": []}
 
     if not prompt or not prompt.strip():
@@ -113,7 +115,7 @@ async def run_preflight(prompt: str, timeout_s: float = 2.0, task_id: str | None
         result["suggestions"] = [s for s in result["suggestions"] if s is not None]
         result["is_vague"] = bool(result.get("is_vague"))
         # Suppress on concrete prompts; false-positives feel broken (interrupting "refactor foo.ts" to suggest GitHub MCP).
-        if not result["is_vague"]:
+        if require_vague and not result["is_vague"]:
             result["suggestions"] = []
         return result
     except asyncio.TimeoutError:

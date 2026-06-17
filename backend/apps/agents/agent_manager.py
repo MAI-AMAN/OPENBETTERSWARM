@@ -898,6 +898,30 @@ class AgentManager:
             else:
                 _ts_loop["n"] = 0
 
+            # MCPSearch is the agent saying "I need an integration I don't have" (e.g. "no email
+            # connected"). Don't make the user read a wall of options: fire the same curated connect
+            # card the launch preflight uses, keyed to their original request. Non-blocking (the search
+            # proceeds) and once per run; covers the common path the ToolSearch-loop branch misses
+            # because a capable model does one MCPSearch instead of thrashing. Suggest-only as ever.
+            if (tool_name.endswith("MCPSearch") or tool_name.endswith("MCPList")) and not _mcp_offer_sent["done"]:
+                _mcp_offer_sent["done"] = True
+
+                async def _offer_from_prompt():
+                    try:
+                        from backend.apps.agents.core.mcp_preflight import run_preflight
+                        result = await run_preflight(prompt, task_id=session_id, require_vague=False)
+                        offers = result.get("suggestions", [])
+                        if offers:
+                            await ws_manager.send_to_session(session_id, "agent:mcp_suggestions", {
+                                "session_id": session_id,
+                                "suggestions": offers,
+                                "is_vague": False,
+                            })
+                    except Exception:
+                        logger.debug("MCPSearch-triggered connect offer skipped", exc_info=True)
+
+                asyncio.create_task(_offer_from_prompt())
+
             if tool_name and tool_name != "AskUserQuestion":
                 tool_input = input_data.get("tool_input", {})
                 policy, sensitive_pattern = _maybe_override_policy(
