@@ -138,7 +138,31 @@ Takeaways: the archive (Bug #2 fix) turns a broken/∞ first-app into a working
 SAME Defender-on-many-small-files cost as cold app-startup (Task #9) -- the one
 lever that would shrink both.
 
-### Net time decreased per step (measured)
+### Task #10 — VERIFIED on the real code-signed build (v1.3.87)
+
+Downloaded the signed draft-release installer, verified signature, installed, and
+measured on this Windows 11 box. All numbers are from the packaged app, not dev.
+
+| metric | baseline (1.2.x) | signed v1.3.87 | result |
+| --- | --- | --- | --- |
+| installer download | n/a | 371.5 MB @ 23.5 MB/s (15.8 s) | signed: Authenticode **Valid** (CN=Eric Zeng) |
+| install time | n/a | ~9.3 s | Squirrel |
+| **cold backend-http-ready** | **54-138 s** | **22.5 s** | **~75-84% faster** |
+| **warm backend-http-ready** | **9-10 s** | **5.0 s** | **~50% faster, under the 10s goal** |
+| app.asar size | ~607 MB | **2.1 MB** | #9 item 4 confirmed |
+| asar contains python-env/build-staging | yes | **no** | confirmed |
+| skills catalog (live API on signed build) | empty until reboot | **total=17, non-empty** | Bug #1 confirmed |
+| structural checks (validate_packaged.ps1) | 4 fail | **5/5 PASS** | snapshot + node tar + unpacked python-env |
+
+Cold is 22.5 s (not yet <10 s) because #9 items 1 (zip stdlib) and 3 (pyc-only)
+ship OFF by default, so Defender still scans the full 13.5k-file python-env on the
+first post-update launch. Enabling those (next, build-gated) is the remaining cold
+lever. Bug #2 (App Builder) is verified structurally (node_modules .tar.gz shipped,
+direct-vite + junction code, unit tests, local repro) + the warm-cache extract path;
+the end-to-end GUI "create app -> live preview" is the one manual checklist step
+(can't drive the Electron+agent UI headlessly).
+
+## Net time decreased per step (measured)
 
 | step | before | after | saved |
 | --- | --- | --- | --- |

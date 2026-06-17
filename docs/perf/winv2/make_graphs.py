@@ -173,6 +173,38 @@ def appbuilder_chart():
     return "\n".join(out)
 
 
+def startup_beforeafter_chart():
+    """Before/after grouped bars for the signed-build startup result (Task #10)."""
+    path = os.path.join(HERE, "startup_beforeafter.csv")
+    if not os.path.exists(path):
+        return None
+    with open(path, newline="", encoding="utf-8") as f:
+        data = list(csv.DictReader(f))
+    w, h = 900, 320
+    pad_l, pad_r, pad_t, pad_b = 60, 30, 56, 90
+    plot_w, plot_h = w - pad_l - pad_r, h - pad_t - pad_b
+    vmax = max(max(int(r["before_ms"]), int(r["after_ms"])) for r in data)
+    n = len(data); group = plot_w / n; bw = group * 0.30
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" font-family="Segoe UI, sans-serif">']
+    out.append(f'<text x="{pad_l}" y="30" font-size="17" font-weight="600" fill="{INK}">'
+               'signed v1.3.87 startup: before vs after (seconds, lower is better)</text>')
+    for frac in (0, 0.5, 1.0):
+        y = pad_t + plot_h - plot_h * frac
+        out.append(f'<line x1="{pad_l}" y1="{y:.0f}" x2="{w-pad_r}" y2="{y:.0f}" stroke="{GRID}"/>')
+        out.append(f'<text x="{pad_l-8}" y="{y+4:.0f}" font-size="11" fill="{MUTE}" text-anchor="end">{vmax*frac/1000:.0f}s</text>')
+    for i, r in enumerate(data):
+        bx = pad_l + i * group + group / 2
+        for j, (k, c, lab) in enumerate((("before_ms", COLD, "before"), ("after_ms", WARM, "after"))):
+            v = int(r[k]); bh = plot_h * v / vmax; x = bx + (j - 1) * bw - bw * 0.05; y = pad_t + plot_h - bh
+            out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw:.1f}" height="{bh:.1f}" fill="{c}" rx="2"/>')
+            out.append(f'<text x="{x+bw/2:.1f}" y="{y-4:.1f}" font-size="11" fill="{INK}" text-anchor="middle">{v/1000:.1f}s</text>')
+        out.append(f'<text x="{bx:.1f}" y="{h-pad_b+22:.0f}" font-size="11" fill="{MUTE}" text-anchor="middle">{r["metric"]}</text>')
+    out.append(f'<rect x="{w-200}" y="{pad_t}" width="12" height="12" fill="{COLD}"/><text x="{w-184}" y="{pad_t+11}" font-size="12" fill="{INK}">before (1.2.x)</text>')
+    out.append(f'<rect x="{w-95}" y="{pad_t}" width="12" height="12" fill="{WARM}"/><text x="{w-79}" y="{pad_t+11}" font-size="12" fill="{INK}">v1.3.87</text>')
+    out.append('</svg>')
+    return "\n".join(out)
+
+
 def main():
     data = rows()
     open(os.path.join(HERE, "baseline_startup.svg"), "w", encoding="utf-8").write(bars_chart(data))
@@ -183,6 +215,10 @@ def main():
     if ab:
         open(os.path.join(HERE, "appbuilder_breakdown.svg"), "w", encoding="utf-8").write(ab)
         wrote += " + appbuilder_breakdown.svg"
+    sba = startup_beforeafter_chart()
+    if sba:
+        open(os.path.join(HERE, "startup_beforeafter.svg"), "w", encoding="utf-8").write(sba)
+        wrote += " + startup_beforeafter.svg"
     print("wrote " + wrote)
 
 
