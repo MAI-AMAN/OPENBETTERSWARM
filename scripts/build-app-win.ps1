@@ -281,30 +281,10 @@ if (-not (Test-Path (Join-Path $ProjectRoot 'electron\python-env'))) {
 }
 Write-Host "Python environment ready."
 Write-Host ""
-
-# --- Step 2b: Shrink the Defender cold-start surface (#9 items 1 + 3). ---
-# Zip the stdlib into python313.zip and ship site-packages as sourceless .pyc, so
-# Defender scans ~9.3k files instead of ~13.5k on the first post-update launch
-# (the python-env scan is the bulk of the 22.5s cold time). Validated: the full
-# backend.main import tree resolves cleanly with both applied. Guarded on the
-# zip's absence so a cached/already-shrunk env is not re-processed (re-zipping an
-# already-zipped tree would write an empty archive). Non-fatal: on failure the
-# build continues with the un-shrunk env.
-$StdlibZip = Join-Path $PythonEnv 'python313.zip'
-if (-not (Test-Path $StdlibZip)) {
-    Write-Host "[2b] Shrinking python-env for cold start (#9 items 1+3)..."
-    try {
-        & (Join-Path $ScriptDir 'zip-python-stdlib.ps1') -PythonEnv $PythonEnv -Apply
-        & (Join-Path $ScriptDir 'strip-py-to-pyc.ps1') -TargetDir (Join-Path $PythonEnv 'Lib\site-packages') -PythonExe $PythonExe -Apply
-        $cnt = (Get-ChildItem -Recurse -File $PythonEnv -EA SilentlyContinue | Measure-Object).Count
-        Write-Host "[2b] python-env shrunk to $cnt files."
-    } catch {
-        Write-Warning "[2b] python-env shrink FAILED: $_  (cold start stays larger; non-fatal)"
-    }
-} else {
-    Write-Host "[2b] python-env already shrunk (python313.zip present); skipping."
-}
-Write-Host ""
+# NOTE: #9 items 1+3 (zip stdlib + pyc-only site-packages) were measured to give
+# NO cold-start benefit (cold is native-binary-scan-bound, not file-count-bound),
+# so they are NOT wired in. scripts/zip-python-stdlib.ps1 + strip-py-to-pyc.ps1
+# remain as drafts. The cold lever is the opt-in Defender exclusion (item 5).
 
 # --- Step 3: Fetch Router from npm ---
 # The 9router Next.js server is published as an npm package with a pre-built
