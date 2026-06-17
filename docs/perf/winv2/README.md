@@ -164,6 +164,34 @@ direct-vite + junction code, unit tests, local repro) + the warm-cache extract p
 the end-to-end GUI "create app -> live preview" is the one manual checklist step
 (can't drive the Electron+agent UI headlessly).
 
+## #9 item 5 (Defender exclusion) measured: ALSO no cold benefit -> cold is NOT Defender
+
+Applied the Defender exclusion (admin) for all 3 openswarm folders, rebuilt a
+fresh-content lean v1.3.86 (so Defender would see new files), installed with the
+exclusion active, measured cold:
+
+| | cold backend-http-ready |
+| --- | --- |
+| no exclusion (items off) | 22.5 s |
+| no exclusion (items 1+3 on) | 22.4 s |
+| **Defender exclusion ON** | **21.4 s (no change)** |
+
+Conclusion: TWO independent Defender-targeting interventions (file-count via
+items 1+3, and a full AV exclusion) both moved cold by ~0. So the residual ~22 s
+cold is NOT Defender real-time scanning. It is the first-launch-after-install cost
+-- cold disk I/O of the imported native binaries + bundled-Python interpreter init
++ Squirrel first-run -- which neither AV-exclusion nor file-count tricks touch.
+(Caveat: my non-admin shell can't read Get-MpPreference to re-confirm the
+exclusion is live, but the result is consistent with the items-1+3 negative.)
+
+ACTION: remove the exclusion -- it weakened AV for zero gain:
+`& scripts\add-defender-exclusion.ps1 -Remove` (elevated).
+
+The cold win was already banked by the asar trim (54-138 s -> ~22 s). Pushing
+cold below ~22 s would need shrinking the startup-imported bytes (lazy-load heavy
+native deps like lxml/PIL, or trim the 242 MB bundled claude.exe) or faster disk
+-- bigger/riskier work with diminishing returns. Warm (5 s) is already under goal.
+
 ## #9 items 1+3 measured on the signed build: NO cold-start benefit (negative result)
 
 Built v1.3.86 with items 1+3 ON (python-env 13,554 -> 9,285 files, ~31% fewer) and
