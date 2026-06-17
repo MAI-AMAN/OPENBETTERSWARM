@@ -138,6 +138,20 @@ def _build_available_shortlist(settings) -> list[CuratedEntry]:
     ]
 
 
+def offer_for_gated_server(server_name: str, settings) -> CuratedEntry | None:
+    """Mid-run a running agent may reach for a vetted MCP it isn't granted; this maps that
+    server to a one-click connect offer to SHOW the user. Suggest-only by construction: it
+    returns data to display, never an action that grants access, so it cannot widen the MCP
+    surface (activation stays behind MCPActivate + the dispatch gate). Returns None unless the
+    server is vetted AND inactive AND not dismissed, reusing the same filter as the preflight."""
+    if not server_name or not isinstance(server_name, str):
+        return None
+    entry = next((e for e in _build_available_shortlist(settings) if e["id"] == server_name), None)
+    if entry is None:
+        return None
+    return {"id": entry["id"], "title": entry["title"], "description": entry["description"], "reason": ""}
+
+
 def _decorate(llm_suggestion: dict, available: list[CuratedEntry]) -> dict | None:
     """Expand an LLM-returned {id, reason} into the full frontend shape."""
     entry = next((e for e in available if e["id"] == llm_suggestion["id"]), None)
