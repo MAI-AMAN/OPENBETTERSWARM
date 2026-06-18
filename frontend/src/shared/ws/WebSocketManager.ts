@@ -494,6 +494,30 @@ class WebSocketManager {
           // before its own aux call lands.
           if (session_id && (data.status === 'completed' || data.status === 'error' || data.status === 'stopped')) {
             store.dispatch(clearTurnLabel(session_id));
+            // Mid-stream stop: the backend keeps the partial reply, but
+            // cancelling the SDK can lag several seconds, so its authoritative
+            // agent:message lands late. Promote the in-flight assistant text to
+            // a real message NOW so it doesn't blink out the instant we clear
+            // the overlay; the late agent:message (same id) just refreshes it.
+            if (data.status === 'stopped') {
+              const entry = store.getState().streaming.bySession[session_id];
+              if (entry && entry.role === 'assistant' && entry.content) {
+                const sess = store.getState().agents.sessions[session_id];
+                if (!sess?.messages?.some((m) => m.id === entry.id)) {
+                  store.dispatch(addMessage({
+                    sessionId: session_id,
+                    message: {
+                      id: entry.id,
+                      role: 'assistant',
+                      content: entry.content,
+                      timestamp: new Date().toISOString(),
+                      branch_id: sess?.active_branch_id ?? 'main',
+                      parent_id: null,
+                    },
+                  }));
+                }
+              }
+            }
             store.dispatch(clearStreamingForSession(session_id));
           }
         }
