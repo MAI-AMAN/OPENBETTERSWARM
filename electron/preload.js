@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('openswarm', {
   // Renderer attaches the ref to Stripe checkout + sign-in flows so
   // the cloud can credit the affiliate. Resolves to {} if no state yet.
   getInstallState: () => ipcRenderer.invoke('get-install-state'),
+  // Factory reset: wipes the data dir and relaunches. Never resolves on success (the app exits first).
+  hardReset: () => ipcRenderer.invoke('hard-reset'),
   connectSlack: () => ipcRenderer.invoke('connect-slack'),
   sendCdpCommand: (wcId, method, params, sessionId) => ipcRenderer.invoke('send-cdp-command', wcId, method, params, sessionId),
   cdpCacheSet: (wcId, indexMap) => ipcRenderer.invoke('cdp-cache-set', wcId, indexMap),
