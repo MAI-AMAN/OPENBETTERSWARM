@@ -122,30 +122,79 @@ async def skills_lifespan():
 skills = SubApp("skills", skills_lifespan)
 
 
+def _skill_md_path(skill_id: str) -> tuple[str | None, str]:
+    """Resolve where a skill's markdown lives: (path, kind).
+
+    A skill is either a folder (~/.claude/skills/<id>/SKILL.md, multi-file) or a
+    legacy flat file (~/.claude/skills/<id>.md). Folder wins if both exist. The
+    one place that knows the layout, so get/update/delete never re-guess it."""
+    folder_md = os.path.join(SKILLS_DIR, skill_id, "SKILL.md")
+    if os.path.isfile(folder_md):
+        return folder_md, "folder"
+    flat_md = os.path.join(SKILLS_DIR, f"{skill_id}.md")
+    if os.path.isfile(flat_md):
+        return flat_md, "flat"
+    return None, "flat"
+
+
+def _has_supporting_files(skill_dir: str) -> bool:
+    """True if a skill folder ships anything beyond its SKILL.md (scripts, templates)."""
+    try:
+        return any(e != "SKILL.md" and not e.startswith(".") for e in os.listdir(skill_dir))
+    except OSError:
+        return False
+
+
+def _build_skill(skill_id: str, content: str, md_path: str, kind: str, index: dict) -> Skill:
+    """Assemble a Skill from disk + index, falling back to SKILL.md frontmatter
+    for a folder skill the index hasn't catalogued (e.g. hand-dropped)."""
+    meta = dict(index.get(skill_id, {}))
+    if kind == "folder" and ("name" not in meta or "description" not in meta):
+        fm = _parse_skill_frontmatter(content)
+        meta.setdefault("name", fm.get("name", ""))
+        meta.setdefault("description", fm.get("description", ""))
+    pretty = skill_id.replace("-", " ").replace("_", " ").title()
+    skill_dir = os.path.join(SKILLS_DIR, skill_id)
+    return Skill(
+        id=skill_id,
+        name=meta.get("name") or pretty,
+        description=meta.get("description", ""),
+        content=content,
+        file_path=md_path,
+        command=meta.get("command", skill_id),
+        built_in=bool(meta.get("built_in", False)),
+        dir_path=skill_dir if kind == "folder" else "",
+        has_supporting_files=(kind == "folder" and _has_supporting_files(skill_dir)),
+    )
+
+
 def _sync_skills() -> list[Skill]:
-    """Sync skills from the filesystem, updating the index."""
+    """Sync skills from the filesystem, updating the index. Reads both layouts:
+    legacy flat <id>.md files and multi-file <id>/SKILL.md folders."""
     index = _load_index()
     result = []
+    seen: set[str] = set()
 
-    if os.path.exists(SKILLS_DIR):
-        for fname in os.listdir(SKILLS_DIR):
-            if fname.endswith(".md"):
-                fpath = os.path.join(SKILLS_DIR, fname)
-                with open(fpath) as f:
-                    content = f.read()
+    if not os.path.exists(SKILLS_DIR):
+        return result
 
-                skill_id = fname.replace(".md", "")
-                meta = index.get(skill_id, {})
-                skill = Skill(
-                    id=skill_id,
-                    name=meta.get("name", fname.replace(".md", "").replace("-", " ").replace("_", " ").title()),
-                    description=meta.get("description", ""),
-                    content=content,
-                    file_path=fpath,
-                    command=meta.get("command", fname.replace(".md", "")),
-                    built_in=bool(meta.get("built_in", False)),
-                )
-                result.append(skill)
+    for entry in os.listdir(SKILLS_DIR):
+        full = os.path.join(SKILLS_DIR, entry)
+        if os.path.isdir(full):
+            skill_id = entry
+        elif entry.endswith(".md"):
+            skill_id = entry[: -len(".md")]
+        else:
+            continue
+        if skill_id in seen:
+            continue
+        md_path, kind = _skill_md_path(skill_id)
+        if not md_path:
+            continue
+        with open(md_path, encoding="utf-8") as f:
+            content = f.read()
+        seen.add(skill_id)
+        result.append(_build_skill(skill_id, content, md_path, kind, index))
 
     return result
 
@@ -254,12 +303,12 @@ async def create_skill(body: SkillCreate):
 
 @skills.router.put("/{skill_id}")
 async def update_skill(skill_id: str, body: SkillUpdate):
-    fpath = os.path.join(SKILLS_DIR, f"{skill_id}.md")
-    if not os.path.exists(fpath):
+    md_path, kind = _skill_md_path(skill_id)
+    if not md_path:
         raise HTTPException(status_code=404, detail="Skill not found")
 
     if body.content is not None:
-        with open(fpath, "w") as f:
+        with open(md_path, "w", encoding="utf-8") as f:
             f.write(body.content)
 
     index = _load_index()
@@ -273,17 +322,10 @@ async def update_skill(skill_id: str, body: SkillUpdate):
     index[skill_id] = meta
     _save_index(index)
 
-    with open(fpath) as f:
+    with open(md_path, encoding="utf-8") as f:
         content = f.read()
 
-    skill = Skill(
-        id=skill_id,
-        name=meta.get("name", skill_id),
-        description=meta.get("description", ""),
-        content=content,
-        file_path=fpath,
-        command=meta.get("command", skill_id),
-    )
+    skill = _build_skill(skill_id, content, md_path, kind, index)
     return {"ok": True, "skill": skill.model_dump()}
 
 
@@ -299,9 +341,14 @@ async def delete_skill(skill_id: str):
                 "the next agent turn)."
             ),
         )
-    fpath = os.path.join(SKILLS_DIR, f"{skill_id}.md")
-    if os.path.exists(fpath):
-        os.remove(fpath)
+    # Remove whichever layout exists: the whole folder, or the flat file.
+    import shutil
+    skill_dir = os.path.join(SKILLS_DIR, skill_id)
+    flat = os.path.join(SKILLS_DIR, f"{skill_id}.md")
+    if os.path.isdir(skill_dir):
+        shutil.rmtree(skill_dir, ignore_errors=True)
+    if os.path.isfile(flat):
+        os.remove(flat)
     index.pop(skill_id, None)
     _save_index(index)
     return {"ok": True}
