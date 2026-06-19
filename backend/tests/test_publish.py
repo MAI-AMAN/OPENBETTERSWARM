@@ -110,6 +110,22 @@ def test_scan_for_publish_merges_ast():
         publish._llm_findings = orig
 
 
+def test_runtime_injection():
+    from backend.apps.outputs.html_inject import _build_data_injection, _inject_data_into_html
+
+    base = _build_data_injection("{}", "null")
+    assert "OUTPUT_COMPUTE" not in base and "OUTPUT_LLM" not in base  # no runtime -> no helpers
+
+    full = _build_data_injection("{}", "null", "null", {"token": "tok123", "output_id": "abc"})
+    assert "OUTPUT_COMPUTE" in full and "OUTPUT_LLM" in full and "Bearer tok123" in full
+
+    llm_only = _build_data_injection("{}", "null", "null", {"token": "tok123"})
+    assert "OUTPUT_LLM" in llm_only and "OUTPUT_COMPUTE" not in llm_only  # webapp: no output_id -> LLM only
+
+    html = _inject_data_into_html("<html><head></head><body>x</body></html>", "{}", "null", "null", {"token": "t"})
+    assert "OUTPUT_LLM" in html and "</head>" in html
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
