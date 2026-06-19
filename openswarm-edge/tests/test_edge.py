@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from app.main import slug_from_host
 from app.bundles import unpack, resolve_file
+from app.inject import inject_runtime
 from app.ratelimit import RateLimiter
 from app.sandbox import validate_code_safety, run_backend, UnsafeCodeError
 
@@ -78,6 +79,15 @@ def test_sandbox_rejects_unsafe_and_allows_safe():
 def test_sandbox_runs_safe_code():
     res = asyncio.run(run_backend("result = {'sum': sum(input_data['nums'])}", {"nums": [1, 2, 3]}))
     assert res.result == {"sum": 6}
+
+
+def test_inject_runtime():
+    out = inject_runtime(b"<html><head><title>x</title></head><body>hi</body></html>").decode()
+    assert "OUTPUT_COMPUTE" in out and "OUTPUT_LLM" in out
+    assert out.index("OUTPUT_COMPUTE") < out.index("</head>")  # injected inside <head>
+    # no head/body: shim is prepended, original content preserved
+    bare = inject_runtime(b"<div>bare</div>").decode()
+    assert "OUTPUT_COMPUTE" in bare and bare.endswith("<div>bare</div>")
 
 
 def _run_all():

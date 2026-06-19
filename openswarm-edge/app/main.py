@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 
 from .bundles import get_bundle, resolve_file
 from .fallback import apex_page, not_found_page
+from .inject import inject_runtime
 from .ratelimit import RateLimiter
 from .sandbox import UnsafeCodeError, run_backend
 
@@ -153,4 +154,7 @@ async def serve_static(path: str, request: Request) -> Response:
     if resolved is None:
         return HTMLResponse(not_found_page(), status_code=404)
     data, mime = resolved
+    if mime == "text/html":
+        # Give the page the published-app runtime (OUTPUT_COMPUTE / OUTPUT_LLM).
+        data = inject_runtime(data)
     return Response(content=data, media_type=mime, headers=_security_headers())
