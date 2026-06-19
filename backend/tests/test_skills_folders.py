@@ -32,6 +32,30 @@ def _write(path, text):
         f.write(text)
 
 
+def test_corrupt_index_does_not_brick_skills_and_is_preserved(skills_dir):
+    _write(str(skills_dir / "alpha.md"), "content")
+    with open(skills_dir / ".skills_index.json", "w") as f:
+        f.write("{ not valid json")
+    # Load returns empty instead of raising, and moves the bad file aside.
+    assert skills_mod._load_index() == {}
+    assert (skills_dir / ".skills_index.json.corrupt").exists()
+    # Skills still list (name falls back to the filename), so nothing is bricked.
+    assert "alpha" in {s.id for s in skills_mod._sync_skills()}
+
+
+def test_non_object_index_is_rejected(skills_dir):
+    with open(skills_dir / ".skills_index.json", "w") as f:
+        f.write("[1, 2, 3]")
+    assert skills_mod._load_index() == {}
+
+
+def test_save_index_is_atomic_no_temp_leftover(skills_dir):
+    skills_mod._save_index({"x": {"name": "X"}})
+    assert skills_mod._load_index() == {"x": {"name": "X"}}
+    leftovers = [n for n in __import__("os").listdir(skills_dir) if n.startswith(".skills_index.") and n.endswith(".tmp")]
+    assert leftovers == []
+
+
 def test_flat_skill_still_syncs(skills_dir):
     _write(str(skills_dir / "my-flat.md"), "do the flat thing")
     skills = {s.id: s for s in skills_mod._sync_skills()}

@@ -2,6 +2,9 @@ import os
 import json
 import logging
 import re
+import tempfile
+import threading
+import time
 from contextlib import asynccontextmanager
 from fastapi import HTTPException
 from backend.config.Apps import SubApp
@@ -16,15 +19,58 @@ from backend.config.paths import SKILLS_WORKSPACE_DIR
 
 
 def _load_index() -> dict[str, dict]:
-    if os.path.exists(INDEX_PATH):
-        with open(INDEX_PATH) as f:
-            return json.load(f)
+    """Read the skill index, never raising on a corrupt file. A truncated/garbled
+    index (e.g. a crash mid-write before atomic writes existed) is moved aside so
+    it's recoverable, and we start empty rather than bricking every skill op,
+    skills still list from their files with frontmatter/filename-derived names."""
+    if not os.path.exists(INDEX_PATH):
+        return {}
+    try:
+        with open(INDEX_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+        logger.warning("skills index was not an object; ignoring")
+    except (OSError, ValueError):
+        logger.warning("skills index unreadable; preserving aside and starting empty", exc_info=True)
+    try:
+        os.replace(INDEX_PATH, INDEX_PATH + ".corrupt")
+    except OSError:
+        pass
     return {}
 
 
+# Guards the index write so an atomic replace is never interleaved by another
+# writer. Today every index write runs on the single backend event-loop thread
+# (no await between a load and its save, so no lost-update race), but this stays
+# correct if a save ever moves to a thread pool the way settings' did.
+_index_write_lock = threading.Lock()
+
+
 def _save_index(index: dict[str, dict]):
-    with open(INDEX_PATH, "w") as f:
-        json.dump(index, f, indent=2)
+    """Atomic index write: tmp file + os.replace so a crash mid-write can't leave
+    a truncated index. Mirrors the settings store's write discipline."""
+    with _index_write_lock:
+        os.makedirs(SKILLS_DIR, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".skills_index.", suffix=".tmp", dir=SKILLS_DIR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(index, f, indent=2)
+            # Windows: Defender can briefly lock the destination; one retry covers it.
+            for attempt in range(2):
+                try:
+                    os.replace(tmp, INDEX_PATH)
+                    return
+                except PermissionError:
+                    if attempt == 1:
+                        raise
+                    time.sleep(0.05)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 
 # Built-in skills shipped with OpenSwarm itself. Each entry describes a
