@@ -173,6 +173,24 @@ def _is_unknown_model_error(exc: BaseException, extra_text: str = "") -> bool:
     ))
 
 
+def parse_retry_after(exc: BaseException, extra_text: str = "") -> int | None:
+    """Best-effort seconds-until-retry pulled from a throttle error; None if the
+    upstream didn't say. Only used to label the rate-limit pill, so a miss just
+    means the pill shows no countdown, never anything load-bearing."""
+    combined = f"{exc!s}\n{extra_text}"
+    # "1m 59s" / "2m" / "45s" (reset-window phrasing Codex/Anthropic use).
+    m = re.search(r"\b(?:(\d{1,2})\s*m(?:in)?)?\s*(\d{1,3})\s*s(?:ec)?\b", combined, re.IGNORECASE)
+    if m and (m.group(1) or m.group(2)):
+        return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+    # "retry-after: 30" / "try again in 2 minutes".
+    m = re.search(r"(?:retry[-\s]?after|try\s+again\s+in)\D{0,8}(\d{1,4})\s*(m|min|minute|s|sec|second)?", combined, re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        unit = (m.group(2) or "s").lower()
+        return n * 60 if unit.startswith("m") else n
+    return None
+
+
 def _is_transient_capacity_error(exc: BaseException, extra_text: str = "") -> bool:
     # The Claude CLI's underlying ProcessError stringifies to a generic
     # "Command failed with exit code 1 / Check stderr output for details";

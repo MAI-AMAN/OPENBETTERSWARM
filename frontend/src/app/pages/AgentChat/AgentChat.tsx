@@ -55,6 +55,7 @@ import MessageActionBar from './shell/MessageActionBar';
 import ToolCallBubble, { ToolPair } from './tool-bubbles/ToolCallBubble';
 import ToolGroupBubble, { RenderItem, ToolGroup, isToolGroup, isToolPair } from './tool-bubbles/ToolGroupBubble';
 import ApprovalBar, { BatchApprovalBar } from './shell/ApprovalBar';
+import { RateLimitPill } from './shell/RateLimitPill';
 import ChatInput, { ChatInputHandle } from './ChatInput';
 import ContextDrawer from './shell/ContextDrawer';
 import { ErrorSlime } from '@/app/components/feedback/ErrorSlime';
@@ -1859,6 +1860,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
             <ApprovalBar key={req.id} request={req} onApprove={handleApprove} onDeny={handleDeny} />
           ))
         )}
+
+        <RateLimitPill sessionId={session.id} />
 
         {isGlowing ? (
           <Box

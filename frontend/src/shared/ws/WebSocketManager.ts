@@ -11,6 +11,7 @@ import {
   updateSessionCost,
   updateSessionContext,
   setContextOverflow,
+  setRateLimited,
   setMcpSuggestions,
   addBranch,
   setActiveBranch,
@@ -651,6 +652,17 @@ class WebSocketManager {
             sessionId: session_id,
             reason: data.reason ?? 'long_context_required',
             message: data.message ?? 'Context full.',
+          }));
+        }
+        break;
+
+      case 'agent:rate_limited':
+        // Provider throttle that outlasted the silent backoff. Transient muted
+        // pill, not a card; auto-clears frontend-side.
+        if (session_id) {
+          store.dispatch(setRateLimited({
+            sessionId: session_id,
+            retryAfterS: typeof data.retry_after_s === 'number' ? data.retry_after_s : null,
           }));
         }
         break;

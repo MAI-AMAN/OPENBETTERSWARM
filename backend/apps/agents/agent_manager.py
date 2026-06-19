@@ -35,6 +35,7 @@ from backend.apps.agents.core.error_classify import (
     _is_long_context_error,
     _is_transient_capacity_error,
     _is_unknown_model_error,
+    parse_retry_after,
     redact_for_telemetry,
 )
 from backend.apps.agents.manager.session.session_store import (
@@ -3238,6 +3239,25 @@ class AgentManager:
                     })
                 except Exception:
                     logger.debug("submit_diagnostic for context_overflow failed", exc_info=True)
+            elif _is_transient_capacity_error(e, extra_text=_stderr_tail):
+                # A genuine throttle (429/overload/capacity) that already burned
+                # the whole silent-backoff budget (the only way one reaches here).
+                # It's a limit, not a failure, so don't append a system-message
+                # card; emit a transient signal for the muted pill and mark the
+                # turn completed so it doesn't read as an error.
+                session.status = "completed"
+                if stream_text_msg_id:
+                    try:
+                        await ws_manager.send_to_session(session_id, "agent:stream_end", {
+                            "session_id": session_id,
+                            "message_id": stream_text_msg_id,
+                        })
+                    except Exception:
+                        pass
+                await ws_manager.send_to_session(session_id, "agent:rate_limited", {
+                    "session_id": session_id,
+                    "retry_after_s": parse_retry_after(e, _stderr_tail),
+                })
             elif _is_free_trial_exhausted(e, extra_text=_stderr_tail):
                 # Free runs spent. Flip back to own_key and show a friendly
                 # "connect a model" upsell instead of a raw 402.

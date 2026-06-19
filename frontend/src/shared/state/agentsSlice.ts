@@ -102,6 +102,7 @@ export interface AgentSession {
   context_window?: number;
   framework_overhead_tokens?: number;
   context_overflow?: { reason: string; message: string; at: string } | null;
+  rate_limited?: { retry_after_s: number | null; at: string } | null;
   mcp_suggestions?: Array<{ id: string; title: string; description: string; reason?: string }>;
   mcp_suggestions_is_vague?: boolean;
   compacted_through_msg_id?: string | null;
@@ -919,6 +920,24 @@ const agentsSlice = createSlice({
       }
     },
 
+    setRateLimited(
+      state,
+      action: PayloadAction<{ sessionId: string; retryAfterS: number | null }>
+    ) {
+      const session = state.sessions[action.payload.sessionId];
+      if (session) {
+        session.rate_limited = {
+          retry_after_s: action.payload.retryAfterS,
+          at: new Date().toISOString(),
+        };
+      }
+    },
+
+    clearRateLimited(state, action: PayloadAction<{ sessionId: string }>) {
+      const session = state.sessions[action.payload.sessionId];
+      if (session) session.rate_limited = null;
+    },
+
     clearContextOverflow(
       state,
       action: PayloadAction<{ sessionId: string }>
@@ -1425,6 +1444,8 @@ export const {
   updateSessionCost,
   updateSessionContext,
   setContextOverflow,
+  setRateLimited,
+  clearRateLimited,
   clearContextOverflow,
   setMcpSuggestions,
   clearMcpSuggestions,
