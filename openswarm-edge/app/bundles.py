@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 _ENDPOINT = os.environ.get("TIGRIS_ENDPOINT", "https://fly.storage.tigris.dev")
 _BUCKET = os.environ.get("TIGRIS_BUCKET", "openswarm-app-bundles")
 _TTL_SECONDS = int(os.environ.get("EDGE_BUNDLE_TTL_SECONDS", "120"))
+# Misses are cached briefly too, so spraying random subdomains can't turn into one
+# Tigris GET per request. Short enough that a fresh publish still shows up quickly.
+_NEG_TTL_SECONDS = int(os.environ.get("EDGE_BUNDLE_NEG_TTL_SECONDS", "30"))
 _MAX_CACHED_BUNDLES = int(os.environ.get("EDGE_BUNDLE_CACHE_MAX", "200"))
+_MAX_NEG_CACHED = int(os.environ.get("EDGE_BUNDLE_NEG_CACHE_MAX", "5000"))
 _MAX_UNPACKED_BYTES = 100 * 1024 * 1024  # guard against a decompression bomb
 
 # Browsers are picky about these; mimetypes' OS table can disagree across distros.
@@ -63,10 +67,17 @@ class Bundle:
 
 
 _cache: dict[str, Bundle] = {}
+_negative: dict[str, float] = {}  # slug -> time of the miss, short TTL
 
 
 def _bundle_key(slug: str) -> str:
     return f"apps/{slug}/bundle.tar.gz"
+
+
+def _remember_miss(slug: str) -> None:
+    if len(_negative) >= _MAX_NEG_CACHED:
+        _negative.clear()
+    _negative[slug] = time.time()
 
 
 def unpack(tar_gz: bytes) -> Bundle:
@@ -96,6 +107,9 @@ async def get_bundle(slug: str) -> Optional[Bundle]:
     cached = _cache.get(slug)
     if cached and time.time() - cached.fetched_at < _TTL_SECONDS:
         return cached
+    missed_at = _negative.get(slug)
+    if missed_at is not None and time.time() - missed_at < _NEG_TTL_SECONDS:
+        return None
     try:
         obj = await asyncio.to_thread(lambda: _s3().get_object(Bucket=_BUCKET, Key=_bundle_key(slug)))
         raw = await asyncio.to_thread(obj["Body"].read)
@@ -106,20 +120,24 @@ async def get_bundle(slug: str) -> Optional[Bundle]:
             # clean not-found rather than 500-ing every app on a storage hiccup.
             logger.warning("tigris get failed for %s: %s", slug, code or e)
         _cache.pop(slug, None)
+        _remember_miss(slug)
         return None
     except Exception as e:
         # missing creds, network, malformed bundle: never 500 the whole edge.
         logger.warning("tigris get error for %s: %s", slug, e)
         _cache.pop(slug, None)
+        _remember_miss(slug)
         return None
     try:
         bundle = unpack(raw)
     except Exception as e:
         logger.warning("bundle unpack failed for %s: %s", slug, e)
+        _remember_miss(slug)
         return None
     if len(_cache) >= _MAX_CACHED_BUNDLES:
         oldest = min(_cache, key=lambda k: _cache[k].fetched_at)
         _cache.pop(oldest, None)
+    _negative.pop(slug, None)
     _cache[slug] = bundle
     return bundle
 
