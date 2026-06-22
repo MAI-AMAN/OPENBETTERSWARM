@@ -60,7 +60,7 @@ echo "Building with development mode..."
 # Prefer `npm run dev` (honors package.json script + flags). But the
 # packaged build ships node.exe WITHOUT npm, so on a machine with no
 # system npm we fall back to invoking vite directly through the bundled
-# node — node_modules is already populated (warm-cache symlink or seed),
+# node; node_modules is already populated (warm-cache symlink or seed),
 # so vite's bin is present and this needs no package manager at all.
 if command -v "$NPM" &>/dev/null || [[ "$NPM" != "npm" ]]; then
     "$NPM" run dev
