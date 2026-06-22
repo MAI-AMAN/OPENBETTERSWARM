@@ -587,6 +587,8 @@ async def delete_output(output_id: str):
     path = os.path.join(DATA_DIR, f"{output_id}.json")
     if os.path.exists(path):
         os.remove(path)
+    from backend.apps.outputs import versions
+    versions.delete_all(output_id)
     return {"ok": True}
 
 
