@@ -49,9 +49,9 @@ async def emit_consolidated_thinking(thinking: ThinkingState, turn: TurnState, s
         try:
             from backend.apps.nine_router import (
                 get_latest_reasoning_tokens,
-                is_running as _9r_running,
+                is_running as nine_router_running,
             )
-            if _9r_running():
+            if nine_router_running():
                 rt = await get_latest_reasoning_tokens(model_hint=session.model)
                 if rt and rt > 0:
                     upstream_reasoning_tokens = rt
@@ -98,9 +98,9 @@ async def emit_consolidated_thinking(thinking: ThinkingState, turn: TurnState, s
         try:
             from backend.apps.nine_router import (
                 get_latest_reasoning_tokens,
-                is_running as _9r_running,
+                is_running as nine_router_running,
             )
-            if _9r_running():
+            if nine_router_running():
                 rt = await get_latest_reasoning_tokens(model_hint=session.model)
                 if rt and rt > 0:
                     turn_tokens = rt
@@ -151,48 +151,48 @@ async def emit_consolidated_thinking(thinking: ThinkingState, turn: TurnState, s
     # Pill uses the FRESH lane (uncached input only). session.tokens
     # ["input"] stays full for the context-fullness bar + cost; the
     # bubble shows the NEW tokens this turn, not the cached re-reads.
-    _cum_in = 0
-    _cum_out = 0
+    cum_in = 0
+    cum_out = 0
     if isinstance(session.tokens, dict):
-        _cum_in = int(session.tokens.get("input_fresh", 0) or 0)
-        _cum_out = int(session.tokens.get("output", 0) or 0)
-    _cum_children_in = 0
-    _cum_children_out = 0
+        cum_in = int(session.tokens.get("input_fresh", 0) or 0)
+        cum_out = int(session.tokens.get("output", 0) or 0)
+    cum_children_in = 0
+    cum_children_out = 0
     try:
-        for _child in sessions.values():
-            if getattr(_child, "parent_session_id", None) != session.id:
+        for child in sessions.values():
+            if getattr(child, "parent_session_id", None) != session.id:
                 continue
-            _ct = getattr(_child, "tokens", None)
-            if not isinstance(_ct, dict):
+            ct = getattr(child, "tokens", None)
+            if not isinstance(ct, dict):
                 continue
-            _cum_children_in += int(_ct.get("input_fresh", 0) or 0)
-            _cum_children_out += int(_ct.get("output", 0) or 0)
+            cum_children_in += int(ct.get("input_fresh", 0) or 0)
+            cum_children_out += int(ct.get("output", 0) or 0)
     except Exception:
         pass
 
     # Fall back to cumulative if the baseline wasn't captured
     # (degenerate empty turn, better than showing zero).
     if turn.baseline_captured:
-        _parent_in = max(0, _cum_in - turn.baseline_session_in)
-        _parent_out = max(0, _cum_out - turn.baseline_session_out)
-        _children_in = max(0, _cum_children_in - turn.baseline_children_in)
-        _children_out = max(0, _cum_children_out - turn.baseline_children_out)
+        parent_in = max(0, cum_in - turn.baseline_session_in)
+        parent_out = max(0, cum_out - turn.baseline_session_out)
+        children_in = max(0, cum_children_in - turn.baseline_children_in)
+        children_out = max(0, cum_children_out - turn.baseline_children_out)
     else:
-        _parent_in = _cum_in
-        _parent_out = _cum_out
-        _children_in = _cum_children_in
-        _children_out = _cum_children_out
+        parent_in = cum_in
+        parent_out = cum_out
+        children_in = cum_children_in
+        children_out = cum_children_out
 
     # Fresh input + output = the NEW tokens this turn. The old
     # framework-overhead subtraction is gone on purpose: it was an
     # estimate to strip the cached static prefix out of the full
     # input number, and the fresh lane already excludes that prefix
     # exactly, so subtracting it again would double-discount to ~0.
-    _turn_total_tokens: int | None = (
-        _parent_in + _parent_out + _children_in + _children_out
+    turn_total_tokens: int | None = (
+        parent_in + parent_out + children_in + children_out
     )
-    if not _turn_total_tokens or _turn_total_tokens <= 0:
-        _turn_total_tokens = None
+    if not turn_total_tokens or turn_total_tokens <= 0:
+        turn_total_tokens = None
     consolidated = Message(
         id=thinking.msg_id,
         role="thinking",
@@ -200,7 +200,7 @@ async def emit_consolidated_thinking(thinking: ThinkingState, turn: TurnState, s
         branch_id=session.active_branch_id,
         elapsed_ms=turn.total_ms or None,
         tokens=turn_tokens,
-        input_tokens=_turn_total_tokens,
+        input_tokens=turn_total_tokens,
         tool_count=turn.tool_count or None,
     )
     existing_idx = next(
