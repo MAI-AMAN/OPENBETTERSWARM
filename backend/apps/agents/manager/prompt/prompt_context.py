@@ -1,14 +1,17 @@
-from typing import Callable
+from typing import Callable, Dict, List, Optional, Tuple
+
+from typeguard import typechecked
 
 from backend.apps.modes.modes import load_mode
 from backend.apps.tools_lib.tools_lib import (
     _load_all as load_all_tools,
-    _sanitize_server_name,
+    _sanitize_server_name as sanitize_server_name,
 )
 from backend.apps.agents.manager.prompt.tool_catalog import get_denied_tool_names, is_fully_denied
 
 
-def resolve_mode(mode_id: str, get_all_tool_names: Callable[[], list[str]]) -> tuple[list[str], str | None, str | None]:
+@typechecked
+def resolve_mode(mode_id: str, get_all_tool_names: Callable[[], List[str]]) -> Tuple[List[str], Optional[str], Optional[str]]:
     """Return (tools, system_prompt, default_folder) resolved from the mode store."""
     mode_def = load_mode(mode_id)
     if mode_def:
@@ -17,7 +20,8 @@ def resolve_mode(mode_id: str, get_all_tool_names: Callable[[], list[str]]) -> t
     return get_all_tool_names(), None, None
 
 
-def build_connected_tools_context(allowed_tools: list[str], get_all_tool_names: Callable[[], list[str]]) -> str | None:
+@typechecked
+def build_connected_tools_context(allowed_tools: List[str], get_all_tool_names: Callable[[], List[str]]) -> Optional[str]:
     """Build a context block describing connected MCP tools and their accounts.
 
     Tools set to 'deny' and fully-denied servers are excluded.
@@ -34,7 +38,7 @@ def build_connected_tools_context(allowed_tools: list[str], get_all_tool_names: 
         if is_fully_denied(tool):
             continue
 
-        server_name = _sanitize_server_name(tool.name)
+        server_name = sanitize_server_name(tool.name)
         denied = get_denied_tool_names(tool)
         tool_descs = {
             k: v for k, v in tool.tool_permissions.get("_tool_descriptions", {}).items()
@@ -77,8 +81,8 @@ def build_connected_tools_context(allowed_tools: list[str], get_all_tool_names: 
                 )
             else:
                 lines.append(
-                    f"  No Discord servers authorized yet. Tell the user to click "
-                    f"'Connect Discord' to add a server before attempting any Discord actions."
+                    "  No Discord servers authorized yet. Tell the user to click "
+                    "'Connect Discord' to add a server before attempting any Discord actions."
                 )
 
         tool_names = list(tool_descs.keys())
@@ -106,7 +110,8 @@ def build_connected_tools_context(allowed_tools: list[str], get_all_tool_names: 
 TOOLSEARCH_LOOP_THRESHOLD = 3
 
 
-def toolsearch_loop_redirect(consecutive_toolsearch: int, gated_servers: list[str]) -> str | None:
+@typechecked
+def toolsearch_loop_redirect(consecutive_toolsearch: int, gated_servers: List[str]) -> Optional[str]:
     """The feedback to hand a model that's stuck calling ToolSearch in a row.
     None until it crosses the threshold; then a steer toward MCPActivate (the
     only path to a gated server) plus a reminder its other tools are already
@@ -127,7 +132,8 @@ def toolsearch_loop_redirect(consecutive_toolsearch: int, gated_servers: list[st
     return reason
 
 
-def build_browser_context(dashboard_id: str | None, selected_browser_ids: list[str] | None = None) -> str | None:
+@typechecked
+def build_browser_context(dashboard_id: Optional[str], selected_browser_ids: Optional[List[str]] = None) -> Optional[str]:
     """Build a context block listing browser cards and delegation instructions.
 
     Only browser cards explicitly selected by the user are included.
@@ -203,7 +209,8 @@ def build_browser_context(dashboard_id: str | None, selected_browser_ids: list[s
     return "\n".join(lines)
 
 
-def build_selected_app_context(selected_app_output_ids: list[str] | None) -> str | None:
+@typechecked
+def build_selected_app_context(selected_app_output_ids: Optional[List[str]]) -> Optional[str]:
     """Build a context block for dashboard App cards the user selected to edit.
 
     Resolves each Output id to its on-disk workspace so the agent edits the
@@ -216,7 +223,7 @@ def build_selected_app_context(selected_app_output_ids: list[str] | None) -> str
     from backend.apps.outputs.workspace_io import load_output
     from backend.config.paths import OUTPUTS_WORKSPACE_DIR
 
-    entries: list[str] = []
+    entries: List[str] = []
     for output_id in selected_app_output_ids:
         try:
             output = load_output(output_id)
@@ -262,7 +269,8 @@ def build_selected_app_context(selected_app_output_ids: list[str] | None) -> str
     )
 
 
-def build_selected_settings_context(selected_setting_ids: list[str] | None) -> str | None:
+@typechecked
+def build_selected_settings_context(selected_setting_ids: Optional[List[str]]) -> Optional[str]:
     """Context block when the user points the agent at specific Settings rows.
 
     A targeting aid, NOT a gate: the settings tools (SettingsRead/SettingsWrite)
@@ -284,7 +292,8 @@ def build_selected_settings_context(selected_setting_ids: list[str] | None) -> s
     )
 
 
-def build_mcp_registry_summary(allowed_tools: list[str], active_mcps: list[str], get_all_tool_names: Callable[[], list[str]]) -> str | None:
+@typechecked
+def build_mcp_registry_summary(allowed_tools: List[str], active_mcps: List[str], get_all_tool_names: Callable[[], List[str]]) -> Optional[str]:
     """Compact registry of installed MCP servers, one line per server.
 
     This is the visible surface that drives the activation gate: the model
@@ -306,15 +315,15 @@ def build_mcp_registry_summary(allowed_tools: list[str], active_mcps: list[str],
         return None
 
     active_set = set(active_mcps or [])
-    active_lines: list[str] = []
-    available_lines: list[str] = []
+    active_lines: List[str] = []
+    available_lines: List[str] = []
     for tool in mcp_tools:
         tool_ref = f"mcp:{tool.name}"
         if tool_ref not in allowed_tools and allowed_tools != get_all_tool_names():
             continue
         if is_fully_denied(tool):
             continue
-        server_name = _sanitize_server_name(tool.name)
+        server_name = sanitize_server_name(tool.name)
         desc = (getattr(tool, "description", None) or "").strip()
         if not desc:
             # Fall back to a generic blurb keyed on the tool name so the
@@ -411,26 +420,28 @@ AGENT_IDENTITY = (
 )
 
 
-def compose_system_prompt(default_prompt: str | None, mode_prompt: str | None, session_prompt: str | None, connected_tools_ctx: str | None = None, browser_ctx: str | None = None, mcp_registry_ctx: str | None = None) -> str | None:
+@typechecked
+def compose_system_prompt(default_prompt: Optional[str], mode_prompt: Optional[str], session_prompt: Optional[str], connected_tools_ctx: Optional[str] = None, browser_ctx: Optional[str] = None, mcp_registry_ctx: Optional[str] = None) -> Optional[str]:
     # Identity always leads so it overrides the preset's Claude Code persona, even
     # when the user has no custom default/mode/session prompt of their own.
     parts = [AGENT_IDENTITY] + [p for p in (default_prompt, mode_prompt, session_prompt, connected_tools_ctx, mcp_registry_ctx, browser_ctx) if p]
     return "\n\n".join(parts)
 
 
-def resolve_forced_tools(forced_tools: list[str] | None) -> str:
+@typechecked
+def resolve_forced_tools(forced_tools: Optional[List[str]]) -> str:
     """Build a context block describing explicitly requested tools."""
     if not forced_tools:
         return ""
     from backend.apps.tools_lib.models import BUILTIN_TOOLS
-    desc_map: dict[str, str] = {t.name: t.description for t in BUILTIN_TOOLS}
-    tool_to_server: dict[str, str] = {}
-    tool_to_email: dict[str, str] = {}
+    desc_map: Dict[str, str] = {t.name: t.description for t in BUILTIN_TOOLS}
+    tool_to_server: Dict[str, str] = {}
+    tool_to_email: Dict[str, str] = {}
     for t in load_all_tools():
         if not t.enabled or not t.tool_permissions:
             continue
         tool_descs = t.tool_permissions.get("_tool_descriptions", {})
-        server_name = _sanitize_server_name(t.name)
+        server_name = sanitize_server_name(t.name)
         for tn, td in tool_descs.items():
             desc_map[tn] = td
             tool_to_server[tn] = server_name
@@ -458,7 +469,8 @@ def resolve_forced_tools(forced_tools: list[str] | None) -> str:
     )
 
 
-def resolve_attached_skills(attached_skills: list | None) -> str:
+@typechecked
+def resolve_attached_skills(attached_skills: Optional[List]) -> str:
     """Build a context block injecting attached skill content into the prompt.
 
     For a multi-file (folder) skill we inject the SKILL.md body as text AND point
@@ -470,7 +482,7 @@ def resolve_attached_skills(attached_skills: list | None) -> str:
     send payload stays a simple {id, name, content}."""
     if not attached_skills:
         return ""
-    folder_by_id: dict[str, str] = {}
+    folder_by_id: Dict[str, str] = {}
     try:
         from backend.apps.skills.skills import _sync_skills
         for s in _sync_skills():
