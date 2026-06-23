@@ -26,3 +26,26 @@ class ThinkingState(BaseModel):
     thought_signature: Optional[str] = None
     # Background ticker handle; re-emits the pill every 1s so the elapsed counter keeps moving.
     ticker_task: Optional[InstanceOf[asyncio.Task]] = None
+
+
+class TurnState(BaseModel):
+    """Mutable per-turn streaming state: the live streaming-message ids, the accumulated
+    assistant text, and the running token/char/timing counters. Reset at each turn boundary.
+    (validate_assignment runs per SDK event, not per token, so the cost is negligible against
+    a multi-second turn.)"""
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    stream_text_msg_id: Optional[str] = None
+    stream_tool_msg_ids_ordered: List[str] = []
+    stream_block_index_map: Dict[int, str] = {}
+    stream_text_accum: str = ""
+    current_turn_emitted: bool = False
+    number: int = 0
+    first_event: bool = True
+    tool_count: int = 0
+    started_ts: Optional[float] = None
+    total_ms: int = 0
+    output_tokens: int = 0
+    assistant_text_chars: int = 0
+    tool_input_chars: int = 0

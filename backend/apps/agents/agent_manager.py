@@ -56,7 +56,7 @@ from backend.apps.agents.manager.session.apply_context_window import apply_conte
 from backend.apps.agents.manager.session import lifecycle
 from backend.apps.agents.manager.permissions import path_gate
 from backend.apps.agents.manager import context_budget
-from backend.apps.agents.manager.streaming.state import ThinkingState
+from backend.apps.agents.manager.streaming.state import ThinkingState, TurnState
 from backend.apps.agents.manager.session.workspace_git import _detect_git_identity, _ensure_cwd_git_repo
 from backend.apps.agents.manager.prompt.tool_catalog import (
     FULL_TOOLS,
@@ -1926,14 +1926,11 @@ class AgentManager:
                     "message": {"role": "user", "content": prompt_content},
                 }
 
-            stream_text_msg_id = None
-            stream_tool_msg_ids_ordered = []
-            stream_block_index_map = {}
+            turn = TurnState()
             # Mirror of the streamed assistant text. The SDK envelope that
             # normally commits a reply never lands when a turn is stopped
             # mid-stream, so without this the text the user just watched
             # appear would evaporate. Cleared the instant a block commits.
-            _stream_text_accum = ""
             # Per-turn aggregate trackers for the consolidated thinking
             # message. We accumulate across every AssistantMessage in the
             # turn (think → tool → think → tool → answer) and stream
@@ -1946,14 +1943,11 @@ class AgentManager:
             # addMessage dedupe replaces the bubble in place rather
             # than stacking N pills above the answer. Reset at the
             # next user turn (next prompt_stream iteration).
-            _turn_tool_count: int = 0
-            _turn_started_ts: float | None = None
             # Wall-clock turn duration (ms), covers thinking + tool
             # execution + assistant text. Updated continuously as the
             # turn unfolds. Used for the "Thought for Ns" segment so
             # the duration reflects the entire user-visible wait, not
             # just thinking-only time.
-            _turn_total_ms: int = 0
             # Total output tokens across every AssistantMessage in the
             # turn (thinking + visible text + tool-call JSON args). The
             # consolidated thinking pill's `tokens` segment uses this
@@ -1962,15 +1956,12 @@ class AgentManager:
             # turn" honestly. Populated from each AssistantMessage's
             # usage.output_tokens; fallback heuristic kicks in only
             # when usage is absent.
-            _turn_output_tokens: int = 0
             # Running char counts for the streaming portions of the
             # turn, used to grow the token estimate while assistant
             # text and tool-call JSON args are still streaming, BEFORE
             # the SDK has emitted a final usage.output_tokens count
             # for those blocks. Once the AssistantMessage lands with
-            # real usage data, _turn_output_tokens supersedes these.
-            _turn_assistant_text_chars: int = 0
-            _turn_tool_input_chars: int = 0
+            # real usage data, turn.output_tokens supersedes these.
             # Latest Gemini thoughtSignature captured from this turn's
             # ThinkingBlocks. We persist it on the consolidated thinking
             # Message so subsequent turns can re-attach it to the
@@ -1990,13 +1981,10 @@ class AgentManager:
             # ticking through gaps where no SDK events fire (tool
             # execution, slow text generation). Started at first
             # AssistantMessage of the turn, cancelled at ResultMessage.
-            _turn_number = 0
-            _first_event = True
             # True between the first non-ResultMessage of a turn and the
             # following ResultMessage; False at turn boundaries. The retry
             # layer below only retries at boundaries, resuming mid-turn via
             # sdk_session_id would risk duplicating user-visible output.
-            _current_turn_emitted = False
 
             # Silently absorb transient upstream capacity errors (429/500/503/
             # 529/overloaded/network blips) by waiting with exponential
@@ -2025,7 +2013,6 @@ class AgentManager:
                      show a pill even when 9Router can't surface a
                      token count.
                 """
-                nonlocal _turn_total_ms
                 upstream_reasoning_tokens: int | None = None
                 # Probe 9Router for the upstream reasoning-token count
                 # whenever (a) there's no in-process text, OR (b) the
@@ -2069,8 +2056,8 @@ class AgentManager:
                 # heuristic.
                 running_chars = (
                     len(joined_text)
-                    + _turn_assistant_text_chars
-                    + _turn_tool_input_chars
+                    + turn.assistant_text_chars
+                    + turn.tool_input_chars
                 )
                 heuristic_tokens = max(1, round(running_chars / 3.6)) if running_chars else 0
                 turn_tokens: int | None = None
@@ -2081,8 +2068,8 @@ class AgentManager:
                 #   3. chars/3.6 heuristic over running streams (live UI).
                 if upstream_reasoning_tokens and upstream_reasoning_tokens > 0:
                     turn_tokens = upstream_reasoning_tokens
-                elif _turn_output_tokens > 0 or heuristic_tokens > 0:
-                    turn_tokens = max(_turn_output_tokens, heuristic_tokens)
+                elif turn.output_tokens > 0 or heuristic_tokens > 0:
+                    turn_tokens = max(turn.output_tokens, heuristic_tokens)
                 else:
                     try:
                         from backend.apps.nine_router import (
@@ -2095,8 +2082,8 @@ class AgentManager:
                                 turn_tokens = rt
                     except Exception:
                         pass
-                if _turn_started_ts is not None:
-                    _turn_total_ms = int((time.time() - _turn_started_ts) * 1000)
+                if turn.started_ts is not None:
+                    turn.total_ms = int((time.time() - turn.started_ts) * 1000)
                     # Accumulate into session-level "agent active time" and
                     # the per-model breakdown so a session that spans
                     # multiple turns reports the total wall-clock time the
@@ -2105,9 +2092,9 @@ class AgentManager:
                     # current value is the right attribution for the work
                     # just produced).
                     try:
-                        session.agent_active_ms = int(getattr(session, "agent_active_ms", 0) or 0) + _turn_total_ms
+                        session.agent_active_ms = int(getattr(session, "agent_active_ms", 0) or 0) + turn.total_ms
                         m = session.model or "unknown"
-                        session.time_per_model[m] = int(session.time_per_model.get(m, 0)) + _turn_total_ms
+                        session.time_per_model[m] = int(session.time_per_model.get(m, 0)) + turn.total_ms
                     except Exception:
                         pass
                 if thinking.msg_id is None:
@@ -2187,10 +2174,10 @@ class AgentManager:
                     role="thinking",
                     content=joined_text,
                     branch_id=session.active_branch_id,
-                    elapsed_ms=_turn_total_ms or None,
+                    elapsed_ms=turn.total_ms or None,
                     tokens=turn_tokens,
                     input_tokens=_turn_total_tokens,
-                    tool_count=_turn_tool_count or None,
+                    tool_count=turn.tool_count or None,
                 )
                 existing_idx = next(
                     (i for i, m in enumerate(session.messages)
@@ -2223,33 +2210,27 @@ class AgentManager:
                     pass
 
             async def _run_streaming_turn():
-                nonlocal stream_text_msg_id, stream_tool_msg_ids_ordered, stream_block_index_map
-                nonlocal _stream_text_accum
-                nonlocal _turn_number, _first_event, _current_turn_emitted
                 # Per-turn thinking aggregation trackers (added for the
                 # "Thought for Ns · M tokens" persisted label). Without
                 # nonlocal, the int reassignments at AssistantMessage emission
                 # below shadow them as locals and the dict access at
                 # content_block_start crashes with UnboundLocalError.
-                nonlocal _turn_tool_count, _turn_started_ts, _turn_total_ms
-                nonlocal _turn_output_tokens
-                nonlocal _turn_assistant_text_chars, _turn_tool_input_chars
                 async for message in query(
                     prompt=prompt_stream(),
                     options=options,
                 ):
                     if isinstance(message, ResultMessage):
-                        _current_turn_emitted = False
+                        turn.current_turn_emitted = False
                     else:
-                        _current_turn_emitted = True
+                        turn.current_turn_emitted = True
                         # Stamp the turn's wall-clock start at the FIRST
                         # non-Result message we see, this is when the
                         # user actually started waiting. We use the same
                         # timestamp as the basis for "Thought for Ns"
                         # so the duration covers thinking + tool exec
                         # + assistant text generation.
-                        if _turn_started_ts is None:
-                            _turn_started_ts = time.time()
+                        if turn.started_ts is None:
+                            turn.started_ts = time.time()
                             # Snapshot cumulative tokens at turn start;
                             # subtracted at emit time for per-turn deltas.
                             try:
@@ -2292,9 +2273,9 @@ class AgentManager:
                             except Exception:
                                 logger.exception("pre-emit thinking pill failed; continuing")
 
-                    if _first_event:
+                    if turn.first_event:
                         logger.info(f"[MCP-DEBUG] First event received: {type(message).__name__}")
-                        _first_event = False
+                        turn.first_event = False
 
                     # Log system messages (MCP server status, errors, etc.)
                     if isinstance(message, SystemMessage):
@@ -2318,14 +2299,14 @@ class AgentManager:
                             block_type = block.get("type")
 
                             if block_type == "text":
-                                if stream_text_msg_id is None:
-                                    stream_text_msg_id = uuid4().hex
+                                if turn.stream_text_msg_id is None:
+                                    turn.stream_text_msg_id = uuid4().hex
                                     await ws_manager.send_to_session(session_id, "agent:stream_start", {
                                         "session_id": session_id,
-                                        "message_id": stream_text_msg_id,
+                                        "message_id": turn.stream_text_msg_id,
                                         "role": "assistant",
                                     })
-                                stream_block_index_map[index] = stream_text_msg_id
+                                turn.stream_block_index_map[index] = turn.stream_text_msg_id
 
                             elif block_type == "thinking":
                                 # Reasoning trace from thinking-capable models
@@ -2336,7 +2317,7 @@ class AgentManager:
                                 # frontend already handles role="thinking" for
                                 # the DynamicIsland/agent card rendering.
                                 thinking_msg_id = uuid4().hex
-                                stream_block_index_map[index] = thinking_msg_id
+                                turn.stream_block_index_map[index] = thinking_msg_id
                                 # Server-stamp start so we can accumulate
                                 # per-turn elapsed_ms across multiple
                                 # thinking blocks (think → tool → think
@@ -2350,12 +2331,12 @@ class AgentManager:
 
                             elif block_type == "tool_use":
                                 tool_msg_id = uuid4().hex
-                                stream_tool_msg_ids_ordered.append(tool_msg_id)
-                                stream_block_index_map[index] = tool_msg_id
+                                turn.stream_tool_msg_ids_ordered.append(tool_msg_id)
+                                turn.stream_block_index_map[index] = tool_msg_id
                                 # Stream-level tool count for the
                                 # consolidated thinking pill. The
                                 # AssistantMessage path (further down)
-                                # ALSO increments _turn_tool_count when
+                                # ALSO increments turn.tool_count when
                                 # ToolUseBlocks fully arrive, but for
                                 # OpenAI/Gemini through 9Router the
                                 # AssistantMessage envelope is sometimes
@@ -2367,7 +2348,7 @@ class AgentManager:
                                 # this code path already fired, see
                                 # the dedupe at the AssistantMessage
                                 # block below.
-                                _turn_tool_count += 1
+                                turn.tool_count += 1
                                 await ws_manager.send_to_session(session_id, "agent:stream_start", {
                                     "session_id": session_id,
                                     "message_id": tool_msg_id,
@@ -2379,15 +2360,15 @@ class AgentManager:
                             index = event.get("index")
                             delta = event.get("delta", {})
                             delta_type = delta.get("type")
-                            msg_id = stream_block_index_map.get(index)
+                            msg_id = turn.stream_block_index_map.get(index)
 
                             if msg_id and delta_type == "text_delta":
                                 _text_chunk = delta.get("text", "")
-                                _turn_assistant_text_chars += len(_text_chunk)
-                                _stream_text_accum += _text_chunk
+                                turn.assistant_text_chars += len(_text_chunk)
+                                turn.stream_text_accum += _text_chunk
                                 self._live_partial[session_id] = {
-                                    "msg_id": stream_text_msg_id,
-                                    "text": _stream_text_accum,
+                                    "msg_id": turn.stream_text_msg_id,
+                                    "text": turn.stream_text_accum,
                                     "branch_id": session.active_branch_id,
                                 }
                                 await ws_manager.send_to_session(session_id, "agent:stream_delta", {
@@ -2407,7 +2388,7 @@ class AgentManager:
                                 })
                             elif msg_id and delta_type == "input_json_delta":
                                 _json_chunk = delta.get("partial_json", "")
-                                _turn_tool_input_chars += len(_json_chunk)
+                                turn.tool_input_chars += len(_json_chunk)
                                 await ws_manager.send_to_session(session_id, "agent:stream_delta", {
                                     "session_id": session_id,
                                     "message_id": msg_id,
@@ -2416,7 +2397,7 @@ class AgentManager:
 
                         elif event_type == "content_block_stop":
                             index = event.get("index")
-                            msg_id = stream_block_index_map.get(index)
+                            msg_id = turn.stream_block_index_map.get(index)
                             # If this was a thinking block, accumulate
                             # elapsed_ms server-side. We don't include
                             # per-block elapsed/tokens on the WS event
@@ -2427,17 +2408,17 @@ class AgentManager:
                                 thinking.total_ms += int(
                                     (time.time() - thinking.block_starts.pop(index)) * 1000
                                 )
-                            if msg_id and msg_id != stream_text_msg_id:
+                            if msg_id and msg_id != turn.stream_text_msg_id:
                                 await ws_manager.send_to_session(session_id, "agent:stream_end", {
                                     "session_id": session_id,
                                     "message_id": msg_id,
                                 })
 
                         elif event_type == "message_stop":
-                            if stream_text_msg_id:
+                            if turn.stream_text_msg_id:
                                 await ws_manager.send_to_session(session_id, "agent:stream_end", {
                                     "session_id": session_id,
-                                    "message_id": stream_text_msg_id,
+                                    "message_id": turn.stream_text_msg_id,
                                 })
 
                     elif isinstance(message, AssistantMessage):
@@ -2519,7 +2500,7 @@ class AgentManager:
                             if isinstance(_msg_usage, dict):
                                 _ot = int(_msg_usage.get("output_tokens", 0) or 0)
                                 if _ot > 0:
-                                    _turn_output_tokens += _ot
+                                    turn.output_tokens += _ot
                         except Exception:
                             pass
 
@@ -2590,13 +2571,13 @@ class AgentManager:
                                 })
                             else:
                                 asst_msg = Message(
-                                    id=stream_text_msg_id or uuid4().hex,
+                                    id=turn.stream_text_msg_id or uuid4().hex,
                                     role="assistant",
                                     content=_asst_text,
                                     branch_id=session.active_branch_id,
                                 )
                                 self._upsert_message(session, asst_msg)
-                                _stream_text_accum = ""
+                                turn.stream_text_accum = ""
                                 self._live_partial.pop(session_id, None)
                                 await ws_manager.send_to_session(session_id, "agent:message", {
                                     "session_id": session_id,
@@ -2604,7 +2585,7 @@ class AgentManager:
                                 })
 
                         for i, tu in enumerate(tool_uses):
-                            msg_id = stream_tool_msg_ids_ordered[i] if i < len(stream_tool_msg_ids_ordered) else uuid4().hex
+                            msg_id = turn.stream_tool_msg_ids_ordered[i] if i < len(turn.stream_tool_msg_ids_ordered) else uuid4().hex
                             tool_msg = Message(id=msg_id, role="tool_call", content=tu, branch_id=session.active_branch_id)
                             self._upsert_message(session, tool_msg)
                             await ws_manager.send_to_session(session_id, "agent:message", {
@@ -2612,11 +2593,11 @@ class AgentManager:
                                 "message": tool_msg.model_dump(mode="json"),
                             })
 
-                        _turn_number += 1
+                        turn.number += 1
 
-                        stream_text_msg_id = None
-                        stream_tool_msg_ids_ordered = []
-                        stream_block_index_map = {}
+                        turn.stream_text_msg_id = None
+                        turn.stream_tool_msg_ids_ordered = []
+                        turn.stream_block_index_map = {}
 
                     elif isinstance(message, ResultMessage):
                         # ResultMessage carries the AUTHORITATIVE per-turn
@@ -2636,8 +2617,8 @@ class AgentManager:
                                 # AssistantMessages already summed to a
                                 # larger number we trust that; otherwise
                                 # ResultMessage's count fills the gap.
-                                if _result_out > _turn_output_tokens:
-                                    _turn_output_tokens = _result_out
+                                if _result_out > turn.output_tokens:
+                                    turn.output_tokens = _result_out
                         except Exception:
                             pass
 
@@ -2702,12 +2683,12 @@ class AgentManager:
                         thinking.ticker_task = None
                         thinking.msg_id = None
                         thinking.text_parts = []
-                        _turn_tool_count = 0
-                        _turn_started_ts = None
-                        _turn_total_ms = 0
-                        _turn_output_tokens = 0
-                        _turn_assistant_text_chars = 0
-                        _turn_tool_input_chars = 0
+                        turn.tool_count = 0
+                        turn.started_ts = None
+                        turn.total_ms = 0
+                        turn.output_tokens = 0
+                        turn.assistant_text_chars = 0
+                        turn.tool_input_chars = 0
                         thinking.thought_signature = None
                         _turn_baseline_session_in = 0
                         _turn_baseline_session_out = 0
@@ -2850,7 +2831,7 @@ class AgentManager:
                     wait = capacity_retry_wait(e, capacity_retry_attempt, extra_text=stderr_snapshot)
                     if wait is not None:
                         capacity_retry_attempt += 1
-                        mid_stream = _current_turn_emitted
+                        mid_stream = turn.current_turn_emitted
                         logger.warning(
                             f"Transient upstream error on session {session_id} "
                             f"(attempt {capacity_retry_attempt}/{len(CAPACITY_BACKOFFS)}, "
@@ -2865,22 +2846,22 @@ class AgentManager:
                         # text / tool call we emitted is now orphaned, cap
                         # it with stream_end and start the fresh turn under a
                         # new message id.
-                        if stream_text_msg_id:
+                        if turn.stream_text_msg_id:
                             await ws_manager.send_to_session(session_id, "agent:stream_end", {
                                 "session_id": session_id,
-                                "message_id": stream_text_msg_id,
+                                "message_id": turn.stream_text_msg_id,
                             })
-                            stream_text_msg_id = None
-                        _stream_text_accum = ""
+                            turn.stream_text_msg_id = None
+                        turn.stream_text_accum = ""
                         self._live_partial.pop(session_id, None)
-                        for _tool_msg_id in stream_tool_msg_ids_ordered:
+                        for _tool_msg_id in turn.stream_tool_msg_ids_ordered:
                             await ws_manager.send_to_session(session_id, "agent:stream_end", {
                                 "session_id": session_id,
                                 "message_id": _tool_msg_id,
                             })
-                        stream_tool_msg_ids_ordered = []
-                        stream_block_index_map = {}
-                        _current_turn_emitted = False
+                        turn.stream_tool_msg_ids_ordered = []
+                        turn.stream_block_index_map = {}
+                        turn.current_turn_emitted = False
                         await asyncio.sleep(wait)
                         _stderr_buffer.clear()
                         if session.sdk_session_id:
@@ -2930,8 +2911,8 @@ class AgentManager:
                 # Persist whatever streamed before the cancel (edit / branch
                 # switch paths; the user-stop path already did this in stop_agent).
                 await self._commit_partial_now(session)
-            stream_text_msg_id = None
-            _stream_text_accum = ""
+            turn.stream_text_msg_id = None
+            turn.stream_text_accum = ""
         except Exception as e:
             logger.exception(f"Agent {session_id} error: {e}")
             session.status = "error"
@@ -2949,18 +2930,18 @@ class AgentManager:
             # turn, the user got their answer; the error fired on a
             # subsequent step (title gen, follow-up tool turn, etc.).
             # Don't blast a "context exceeded" card over a completed reply.
-            _streamed_substantive = bool(stream_text_msg_id) and _current_turn_emitted
+            _streamed_substantive = bool(turn.stream_text_msg_id) and turn.current_turn_emitted
             if _streamed_substantive and _is_long_context_error(e, extra_text=_stderr_tail):
                 # Mark the session completed (not error), keep the assistant
                 # reply visible, and skip the overflow card. The next user
                 # turn will properly hit the pre-send guard if the chat is
                 # still over cap.
                 session.status = "completed"
-                if stream_text_msg_id:
+                if turn.stream_text_msg_id:
                     try:
                         await ws_manager.send_to_session(session_id, "agent:stream_end", {
                             "session_id": session_id,
-                            "message_id": stream_text_msg_id,
+                            "message_id": turn.stream_text_msg_id,
                         })
                     except Exception:
                         pass
@@ -3016,11 +2997,11 @@ class AgentManager:
                 # card; emit a transient signal for the muted pill and mark the
                 # turn completed so it doesn't read as an error.
                 session.status = "completed"
-                if stream_text_msg_id:
+                if turn.stream_text_msg_id:
                     try:
                         await ws_manager.send_to_session(session_id, "agent:stream_end", {
                             "session_id": session_id,
-                            "message_id": stream_text_msg_id,
+                            "message_id": turn.stream_text_msg_id,
                         })
                     except Exception:
                         pass
