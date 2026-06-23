@@ -50,6 +50,7 @@ from backend.apps.agents.manager.permissions.effective_tools import build_effect
 from backend.apps.agents.manager.builtin_mcp_servers import register_builtin_mcp_servers
 from backend.apps.agents.manager.provider_env import configure_provider_env
 from backend.apps.agents.manager.session.SessionLifecycleMixin import SessionLifecycleMixin
+from backend.apps.agents.manager.session.SessionPersistenceMixin import SessionPersistenceMixin
 from backend.apps.agents.manager.MessagingMixin import MessagingMixin
 from backend.apps.agents.manager.SessionControlMixin import SessionControlMixin
 from backend.apps.agents.manager.AgentLaunchMixin import AgentLaunchMixin
@@ -72,7 +73,7 @@ logger = logging.getLogger(__name__)
 os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "3600000")
 
 
-class AgentManager(SessionLifecycleMixin, MessagingMixin, SessionControlMixin, AgentLaunchMixin, MockAgentMixin, RunSupportMixin):
+class AgentManager(SessionLifecycleMixin, SessionPersistenceMixin, MessagingMixin, SessionControlMixin, AgentLaunchMixin, MockAgentMixin, RunSupportMixin):
     @typechecked
     def __init__(self):
         self.sessions: Dict[str, AgentSession] = {}
