@@ -531,7 +531,7 @@ class AgentManager(SessionLifecycleMixin, MessagingMixin, AgentLaunchMixin, RunS
             # transient capacity issues.
             p_stderr_buffer: list[str] = []
 
-            def _stderr_cb(line: str) -> None:
+            def p_stderr_cb(line: str) -> None:
                 p_stderr_buffer.append(line)
                 # Cap the buffer so a runaway subprocess can't balloon RAM.
                 if len(p_stderr_buffer) > 500:
@@ -551,7 +551,7 @@ class AgentManager(SessionLifecycleMixin, MessagingMixin, AgentLaunchMixin, RunS
                 "max_buffer_size": 64 * 1024 * 1024,
                 "permission_mode": "default",
                 "can_use_tool": can_use_tool,
-                "stderr": _stderr_cb,
+                "stderr": p_stderr_cb,
                 "hooks": {
                     "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_hook])],
                     "PostToolUse": [HookMatcher(matcher=None, hooks=[post_tool_hook])],
@@ -1086,7 +1086,7 @@ class AgentManager(SessionLifecycleMixin, MessagingMixin, AgentLaunchMixin, RunS
             # (auth, plan limit, invalid args) fall through to the existing
             # error handler unchanged.
 
-            async def _run_streaming_turn():
+            async def p_run_streaming_turn():
                 # Per-turn thinking aggregation trackers (added for the
                 # "Thought for Ns · M tokens" persisted label). Without
                 # nonlocal, the int reassignments at AssistantMessage emission
@@ -1177,7 +1177,7 @@ class AgentManager(SessionLifecycleMixin, MessagingMixin, AgentLaunchMixin, RunS
             capacity_retry_attempt = 0
             while True:
                 try:
-                    await _run_streaming_turn()
+                    await p_run_streaming_turn()
                     break
                 except Exception as e:
                     # Make sure the consolidated-thinking ticker doesn't
@@ -1341,7 +1341,7 @@ class AgentManager(SessionLifecycleMixin, MessagingMixin, AgentLaunchMixin, RunS
                     from backend.apps.service.client import submit_diagnostic
                     submit_diagnostic({
                         "kind": "context_overflow",
-                        "where": "agent_manager._run_streaming_turn",
+                        "where": "agent_manager.p_run_streaming_turn",
                         "session_id": session_id,
                         "model": session.model,
                         "provider": session.provider,
