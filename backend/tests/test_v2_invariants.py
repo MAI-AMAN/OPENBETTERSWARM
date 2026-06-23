@@ -1286,20 +1286,20 @@ def test_get_context_window_unknown_returns_default():
 
 def test_apply_context_window_overwrites_default_for_opus_4_7():
     """Regression for issue #39: AgentSession used to stick at the 200k
-    dataclass default for every model. _apply_context_window must pull
+    dataclass default for every model. apply_context_window must pull
     the real 1M value from the registry for opus-4-7 / sonnet so the
     soft-cap trim and the % meter both reflect the real model cap."""
     from backend.apps.agents.core.models import AgentSession
-    from backend.apps.agents.agent_manager import _apply_context_window
+    from backend.apps.agents.manager.session.apply_context_window import apply_context_window
     s = AgentSession(id="x", name="t", model="opus-4-7", mode="agent")
     assert s.context_window == 200_000
-    _apply_context_window(s)
+    apply_context_window(s)
     assert s.context_window == 1_000_000
     s2 = AgentSession(id="y", name="t", model="sonnet", mode="agent")
-    _apply_context_window(s2)
+    apply_context_window(s2)
     assert s2.context_window == 1_000_000
     s3 = AgentSession(id="z", name="t", model="haiku", mode="agent")
-    _apply_context_window(s3)
+    apply_context_window(s3)
     assert s3.context_window == 200_000
 
 
@@ -1308,9 +1308,9 @@ def test_apply_context_window_silent_on_unknown_model():
     that aren't in the registry fall back to the 128k registry default
     without breaking session creation."""
     from backend.apps.agents.core.models import AgentSession
-    from backend.apps.agents.agent_manager import _apply_context_window
+    from backend.apps.agents.manager.session.apply_context_window import apply_context_window
     s = AgentSession(id="x", name="t", model="nonexistent-model-xyz", mode="agent")
-    _apply_context_window(s)
+    apply_context_window(s)
     assert s.context_window > 0
 
 
@@ -2274,10 +2274,10 @@ def test_resolve_attachments_anthropic_does_mark_ephemeral_but_only_anthropic():
 
 def test_apply_context_window_respects_custom_provider_value():
     """Custom OpenAI-compatible models supply their own context_window
-    via settings.custom_providers. _apply_context_window must look them
+    via settings.custom_providers. apply_context_window must look them
     up the same way get_context_window does."""
     from backend.apps.agents.core.models import AgentSession
-    from backend.apps.agents.agent_manager import _apply_context_window
+    from backend.apps.agents.manager.session.apply_context_window import apply_context_window
     from backend.apps.settings.models import AppSettings, CustomProvider
     s = AgentSession(id="x", name="t", provider="custom", model="custom/ollama/qwen2.5:7b", mode="agent")
     settings = AppSettings(custom_providers=[
@@ -2288,7 +2288,7 @@ def test_apply_context_window_respects_custom_provider_value():
             models=[{"value": "qwen2.5:7b", "label": "Qwen 2.5 7B", "context_window": 32_000}],
         ),
     ])
-    _apply_context_window(s, settings)
+    apply_context_window(s, settings)
     assert s.context_window == 32_000
 
 

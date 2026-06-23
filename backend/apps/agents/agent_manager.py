@@ -50,6 +50,7 @@ from backend.apps.agents.manager.session.session_store import (
 from backend.apps.agents.manager.session.cloud_sync import _sync_session_close
 from backend.apps.agents.manager import browser_dispatch
 from backend.apps.agents.manager import metadata
+from backend.apps.agents.manager.session.apply_context_window import apply_context_window
 from backend.apps.agents.manager.session.workspace_git import _detect_git_identity, _ensure_cwd_git_repo
 from backend.apps.agents.manager.prompt.tool_catalog import (
     FULL_TOOLS,
@@ -92,33 +93,6 @@ os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "3600000")
 p_VIEW_BUILDER_RENDER_MAX_RETRIES = 2
 p_view_builder_render_retry_counts: dict[str, int] = {}
 p_view_builder_dirty_sessions: set[str] = set()
-
-
-def _apply_context_window(session, settings=None) -> None:
-    """Set session.context_window from the registry for its (provider, model).
-
-    Called at every AgentSession creation, restore, and model-switch site so
-    the soft-cap trim, auto-compaction, and the UI percent meter line up
-    with the model's real cap (Opus/Sonnet 1M, Haiku 200k, custom values
-    declared per-provider). Silent fallback to the existing value keeps a
-    bad lookup from ever breaking a session.
-    """
-    try:
-        from backend.apps.agents.providers.registry import get_context_window
-        if settings is None:
-            try:
-                settings = load_settings()
-            except Exception:
-                settings = None
-        cw = get_context_window(
-            getattr(session, "provider", "") or "",
-            getattr(session, "model", "") or "",
-            settings,
-        )
-        if isinstance(cw, int) and cw > 0:
-            session.context_window = cw
-    except Exception:
-        logger.debug("context_window lookup failed; keeping existing value", exc_info=True)
 
 
 def get_all_tool_names() -> list[str]:
@@ -357,7 +331,7 @@ class AgentManager:
             dashboard_id=config.dashboard_id,
             thinking_level=getattr(global_settings, "default_thinking_level", "auto"),
         )
-        _apply_context_window(session, global_settings)
+        apply_context_window(session, global_settings)
         self.sessions[session_id] = session
 
         from backend.apps.service.version import APP_VERSION
@@ -1164,7 +1138,7 @@ class AgentManager:
                     # than relying on the field's default_factory.
                     active_mcps=[],
                 )
-                _apply_context_window(sub_session)
+                apply_context_window(sub_session)
                 self.sessions[sub_session_id] = sub_session
                 await ws_manager.broadcast_global("agent:status", {
                     "session_id": sub_session_id,
@@ -3082,7 +3056,7 @@ class AgentManager:
                             # denominator is the session's real model cap,
                             # populated from registry.get_context_window at
                             # session creation, restore, and model-switch
-                            # (see _apply_context_window). max(1, ...) is a
+                            # (see apply_context_window). max(1, ...) is a
                             # belt-and-braces guard against zero/None drift
                             # from any future restore-from-disk corner case.
                             _ctx_window = max(1, getattr(session, "context_window", 0) or 200_000)
@@ -3654,7 +3628,7 @@ class AgentManager:
             data = _load_session_data(session_id)
             if data:
                 session = AgentSession(**data)
-                _apply_context_window(session)
+                apply_context_window(session)
                 session.closed_at = None
                 self.sessions[session_id] = session
             else:
@@ -3680,7 +3654,7 @@ class AgentManager:
                 logger.info(f"[MCP-DEBUG] Forking session: api_type changed {session.model}→{model}")
 
             session.model = model
-            _apply_context_window(session)
+            apply_context_window(session)
             session_changed = True
         if mode and mode != session.mode:
             session.mode = mode
@@ -4166,7 +4140,7 @@ class AgentManager:
             raise ValueError(f"Session {session_id} not found in history")
 
         session = AgentSession(**data)
-        _apply_context_window(session)
+        apply_context_window(session)
 
         hours_since_closed = 0
         if data.get("closed_at"):
@@ -4290,7 +4264,7 @@ class AgentManager:
             if session.status in ("running", "waiting_approval"):
                 session.status = "stopped"
             session.pending_approvals = []
-            _apply_context_window(session)
+            apply_context_window(session)
             self.sessions[session.id] = session
             _delete_session_file(sid)
             logger.info(f"Restored session {session.id}")
@@ -4303,7 +4277,7 @@ class AgentManager:
             if data is None:
                 raise ValueError(f"Session {session_id} not found")
             source = AgentSession(**data)
-            _apply_context_window(source)
+            apply_context_window(source)
 
         source_messages = list(source.messages)
         if up_to_message_id:
@@ -4360,7 +4334,7 @@ class AgentManager:
             sdk_session_id=source.sdk_session_id,
             needs_fork=True,
         )
-        _apply_context_window(new_session)
+        apply_context_window(new_session)
 
         self.sessions[new_session.id] = new_session
 
@@ -4386,7 +4360,7 @@ class AgentManager:
             if data is None:
                 raise ValueError(f"Session {source_session_id} not found")
             source = AgentSession(**data)
-            _apply_context_window(source)
+            apply_context_window(source)
 
         source_name = source.name
 
@@ -4446,7 +4420,7 @@ class AgentManager:
             dashboard_id=dashboard_id or source.dashboard_id,
             parent_session_id=parent_session_id,
         )
-        _apply_context_window(fork)
+        apply_context_window(fork)
 
         self.sessions[fork.id] = fork
 
@@ -4512,7 +4486,7 @@ class AgentManager:
             except Exception:
                 logger.warning(f"get_all_sessions: skipping unloadable session {sid}", exc_info=True)
                 continue
-            _apply_context_window(sess)
+            apply_context_window(sess)
             self.sessions[sid] = sess
             result.append(sess)
         return result

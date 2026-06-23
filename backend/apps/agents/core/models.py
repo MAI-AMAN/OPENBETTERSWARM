@@ -139,7 +139,7 @@ class AgentSession(BaseModel):
     compacted_through_msg_id: Optional[str] = None
     # Hard pre-send guard at 0.90; past compaction we LRU-trim active_mcps, then surface the overflow card.
     context_soft_cap_pct: float = 0.90
-    # Conservative default. Always overwritten at session creation, restore, and model-switch via _apply_context_window in agent_manager so the real model cap is used instead. Don't bump this without re-checking the trim/guard logic.
+    # Conservative default. Always overwritten at session creation, restore, and model-switch via apply_context_window in agent_manager so the real model cap is used instead. Don't bump this without re-checking the trim/guard logic.
     context_window: int = 200_000
     # Provider-agnostic thinking level (off/low/medium/high/auto), translated per-API in agent_manager; only affects reasoning-flagged models.
     thinking_level: Literal["off", "low", "medium", "high", "auto"] = "auto"
