@@ -53,6 +53,44 @@ def _assistant(blocks, **kw):
     return AssistantMessage(**base)
 
 
+def test_loop_wires_all_four_hooks_to_a_live_hook_context(monkeypatch):
+    # Integration coverage the unit tests can't give: capture the ClaudeAgentOptions the real
+    # loop hands to query(), then invoke the WIRED hooks. This proves _run_agent_loop builds a
+    # HookContext (all required fields, incl. the live `sessions` registry) and the four thin
+    # wrappers delegate to the extracted hook modules. The SDK never fires these under a mocked
+    # query, so without this the wiring (not just the functions) would be untested.
+    captured = {}
+
+    async def capturing_query(*args, **kwargs):
+        captured["options"] = kwargs.get("options")
+        yield _assistant([TextBlock(text="ok")])
+        yield _result()
+
+    async def fake_send(session_id, event, data):
+        pass
+
+    monkeypatch.setattr(ws_mod.ws_manager, "send_to_session", fake_send, raising=True)
+    monkeypatch.setattr(claude_agent_sdk, "query", capturing_query, raising=True)
+
+    mgr = AgentManager()
+    from backend.apps.agents.core.models import AgentSession
+    session = AgentSession(name="t", model="sonnet", dashboard_id="d")
+    mgr.sessions[session.id] = session
+    asyncio.run(mgr._run_agent_loop(session.id, "hi"))
+
+    options = captured["options"]
+    assert options is not None
+    assert callable(options.can_use_tool)
+    pre = options.hooks["PreToolUse"][0].hooks
+    post = options.hooks["PostToolUse"][0].hooks
+    stop = options.hooks["Stop"][0].hooks
+    assert pre and post and stop
+
+    # Invoke the wired Stop hook: a non-view-builder session short-circuits to {} by reading
+    # ctx.session.mode, so this drives the full wrapper -> hook_ctx -> stop_hook module path.
+    assert asyncio.run(stop[0]({}, None, None)) == {}
+
+
 def test_streamed_text_lands_as_assistant_message(monkeypatch):
     session, events = _drive(monkeypatch, [
         _assistant([TextBlock(text="Hello there")]),
