@@ -53,6 +53,7 @@ from backend.apps.agents.manager.session.SessionLifecycleMixin import SessionLif
 from backend.apps.agents.manager.MessagingMixin import MessagingMixin
 from backend.apps.agents.manager.SessionControlMixin import SessionControlMixin
 from backend.apps.agents.manager.AgentLaunchMixin import AgentLaunchMixin
+from backend.apps.agents.manager.MockAgentMixin import MockAgentMixin
 from backend.apps.agents.manager.RunSupportMixin import RunSupportMixin
 from backend.apps.agents.manager.permissions import gate_hooks
 from backend.apps.agents.manager.session.workspace_git import ensure_cwd_git_repo
@@ -71,7 +72,7 @@ logger = logging.getLogger(__name__)
 os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "3600000")
 
 
-class AgentManager(SessionLifecycleMixin, MessagingMixin, SessionControlMixin, AgentLaunchMixin, RunSupportMixin):
+class AgentManager(SessionLifecycleMixin, MessagingMixin, SessionControlMixin, AgentLaunchMixin, MockAgentMixin, RunSupportMixin):
     @typechecked
     def __init__(self):
         self.sessions: Dict[str, AgentSession] = {}
