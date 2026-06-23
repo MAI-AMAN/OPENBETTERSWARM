@@ -9,7 +9,7 @@ import backend.apps.agents.browser.browser_agent as browser_agent_mod
 from backend.apps.agents.core.models import AgentSession
 
 
-def _patch_io(monkeypatch, dispatch_result, *, has_dashboard=True):
+def p_patch_io(monkeypatch, dispatch_result, *, has_dashboard=True):
     sent = []
     saved = []
 
@@ -26,13 +26,13 @@ def _patch_io(monkeypatch, dispatch_result, *, has_dashboard=True):
 
     monkeypatch.setattr(bd.ws_manager, "send_to_session", fake_send, raising=True)
     monkeypatch.setattr(bd.ws_manager, "global_connections", [object()] if has_dashboard else [], raising=False)
-    monkeypatch.setattr(bd, "_save_session", fake_save, raising=True)
+    monkeypatch.setattr(bd, "save_session", fake_save, raising=True)
     monkeypatch.setattr(browser_agent_mod, "run_browser_agents", fake_run, raising=True)
     return sent, saved, fake_run
 
 
 def test_fast_path_success_replies_with_the_browser_summary(monkeypatch):
-    sent, saved, fake_run = _patch_io(
+    sent, saved, fake_run = p_patch_io(
         monkeypatch, {"summary": "Booked the flight to NYC", "done": True, "action_log": []}
     )
     session = AgentSession(name="t", model="sonnet", dashboard_id="dash-1")
@@ -54,7 +54,7 @@ def test_fast_path_success_replies_with_the_browser_summary(monkeypatch):
 
 
 def test_fast_path_no_dashboard_returns_friendly_reply(monkeypatch):
-    _patch_io(
+    p_patch_io(
         monkeypatch, {"summary": "", "done": False, "action_log": []}, has_dashboard=False,
     )
     session = AgentSession(name="t", model="sonnet", dashboard_id="dash-1")

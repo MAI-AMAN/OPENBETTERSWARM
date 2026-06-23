@@ -5,21 +5,25 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from typing import Dict, List, Optional
 from uuid import uuid4
+
+from typeguard import typechecked
 
 from backend.apps.agents.core.models import AgentSession, Message
 from backend.apps.agents.core.ws_manager import ws_manager
-from backend.apps.agents.manager.session.session_store import _save_session
+from backend.apps.agents.manager.session.session_store import _save_session as save_session
 from backend.apps.settings.settings import load_settings
 
 logger = logging.getLogger(__name__)
 
 
+@typechecked
 async def run_browser_fast_path(
     session: AgentSession,
     session_id: str,
     prompt: str,
-    selected_browser_ids: list[str] | None,
+    selected_browser_ids: Optional[List[str]],
     brief: str = "",
     verdict: str = "act",
 ) -> None:
@@ -29,8 +33,8 @@ async def run_browser_fast_path(
     leg. A failed browser dispatch gets ONE informed recovery dispatch (the
     orchestrator's old retry role). stop_agent still works: it cancels this
     task and the children."""
-    _fp_t0 = time.monotonic()
-    _fp_path = verdict
+    p_fp_t0 = time.monotonic()
+    p_fp_path = verdict
     logger.info(f"[browser-fast-path] direct dispatch for session {session_id} ({verdict})")
     text = ""
     # The fast-path skips the orchestrator, so the UI never gets the BrowserAgent
@@ -38,8 +42,8 @@ async def run_browser_fast_path(
     # tool_result pair (same shape + mcp__ name the orchestrator uses) so the bubble
     # shows here too. None until we actually dispatch a browser (a pure READ answer
     # has no browser, so no bubble).
-    _BROWSER_TOOL = "mcp__openswarm-browser-agent__CreateBrowserAgent"
-    _bubble_tid = None
+    p_browser_tool = "mcp__openswarm-browser-agent__CreateBrowserAgent"
+    p_bubble_tid: Optional[str] = None
     try:
         from backend.apps.agents.browser.browser_agent import run_browser_agents
         from backend.apps.agents.browser import browser_fast_path
@@ -52,16 +56,17 @@ async def run_browser_fast_path(
                 prompt, brief, load_settings(), get_api_type(session.model),
             ) or ""
             if not text:
-                _fp_path = "read->browser"
+                p_fp_path = "read->browser"
 
-        _entry = browser_fast_path.entry_url_from_brief(brief)
-        if _entry:
-            logger.info(f"[browser-cold] brief entry url for {session_id}: {_entry}")
+        p_entry = browser_fast_path.entry_url_from_brief(brief)
+        if p_entry:
+            logger.info(f"[browser-cold] brief entry url for {session_id}: {p_entry}")
 
-        async def _dispatch(task_text: str) -> dict:
+        @typechecked
+        async def p_dispatch(task_text: str) -> Dict[str, object]:
             results = await run_browser_agents(
                 tasks=[{"task": task_text, "browser_id": selected[0] if selected else "",
-                        "url": "", "entry_url": _entry}],
+                        "url": "", "entry_url": p_entry}],
                 model=session.model,
                 dashboard_id=session.dashboard_id,
                 pre_selected_browser_ids=selected,
@@ -70,25 +75,26 @@ async def run_browser_fast_path(
             r = results[0] if results else {}
             return r if isinstance(r, dict) else {"summary": str(r or ""), "action_log": []}
 
-        def _summary(r: dict) -> str:
-            return (r.get("summary") or "").strip()
+        @typechecked
+        def p_summary(r: Dict[str, object]) -> str:
+            return (str(r.get("summary") or "")).strip()
 
         if not text:
             # show the "Browser Agent" bubble during the dispatch (it renders as
             # running, then completes when we emit the matching result below)
-            _bubble_tid = uuid4().hex
-            _tc = Message(role="tool_call", branch_id=session.active_branch_id,
-                          content={"id": _bubble_tid, "tool": _BROWSER_TOOL, "input": {"task": prompt}})
-            session.messages.append(_tc)
+            p_bubble_tid = uuid4().hex
+            p_tc = Message(role="tool_call", branch_id=session.active_branch_id,
+                           content={"id": p_bubble_tid, "tool": p_browser_tool, "input": {"task": prompt}})
+            session.messages.append(p_tc)
             await ws_manager.send_to_session(session_id, "agent:message", {
-                "session_id": session_id, "message": _tc.model_dump(mode="json")})
-            first = await _dispatch(browser_fast_path.compose_task(prompt, brief))
-            text = _summary(first)
+                "session_id": session_id, "message": p_tc.model_dump(mode="json")})
+            first = await p_dispatch(browser_fast_path.compose_task(prompt, brief))
+            text = p_summary(first)
             if browser_fast_path.dispatch_failed(first):
                 # Retry only transient failures; a dead dashboard fails the
                 # retry identically, so skip it and tell the user instead.
                 if not ws_manager.global_connections:
-                    _fp_path += "+no-dashboard"
+                    p_fp_path += "+no-dashboard"
                     text = browser_fast_path.NO_DASHBOARD_REPLY
                 else:
                     from backend.apps.agents.browser import browser_batch_replay
@@ -98,21 +104,21 @@ async def run_browser_fast_path(
                         # blind retry risks a double-send: a read-only probe's
                         # verdict gates the retry in code, not prose.
                         logger.info(f"[browser-fast-path] send-zone failure for {session_id}; payload probe before any retry")
-                        probe_text = _summary(await _dispatch(browser_fast_path.send_probe_task(prompt, payload)))
+                        probe_text = p_summary(await p_dispatch(browser_fast_path.send_probe_task(prompt, payload)))
                         pv = browser_fast_path.probe_verdict(probe_text)
                         logger.info(f"[browser-fast-path] send-probe verdict={pv} for {session_id}")
-                        _fp_path += f"+send-probe={pv}"
+                        p_fp_path += f"+send-probe={pv}"
                         if pv == "found":
                             text = browser_fast_path.already_sent_reply(payload, probe_text)
                         elif pv == "not-found":
-                            text = _summary(await _dispatch(
+                            text = p_summary(await p_dispatch(
                                 browser_fast_path.recovery_task(prompt, text, verified_undelivered=True)))
                         else:
                             text = browser_fast_path.unverifiable_reply(payload, text)
                     else:
                         logger.info(f"[browser-fast-path] first dispatch failed for {session_id}; one recovery dispatch")
-                        _fp_path += "+recovery"
-                        text = _summary(await _dispatch(browser_fast_path.recovery_task(prompt, text)))
+                        p_fp_path += "+recovery"
+                        text = p_summary(await p_dispatch(browser_fast_path.recovery_task(prompt, text)))
             if not text:
                 text = "The browser agent couldn't complete this and gave no report."
     except asyncio.CancelledError:
@@ -122,17 +128,17 @@ async def run_browser_fast_path(
         text = f"The browser agent couldn't complete this: {e}"
 
     logger.info(
-        f"[browser-fast-path] session {session_id} done: path={_fp_path} "
-        f"reply={len(text)}ch in {int((time.monotonic() - _fp_t0) * 1000)}ms"
+        f"[browser-fast-path] session {session_id} done: path={p_fp_path} "
+        f"reply={len(text)}ch in {int((time.monotonic() - p_fp_t0) * 1000)}ms"
     )
     # Close the synthetic bubble (always, even if the dispatch threw) so it never
     # hangs as "running"; the bubble pairs this result with its call positionally.
-    if _bubble_tid:
-        _tr = Message(role="tool_result", branch_id=session.active_branch_id,
-                      content={"tool_use_id": _bubble_tid, "tool": _BROWSER_TOOL, "text": "done"})
-        session.messages.append(_tr)
+    if p_bubble_tid:
+        p_tr = Message(role="tool_result", branch_id=session.active_branch_id,
+                       content={"tool_use_id": p_bubble_tid, "tool": p_browser_tool, "text": "done"})
+        session.messages.append(p_tr)
         await ws_manager.send_to_session(session_id, "agent:message", {
-            "session_id": session_id, "message": _tr.model_dump(mode="json")})
+            "session_id": session_id, "message": p_tr.model_dump(mode="json")})
     asst_msg = Message(role="assistant", content=text, branch_id=session.active_branch_id)
     session.messages.append(asst_msg)
     await ws_manager.send_to_session(session_id, "agent:message", {
@@ -147,6 +153,6 @@ async def run_browser_fast_path(
         "session": session.model_dump(mode="json"),
     })
     try:
-        _save_session(session_id, session.model_dump(mode="json"))
+        save_session(session_id, session.model_dump(mode="json"))
     except Exception as e:
         logger.warning(f"Failed to snapshot session {session_id}: {e}")
