@@ -402,8 +402,8 @@ def resolve_attached_skills(attached_skills: Optional[List]) -> str:
         return ""
     folder_by_id: Dict[str, str] = {}
     try:
-        from backend.apps.skills.skills import _sync_skills
-        for s in _sync_skills():
+        from backend.apps.skills.skills import sync_skills
+        for s in sync_skills():
             if s.dir_path and s.has_supporting_files:
                 folder_by_id[s.id] = s.dir_path
     except Exception:

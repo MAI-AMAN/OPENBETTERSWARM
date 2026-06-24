@@ -18,7 +18,7 @@ INDEX_PATH = os.path.join(SKILLS_DIR, ".skills_index.json")
 from backend.config.paths import SKILLS_WORKSPACE_DIR
 
 
-def _load_index() -> dict[str, dict]:
+def p_load_index() -> dict[str, dict]:
     """Read the skill index, never raising on a corrupt file. A truncated/garbled
     index (e.g. a crash mid-write before atomic writes existed) is moved aside so
     it's recoverable, and we start empty rather than bricking every skill op,
@@ -44,13 +44,13 @@ def _load_index() -> dict[str, dict]:
 # writer. Today every index write runs on the single backend event-loop thread
 # (no await between a load and its save, so no lost-update race), but this stays
 # correct if a save ever moves to a thread pool the way settings' did.
-_index_write_lock = threading.Lock()
+p_index_write_lock = threading.Lock()
 
 
-def _save_index(index: dict[str, dict]):
+def p_save_index(index: dict[str, dict]):
     """Atomic index write: tmp file + os.replace so a crash mid-write can't leave
     a truncated index. Mirrors the settings store's write discipline."""
-    with _index_write_lock:
+    with p_index_write_lock:
         os.makedirs(SKILLS_DIR, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".skills_index.", suffix=".tmp", dir=SKILLS_DIR)
         try:
@@ -78,7 +78,7 @@ def _save_index(index: dict[str, dict]):
 # `built_in: true` in the index. Users can edit the content (their
 # changes flow through to the matching agent's prompt on the next turn),
 # but they can't delete the file; the DELETE endpoint refuses with 409.
-def _built_in_skill_registry() -> list[dict]:
+def p_built_in_skill_registry() -> list[dict]:
     # Imported lazily so this module stays cheap to import from
     # everywhere (the skills outputs module pulls in pydantic+fastapi
     # transitively and we don't want a cycle).
@@ -115,15 +115,15 @@ def _built_in_skill_registry() -> list[dict]:
     ]
 
 
-def _seed_built_in_skills() -> None:
+def p_seed_built_in_skills() -> None:
     """Copy each built-in skill into SKILLS_DIR if not already present, and
     ensure the index has the `built_in: true` flag so the UI and DELETE
     endpoint know to treat it specially. Idempotent; safe to call on
     every boot. Doesn't overwrite the file once it exists (so user edits
     are preserved across restarts and upgrades)."""
-    index = _load_index()
+    index = p_load_index()
     dirty = False
-    for entry in _built_in_skill_registry():
+    for entry in p_built_in_skill_registry():
         skill_id = entry["id"]
         fpath = os.path.join(SKILLS_DIR, f"{skill_id}.md")
         if not os.path.exists(fpath):
@@ -149,7 +149,7 @@ def _seed_built_in_skills() -> None:
             index[skill_id] = meta
             dirty = True
     if dirty:
-        _save_index(index)
+        p_save_index(index)
 
 
 @asynccontextmanager
@@ -157,7 +157,7 @@ async def skills_lifespan():
     os.makedirs(SKILLS_DIR, exist_ok=True)
     os.makedirs(SKILLS_WORKSPACE_DIR, exist_ok=True)
     try:
-        _seed_built_in_skills()
+        p_seed_built_in_skills()
     except Exception:
         # Don't block app startup on a skill-seed failure; the worst
         # case is the user has to manually paste the skill in once.
@@ -168,7 +168,7 @@ async def skills_lifespan():
 skills = SubApp("skills", skills_lifespan)
 
 
-def _skill_md_path(skill_id: str) -> tuple[str | None, str]:
+def p_skill_md_path(skill_id: str) -> tuple[str | None, str]:
     """Resolve where a skill's markdown lives: (path, kind).
 
     A skill is either a folder (~/.claude/skills/<id>/SKILL.md, multi-file) or a
@@ -183,7 +183,7 @@ def _skill_md_path(skill_id: str) -> tuple[str | None, str]:
     return None, "flat"
 
 
-def _has_supporting_files(skill_dir: str) -> bool:
+def p_has_supporting_files(skill_dir: str) -> bool:
     """True if a skill folder ships anything beyond its SKILL.md (scripts, templates)."""
     try:
         return any(e != "SKILL.md" and not e.startswith(".") for e in os.listdir(skill_dir))
@@ -191,12 +191,12 @@ def _has_supporting_files(skill_dir: str) -> bool:
         return False
 
 
-def _build_skill(skill_id: str, content: str, md_path: str, kind: str, index: dict) -> Skill:
+def p_build_skill(skill_id: str, content: str, md_path: str, kind: str, index: dict) -> Skill:
     """Assemble a Skill from disk + index, falling back to SKILL.md frontmatter
     for a folder skill the index hasn't catalogued (e.g. hand-dropped)."""
     meta = dict(index.get(skill_id, {}))
     if kind == "folder" and ("name" not in meta or "description" not in meta):
-        fm = _parse_skill_frontmatter(content)
+        fm = p_parse_skill_frontmatter(content)
         meta.setdefault("name", fm.get("name", ""))
         meta.setdefault("description", fm.get("description", ""))
     pretty = skill_id.replace("-", " ").replace("_", " ").title()
@@ -210,14 +210,14 @@ def _build_skill(skill_id: str, content: str, md_path: str, kind: str, index: di
         command=meta.get("command", skill_id),
         built_in=bool(meta.get("built_in", False)),
         dir_path=skill_dir if kind == "folder" else "",
-        has_supporting_files=(kind == "folder" and _has_supporting_files(skill_dir)),
+        has_supporting_files=(kind == "folder" and p_has_supporting_files(skill_dir)),
     )
 
 
-def _sync_skills() -> list[Skill]:
+def sync_skills() -> list[Skill]:
     """Sync skills from the filesystem, updating the index. Reads both layouts:
     legacy flat <id>.md files and multi-file <id>/SKILL.md folders."""
-    index = _load_index()
+    index = p_load_index()
     result = []
     seen: set[str] = set()
 
@@ -234,23 +234,23 @@ def _sync_skills() -> list[Skill]:
             continue
         if skill_id in seen:
             continue
-        md_path, kind = _skill_md_path(skill_id)
+        md_path, kind = p_skill_md_path(skill_id)
         if not md_path:
             continue
         with open(md_path, encoding="utf-8") as f:
             content = f.read()
         seen.add(skill_id)
-        result.append(_build_skill(skill_id, content, md_path, kind, index))
+        result.append(p_build_skill(skill_id, content, md_path, kind, index))
 
     return result
 
 
 @skills.router.get("/list")
 async def list_skills():
-    return {"skills": [s.model_dump() for s in _sync_skills()]}
+    return {"skills": [s.model_dump() for s in sync_skills()]}
 
 
-def _parse_skill_frontmatter(raw: str) -> dict:
+def p_parse_skill_frontmatter(raw: str) -> dict:
     """Extract YAML frontmatter fields from a SKILL.md file."""
     if not raw.startswith("---"):
         return {}
@@ -302,7 +302,7 @@ async def read_skill_workspace(workspace_id: str):
         except json.JSONDecodeError:
             pass
 
-    frontmatter = _parse_skill_frontmatter(skill_content) if skill_content else {}
+    frontmatter = p_parse_skill_frontmatter(skill_content) if skill_content else {}
 
     return {
         "skill_content": skill_content,
@@ -313,20 +313,20 @@ async def read_skill_workspace(workspace_id: str):
 
 @skills.router.get("/{skill_id}")
 async def get_skill(skill_id: str):
-    for s in _sync_skills():
+    for s in sync_skills():
         if s.id == skill_id:
             return s.model_dump()
     raise HTTPException(status_code=404, detail="Skill not found")
 
 
-def _safe_slug(raw: str) -> str:
+def p_safe_slug(raw: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", (raw or "").strip().lower()).strip("-")
     return slug or "skill"
 
 
-def _skill_exists(slug: str) -> bool:
+def p_skill_exists(slug: str) -> bool:
     return (
-        slug in _load_index()
+        slug in p_load_index()
         or os.path.isfile(os.path.join(SKILLS_DIR, f"{slug}.md"))
         or os.path.isdir(os.path.join(SKILLS_DIR, slug))
     )
@@ -336,11 +336,11 @@ def unique_skill_slug(base: str) -> str:
     """A free slug for `base`, suffixing -2, -3, ... on collision. Lets a
     registry install land beside a same-named skill instead of silently
     overwriting the user's existing one."""
-    slug = _safe_slug(base)
-    if not _skill_exists(slug):
+    slug = p_safe_slug(base)
+    if not p_skill_exists(slug):
         return slug
     i = 2
-    while _skill_exists(f"{slug}-{i}"):
+    while p_skill_exists(f"{slug}-{i}"):
         i += 1
     return f"{slug}-{i}"
 
@@ -351,11 +351,11 @@ def write_folder_skill(skill_id: str, files: dict[str, str], meta: dict) -> Skil
     zip/.swarm import. Relpaths that try to escape the skill folder (../, abs
     paths) are dropped, an untrusted registry archive can't write outside its
     own dir."""
-    slug = _safe_slug(skill_id)
+    slug = p_safe_slug(skill_id)
     base = os.path.join(SKILLS_DIR, slug)
     base_abs = os.path.abspath(base)
     # A folder write supersedes any legacy flat <slug>.md, so we never leave a
-    # phantom flat file shadowed by the folder (folder wins in _skill_md_path).
+    # phantom flat file shadowed by the folder (folder wins in p_skill_md_path).
     legacy_flat = os.path.join(SKILLS_DIR, f"{slug}.md")
     if os.path.isfile(legacy_flat):
         try:
@@ -372,20 +372,20 @@ def write_folder_skill(skill_id: str, files: dict[str, str], meta: dict) -> Skil
         with open(dest, "w", encoding="utf-8") as f:
             f.write(content)
 
-    index = _load_index()
+    index = p_load_index()
     index[slug] = {
         "name": meta.get("name") or slug,
         "description": meta.get("description", ""),
         "command": meta.get("command", slug),
     }
-    _save_index(index)
+    p_save_index(index)
 
-    md_path, kind = _skill_md_path(slug)
+    md_path, kind = p_skill_md_path(slug)
     if not md_path:
         raise HTTPException(status_code=400, detail="skill had no SKILL.md")
     with open(md_path, encoding="utf-8") as f:
         content = f.read()
-    return _build_skill(slug, content, md_path, kind, index)
+    return p_build_skill(slug, content, md_path, kind, index)
 
 
 @skills.router.post("/create")
@@ -402,7 +402,7 @@ async def create_skill(body: SkillCreate):
 
 @skills.router.put("/{skill_id}")
 async def update_skill(skill_id: str, body: SkillUpdate):
-    md_path, kind = _skill_md_path(skill_id)
+    md_path, kind = p_skill_md_path(skill_id)
     if not md_path:
         raise HTTPException(status_code=404, detail="Skill not found")
 
@@ -410,7 +410,7 @@ async def update_skill(skill_id: str, body: SkillUpdate):
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(body.content)
 
-    index = _load_index()
+    index = p_load_index()
     meta = index.get(skill_id, {})
     if body.name is not None:
         meta["name"] = body.name
@@ -419,18 +419,18 @@ async def update_skill(skill_id: str, body: SkillUpdate):
     if body.command is not None:
         meta["command"] = body.command
     index[skill_id] = meta
-    _save_index(index)
+    p_save_index(index)
 
     with open(md_path, encoding="utf-8") as f:
         content = f.read()
 
-    skill = _build_skill(skill_id, content, md_path, kind, index)
+    skill = p_build_skill(skill_id, content, md_path, kind, index)
     return {"ok": True, "skill": skill.model_dump()}
 
 
 @skills.router.delete("/{skill_id}")
 async def delete_skill(skill_id: str):
-    index = _load_index()
+    index = p_load_index()
     if index.get(skill_id, {}).get("built_in"):
         raise HTTPException(
             status_code=409,
@@ -449,5 +449,5 @@ async def delete_skill(skill_id: str):
     if os.path.isfile(flat):
         os.remove(flat)
     index.pop(skill_id, None)
-    _save_index(index)
+    p_save_index(index)
     return {"ok": True}
