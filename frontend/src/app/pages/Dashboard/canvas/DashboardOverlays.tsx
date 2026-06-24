@@ -4,11 +4,15 @@ import DashboardToolbar from '../DashboardToolbar';
 import CanvasControls from '../controls/CanvasControls';
 import CardSearchPalette from '../controls/CardSearchPalette';
 import DirectionHints from '../controls/DirectionHints';
+import WorkflowRunningToast from '@/app/pages/Workflows/WorkflowRunningToast';
+import MissedRunsToast from '@/app/pages/Workflows/MissedRunsToast';
 import type { AgentSession } from '@/shared/state/agentsSlice';
 import type {
   CardPosition,
   ViewCardPosition,
   BrowserCardPosition,
+  WorkflowCardPosition,
+  WorkflowsHubPosition,
 } from '@/shared/state/dashboardLayoutSlice';
 import type { useCanvasControls } from '../hooks/interaction/useCanvasControls';
 
@@ -23,6 +27,8 @@ interface DashboardOverlaysProps {
   cards: Record<string, CardPosition>;
   viewCards: Record<string, ViewCardPosition>;
   browserCards: Record<string, BrowserCardPosition>;
+  workflowCards: Record<string, WorkflowCardPosition>;
+  workflowsHub: WorkflowsHubPosition | null;
   focusedCardId: string | null;
   shakeDirection: Direction | null;
   neighborDirections: NeighborDirections;
@@ -52,6 +58,8 @@ const DashboardOverlays: React.FC<DashboardOverlaysProps> = ({
   cards,
   viewCards,
   browserCards,
+  workflowCards,
+  workflowsHub,
   focusedCardId,
   shakeDirection,
   neighborDirections,
@@ -121,6 +129,8 @@ const DashboardOverlays: React.FC<DashboardOverlaysProps> = ({
             cards,
             viewCards,
             browserCards,
+            workflowCards,
+            workflowsHub,
           }}
           onMinimapPan={(px, py) => canvas.actions.setState({ panX: px, panY: py, zoom: canvas.zoom })}
         />
@@ -136,6 +146,12 @@ const DashboardOverlays: React.FC<DashboardOverlaysProps> = ({
         browserCards={browserCards}
         sessions={sessions}
       />
+
+      {/* Scheduled-run nudge: "your {workflow} is running now" + jump-to-canvas */}
+      <WorkflowRunningToast />
+
+      {/* Launch nudge when scheduled runs elapsed while the app was closed */}
+      <MissedRunsToast />
     </>
   );
 };

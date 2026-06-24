@@ -2,7 +2,8 @@ import { useEffect, type Dispatch, type SetStateAction } from 'react';
 import { report } from '@/shared/serviceClient';
 import { useAppDispatch } from '@/shared/hooks';
 import { closeSession, toggleExpandSession } from '@/shared/state/agentsSlice';
-import { removeViewCard, removeNote } from '@/shared/state/dashboardLayoutSlice';
+import { removeViewCard, removeNote, removeWorkflowCard, closeWorkflowsHub } from '@/shared/state/dashboardLayoutSlice';
+import { closeWorkflowCard } from '@/shared/state/workflowsSlice';
 import { removeBrowserCardCleanly } from '@/shared/browserTeardown';
 import type { useDashboardSelection } from '../state/useDashboardSelection';
 
@@ -80,6 +81,11 @@ export function useDashboardShortcuts({
           removeBrowserCardCleanly(id, dispatch);
         } else if (type === 'note') {
           dispatch(removeNote(id));
+        } else if (type === 'workflow') {
+          dispatch(removeWorkflowCard(id));
+          dispatch(closeWorkflowCard(id));
+        } else if (type === 'workflows-hub') {
+          dispatch(closeWorkflowsHub());
         }
       }
       selection.deselectAll();

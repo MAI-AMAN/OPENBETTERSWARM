@@ -26,6 +26,7 @@ import { ApprovalRequest } from '@/shared/state/agentsSlice';
 import { useAppSelector } from '@/shared/hooks';
 import { ToolDefinition } from '@/shared/state/toolsSlice';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
+import { getMcpInputSummary as getSharedMcpInputSummary, getWorkflowToolInputDisplay, getWorkflowToolLabel } from '@/shared/mcpToolMeta';
 
 interface IntegrationMeta {
   label: string;
@@ -97,6 +98,9 @@ export function useMcpToolMeta(parsed: ParsedTool): McpToolMeta {
     );
 
     if (!toolDef) {
+      if (parsed.serverSlug === 'openswarm-schedule') {
+        return { integration: null, description: '', serverLabel: 'Workflows' };
+      }
       return { integration: null, description: '', serverLabel: parsed.serverSlug };
     }
 
@@ -110,6 +114,10 @@ export function useMcpToolMeta(parsed: ParsedTool): McpToolMeta {
 
 function getMcpInputSummary(actionName: string, toolInput: Record<string, any>): string {
   const lower = actionName.toLowerCase();
+
+  if (getWorkflowToolLabel(actionName)) {
+    return getSharedMcpInputSummary(toolInput, actionName, 'openswarm-schedule');
+  }
 
   if (lower.includes('gmail') || lower.includes('email') || lower.includes('mail')) {
     const query = toolInput.query || toolInput.search_query || toolInput.q || '';
@@ -568,7 +576,12 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
   const meta = useMcpToolMeta(parsed);
 
   const accentColor = meta.integration?.color || c.status.warning;
+  const displayName = getWorkflowToolLabel(parsed.actionName) || parsed.displayName;
   const summary = parsed.isMcp ? getMcpInputSummary(parsed.actionName, request.tool_input) : '';
+  const workflowDetails = parsed.isMcp
+    ? getWorkflowToolInputDisplay(request.tool_input, parsed.actionName, parsed.serverSlug)
+    : '';
+  const detailText = workflowDetails || JSON.stringify(request.tool_input, null, 2);
   const isSensitive = !!request.sensitive_pattern;
 
   if (!parsed.isMcp) {
@@ -724,7 +737,7 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Typography sx={{ color: c.text.primary, fontWeight: 600, fontSize: '0.9rem' }}>
-              {parsed.displayName}
+              {displayName}
             </Typography>
             <Chip
               label={meta.serverLabel || parsed.serverSlug}
@@ -774,7 +787,6 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
               sx={{
                 color: c.text.secondary,
                 fontSize: '0.82rem',
-                fontFamily: c.font.mono,
                 flex: 1,
                 minWidth: 0,
                 overflow: 'hidden',
@@ -792,7 +804,7 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
         <Collapse in={detailsExpanded || !summary}>
           <Box sx={{ mt: summary ? 0.75 : 0 }}>
             <CodeBlock tokens={c}>
-              {JSON.stringify(request.tool_input, null, 2)}
+              {detailText}
             </CodeBlock>
           </Box>
         </Collapse>

@@ -160,6 +160,19 @@ def extract_target_path(tool_name: str, tool_input: object) -> str:
     return str(tool_input.get("file_path") or "")
 
 
+# Native-scheduler MCP tools that commit or mutate a recurring schedule. Always-on
+# MCP servers fall through to the always_allow default, so these would otherwise fire
+# silently; force them through ApprovalBar. The Cron* tools are Claude's own internal
+# scheduler, denied outright in favour of the visible/auditable native one.
+p_SCHEDULE_GATED = {
+    "mcp__openswarm-schedule__ScheduleWorkflow",
+    "mcp__openswarm-schedule__UpdateScheduledWorkflow",
+    "mcp__openswarm-schedule__DeleteScheduledWorkflow",
+    "mcp__openswarm-schedule__PauseAllWorkflows",
+}
+p_CLAUDE_INTERNAL_SCHEDULER_TOOLS = ("CronCreate", "CronList", "CronDelete")
+
+
 @typechecked
 def maybe_override_policy(policy: str, tool_name: str, tool_input: object) -> Tuple[str, Optional[str]]:
     """Returns (effective_policy, matched_sensitive_pattern). Flips a permissive policy to
@@ -168,6 +181,13 @@ def maybe_override_policy(policy: str, tool_name: str, tool_input: object) -> Tu
     writing to ~/.ssh/authorized_keys still gets surfaced. Once the user trusts a pattern,
     future writes to it pass through silently."""
     if tool_name == "Bash" and looks_like_os_scheduling(tool_input):
+        return "ask", None
+    if tool_name in p_CLAUDE_INTERNAL_SCHEDULER_TOOLS:
+        return "deny", None
+    # Committing or mutating a native recurring schedule is the in-app twin of the
+    # crontab gate above: real, user-visible, hard-to-undo, so it goes through
+    # ApprovalBar every time regardless of the always_allow default.
+    if tool_name in p_SCHEDULE_GATED:
         return "ask", None
     if tool_name == "Bash" and isinstance(tool_input, dict):
         bash_match = match_bash_catastrophic_pattern(str(tool_input.get("command") or ""))

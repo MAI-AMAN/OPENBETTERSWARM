@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, RefObject } from 'react';
-import type { CardPosition, ViewCardPosition, BrowserCardPosition, NotePosition } from '@/shared/state/dashboardLayoutSlice';
+import type { CardPosition, ViewCardPosition, BrowserCardPosition, NotePosition, WorkflowCardPosition, WorkflowsHubPosition } from '@/shared/state/dashboardLayoutSlice';
 
 export type { CardType } from '@/shared/state/dashboardLayoutSlice';
 import type { CardType } from '@/shared/state/dashboardLayoutSlice';
@@ -43,6 +43,8 @@ export function useDashboardSelection(
   viewCards: Record<string, ViewCardPosition>,
   browserCards: Record<string, BrowserCardPosition> = {},
   notes: Record<string, NotePosition> = {},
+  workflowCards: Record<string, WorkflowCardPosition> = {},
+  workflowsHub: WorkflowsHubPosition | null = null,
 ) {
   const [selectedIds, setSelectedIds] = useState<Map<string, CardType>>(new Map());
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null);
@@ -77,8 +79,10 @@ export function useDashboardSelection(
     for (const vc of Object.values(viewCards)) next.set(vc.output_id, 'view');
     for (const bc of Object.values(browserCards)) next.set(bc.browser_id, 'browser');
     for (const n of Object.values(notes)) next.set(n.note_id, 'note');
+    for (const wc of Object.values(workflowCards)) next.set(wc.workflow_id, 'workflow');
+    if (workflowsHub) next.set('workflows-hub', 'workflows-hub');
     setSelectedIds(next);
-  }, [cards, viewCards, browserCards, notes]);
+  }, [cards, viewCards, browserCards, notes, workflowCards, workflowsHub]);
 
   const selectCard = useCallback(
     (id: string, type: CardType, shiftKey: boolean) => {
@@ -161,6 +165,31 @@ export function useDashboardSelection(
         }
       }
 
+      for (const wc of Object.values(workflowCards)) {
+        if (
+          rectsIntersect(rect, {
+            x: wc.x,
+            y: wc.y,
+            width: wc.width,
+            height: wc.height,
+          })
+        ) {
+          intersecting.set(wc.workflow_id, 'workflow');
+        }
+      }
+
+      if (
+        workflowsHub &&
+        rectsIntersect(rect, {
+          x: workflowsHub.x,
+          y: workflowsHub.y,
+          width: workflowsHub.width,
+          height: workflowsHub.height,
+        })
+      ) {
+        intersecting.set('workflows-hub', 'workflows-hub');
+      }
+
       if (shiftKey) {
         const base = selectionBeforeMarqueeRef.current;
         const next = new Map(base);
@@ -176,7 +205,7 @@ export function useDashboardSelection(
 
       return intersecting;
     },
-    [cards, viewCards, browserCards, notes],
+    [cards, viewCards, browserCards, notes, workflowCards, workflowsHub],
   );
 
   const handleCanvasMouseDown = useCallback(

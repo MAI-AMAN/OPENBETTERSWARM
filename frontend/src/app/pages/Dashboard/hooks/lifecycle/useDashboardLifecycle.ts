@@ -16,15 +16,23 @@ import {
   resetLayout,
   removeViewCard,
   clearPendingFocusBrowserId,
+  clearPendingFocusWorkflowId,
+  clearPendingFocusWorkflowsHub,
   type ViewCardPosition,
 } from '@/shared/state/dashboardLayoutSlice';
 import { fetchOutputs, type Output } from '@/shared/state/outputsSlice';
 import { generateDashboardName } from '@/shared/state/dashboardsSlice';
+import { fetchWorkflows, fetchAllRuns, fetchActiveRuns } from '@/shared/state/workflowsSlice';
+import { fetchMissedRuns } from '@/shared/state/missedRunsSlice';
 import { dashboardWs } from '@/shared/ws/WebSocketManager';
 import { initBrowserCommandHandler } from '@/shared/browserCommandHandler';
 import { clearPendingBrowserUrl, clearPendingFocusAgentId } from '@/shared/state/tempStateSlice';
 import { API_BASE } from '@/shared/config';
 import type { CanvasActions } from '../interaction/useCanvasControls';
+
+// Module-level so the missed-runs review pops exactly once per app launch,
+// not again on every dashboard switch.
+let missedRunsCheckedThisSession = false;
 
 interface UseDashboardLifecycleArgs {
   isActive: boolean;
@@ -66,6 +74,17 @@ export function useDashboardLifecycle({
   const pendingBrowserUrl = useAppSelector((state) => state.tempState.pendingBrowserUrl);
   const pendingFocusAgentId = useAppSelector((state) => state.tempState.pendingFocusAgentId);
   const pendingFocusBrowserId = useAppSelector((state) => state.dashboardLayout.pendingFocusBrowserId);
+  const pendingFocusWorkflowId = useAppSelector((state) => state.dashboardLayout.pendingFocusWorkflowId);
+  const pendingFocusWorkflowsHub = useAppSelector((state) => state.dashboardLayout.pendingFocusWorkflowsHub);
+
+  // Once per app launch: if scheduled fires elapsed while we were closed, fetch
+  // them. The slice flips its toast flag on fulfilled, so a bottom-left nudge
+  // shows instead of a card popping unrequested; the user opens the card from it.
+  useEffect(() => {
+    if (!isActive || missedRunsCheckedThisSession) return;
+    missedRunsCheckedThisSession = true;
+    dispatch(fetchMissedRuns());
+  }, [isActive, dispatch]);
 
   // Track dashboard engagement time
   useEffect(() => {
@@ -96,6 +115,12 @@ export function useDashboardLifecycle({
     const unsubReconnect = dashboardWs.on('dashboard:reconnected', () => {
       dispatch(fetchSessions({ dashboardId }));
       dispatch(fetchLayout({ dashboardId, isReconnect: true }));
+      // workflow:run/updated/deleted are global broadcasts that skip the replay
+      // log, so a socket gap drops them: refetch to heal stale "running" cards,
+      // ghost workflows, and missed run history on reconnect.
+      dispatch(fetchWorkflows(dashboardId));
+      dispatch(fetchAllRuns(200));
+      dispatch(fetchActiveRuns());
     });
     // DEFERRABLE: history list (for the search palette) and outputs
     // (for the apps panel) aren't on the first-paint path. Same for the
@@ -110,6 +135,7 @@ export function useDashboardLifecycle({
       dispatch(fetchOutputs()).then((res) => {
         if (fetchOutputs.fulfilled.match(res)) setOutputsRefetched(true);
       });
+      dispatch(fetchWorkflows(dashboardId));
       dashboardWs.connect();
     };
     const idleHandle = (typeof window !== 'undefined' && (window as any).requestIdleCallback)
@@ -229,6 +255,44 @@ export function useDashboardLifecycle({
       }
     }, 200);
   }, [isActive, pendingFocusBrowserId, layoutInitialized, dispatch, canvasActions, handleHighlightCard]);
+
+  // Same pan/highlight choreography for newly-spawned workflow cards.
+  useEffect(() => {
+    if (!isActive) return;
+    if (!pendingFocusWorkflowId || !layoutInitialized) return;
+    const workflowId = pendingFocusWorkflowId;
+    dispatch(clearPendingFocusWorkflowId());
+    setTimeout(() => {
+      const card = store.getState().dashboardLayout.workflowCards[workflowId];
+      if (card) {
+        canvasActions.fitToCards(
+          [{ x: card.x, y: card.y, width: card.width, height: card.height }],
+          1.15,
+          true,
+        );
+        handleHighlightCard(workflowId);
+      }
+    }, 200);
+  }, [isActive, pendingFocusWorkflowId, layoutInitialized, dispatch, canvasActions, handleHighlightCard]);
+
+  // Pan/zoom to Workflows Hub on Expand; chained rAFs ensure fit runs after the hub div lands at its new coords.
+  useEffect(() => {
+    if (!isActive) return;
+    if (!pendingFocusWorkflowsHub || !layoutInitialized) return;
+    dispatch(clearPendingFocusWorkflowsHub());
+    const fit = () => {
+      const hub = store.getState().dashboardLayout.workflowsHub;
+      if (!hub) return;
+      canvasActions.fitToCards(
+        [{ x: hub.x, y: hub.y, width: hub.width, height: hub.height }],
+        1.1,
+        true,
+      );
+    };
+    requestAnimationFrame(() => requestAnimationFrame(fit));
+    const fallback = setTimeout(fit, 300);
+    return () => clearTimeout(fallback);
+  }, [isActive, pendingFocusWorkflowsHub, layoutInitialized, dispatch, canvasActions]);
 
   useEffect(() => {
     if (!layoutInitialized || restoredExpandedRef.current) return;

@@ -235,3 +235,37 @@ def capacity_retry_wait(exc: BaseException, attempt: int, extra_text: str = "") 
     if is_transient_capacity_error(exc, extra_text=extra_text) and 0 <= attempt < len(CAPACITY_BACKOFFS):
         return CAPACITY_BACKOFFS[attempt]
     return None
+
+
+@typechecked
+def is_out_of_tokens(exc: BaseException, extra_text: str = "") -> bool:
+    combined = f"{exc!s}\n{extra_text}".strip()
+    if not combined:
+        return False
+    return bool(re.search(
+        r"usage\s+cap\s+exceeded"
+        r"|reached\s+your\s+OpenSwarm.*plan\s+limit"
+        r"|usage\s+limit"
+        r"|insufficient_quota"
+        r"|exceeded\s+your\s+current\s+quota"
+        r"|quota\s+exceeded"
+        r"|credit\s+balance\s+is\s+too\s+low"
+        r"|out\s+of\s+credits",
+        combined,
+        re.IGNORECASE,
+    ))
+
+
+@typechecked
+def extract_reset_hint(text: str) -> str:
+    """Pull a human reset phrase ('at 7:42 AM', 'in 2h 30m', 'after 1m 59s') out of
+    a provider usage error so we can tell the user when their limit comes back.
+    """
+    if not text:
+        return ""
+    m = re.search(
+        r"(?:try\s+again|resets?|reset)\s+((?:in|at|after)\s+[^.\n)]{1,40})",
+        text,
+        re.IGNORECASE,
+    )
+    return m.group(1).strip() if m else ""

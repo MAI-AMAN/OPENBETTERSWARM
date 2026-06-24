@@ -16,7 +16,7 @@ import { ElapsedTimer, formatElapsed } from '../parsing/toolBubbleChrome';
 import { useTermColors } from '../parsing/toolColorize';
 import { ParsedResult } from '../parsing/toolResultParsing';
 import { isSettingsWriteTool, settingsWriteSummary } from '../parsing/settingsToolMeta';
-import { McpToolInfo, getMcpShortAction } from '@/shared/mcpToolMeta';
+import { McpToolInfo, getMcpShortAction, getMcpInputSummary, getWorkflowToolLabel } from '@/shared/mcpToolMeta';
 import { McpResultCard } from '../mcp-cards/McpResultCard';
 
 interface CompactMcpBubbleProps {
@@ -48,61 +48,70 @@ export const CompactMcpBubble: React.FC<CompactMcpBubbleProps> = ({
   const c = useClaudeTokens();
   const tc = useTermColors();
 
-  const shortAction = mcpInfo.isMcp ? getMcpShortAction(mcpInfo) : toolName;
+  const workflowLabel = mcpInfo.isMcp ? getWorkflowToolLabel(mcpInfo.action) : null;
+  const shortAction = workflowLabel || (mcpInfo.isMcp ? getMcpShortAction(mcpInfo) : toolName);
   const mcpVerbLabel = (() => {
+    if (workflowLabel) return workflowLabel;
     const lbl = getToolLabel(toolName, call.id);
     return result && !isDenied ? lbl.past : lbl.present;
   })();
   const serviceLabel = mcpInfo.isMcp ? mcpVerbLabel : shortAction;
+  const inputSummary = mcpInfo.isMcp ? getMcpInputSummary(input, mcpInfo.action, mcpInfo.serverSlug) : '';
+  // A grouped settings write shows the masked change list (input-derived, so it
+  // reads even while pending) instead of the generic "Applied: theme" result line.
+  const visibleSummary = isSettingsWriteTool(toolName)
+    ? settingsWriteSummary(input)
+    : (resultSummary || inputSummary);
+  const canToggleDetails = !!visibleSummary;
+  const hideVerbLabel = !!workflowLabel && !!visibleSummary;
   const ServiceIcon = mcpInfo.isMcp && mcpInfo.service
     ? <GoogleServiceIcon service={mcpInfo.service} size={14} />
     : null;
-  // A grouped settings write shows the masked change list (input-derived, so it
-  // reads even while pending) instead of the generic "Applied: theme" result line.
-  const headerSummary = isSettingsWriteTool(toolName) ? settingsWriteSummary(input) : resultSummary;
 
   return (
     <Box {...selectAttrs} sx={{ my: 0 }}>
       <Box
-        onClick={toggle}
+        onClick={canToggleDetails ? toggle : undefined}
         sx={{
           display: 'flex',
-          alignItems: showBody ? 'flex-start' : 'center',
+          alignItems: showBody && canToggleDetails ? 'flex-start' : 'center',
           gap: 0.75,
           px: 1.5,
           py: 0.6,
-          cursor: 'pointer',
-          borderBottom: showBody ? `1px solid ${c.border.subtle}` : 'none',
-          '&:hover': { bgcolor: 'rgba(0,0,0,0.02)' },
+          cursor: canToggleDetails ? 'pointer' : 'default',
+          borderBottom: showBody && canToggleDetails ? `1px solid ${c.border.subtle}` : 'none',
+          '&:hover': canToggleDetails ? { bgcolor: 'rgba(0,0,0,0.02)' } : undefined,
         }}
       >
         {ServiceIcon}
-        <Typography
-          sx={{
-            color: c.accent.primary,
-            fontSize: '0.78rem',
-            fontWeight: 600,
-            flexShrink: 0,
-          }}
-        >
-          {serviceLabel}
-        </Typography>
-        {headerSummary && !isError && (
+        {!hideVerbLabel && (
           <Typography
             sx={{
-              color: c.text.secondary,
+              color: c.accent.primary,
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              flexShrink: 0,
+            }}
+          >
+            {serviceLabel}
+          </Typography>
+        )}
+        {visibleSummary && !isError && (
+          <Typography
+            sx={{
+              color: hideVerbLabel ? c.text.primary : c.text.secondary,
               fontSize: '0.74rem',
               flex: 1,
               minWidth: 0,
-              ...(showBody
+              ...(showBody && canToggleDetails
                 ? { whiteSpace: 'normal', wordBreak: 'break-word' }
                 : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
             }}
           >
-            {headerSummary}
+            {visibleSummary}
           </Typography>
         )}
-        {!headerSummary && !showTimer && <Box sx={{ flex: 1 }} />}
+        {!visibleSummary && !showTimer && <Box sx={{ flex: 1 }} />}
         {showTimer && (
           <>
             <Box sx={{ flex: 1 }} />
@@ -127,12 +136,14 @@ export const CompactMcpBubble: React.FC<CompactMcpBubbleProps> = ({
             )}
           </Box>
         )}
+        {canToggleDetails && (
         <IconButton size="small" sx={{ color: c.text.tertiary, p: 0.15, flexShrink: 0 }}>
           {showBody ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
         </IconButton>
+        )}
       </Box>
 
-      <Collapse in={showBody}>
+      <Collapse in={showBody && canToggleDetails}>
         <Box
           sx={{
             bgcolor: tc.TERM_BG,

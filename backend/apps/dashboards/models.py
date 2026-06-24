@@ -57,12 +57,12 @@ class NotePosition(BaseModel):
 
 
 class DashboardLayout(BaseModel):
-    # extra="allow" so any keys the FE sends (or legacy on-disk layouts
-    # carry) round-trip without Pydantic stripping them.
     model_config = ConfigDict(extra="allow")
     cards: dict[str, CardPosition] = Field(default_factory=dict)
     view_cards: dict[str, ViewCardPosition] = Field(default_factory=dict)
     browser_cards: dict[str, BrowserCardPosition] = Field(default_factory=dict)
+    workflow_cards: dict = Field(default_factory=dict)
+    workflows_hub: Optional[dict] = None
     notes: dict[str, NotePosition] = Field(default_factory=dict)
     expanded_session_ids: list[str] = Field(default_factory=list)
 

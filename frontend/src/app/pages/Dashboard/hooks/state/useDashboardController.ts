@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAppSelector } from '@/shared/hooks';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { useElementSelection } from '@/app/components/editor/ElementSelectionContext';
 import { useCanvasControls } from '../interaction/useCanvasControls';
@@ -31,6 +32,8 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
   const isElementSelectMode = elementSelectionCtx?.selectMode ?? false;
   const {
     dashboardName, sessions, expandedSessionIds, cards, viewCards, browserCards,
+    workflowCards, workflowItems, workflowOpenCards, workflowsHub,
+    pendingFocusWorkflowId, pendingFocusWorkflowsHub,
     notes, pendingFocusNoteId, layoutInitialized, persistedExpandedSessionIds,
     zoomSensitivity, newAgentShortcut, browserHomepage, expandNewChats,
     autoRevealSubAgents, outputs, outputsLoaded, glowingAgentCards, glowingBrowserCards,
@@ -40,9 +43,21 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
   // ref when one of its values changes, so this is the right granularity).
   const sessionList = useMemo(() => Object.values(sessions), [sessions]);
 
+  // Run Monitor card geometry + its tether label ("Watching" live, "Viewing" done).
+  // Only "active" while its workflow still exists; otherwise the card is gone and
+  // the tether must not dangle (e.g. the workflow was trashed while watching).
+  const workflowsMonitorIdRaw = useAppSelector((s) => s.dashboardLayout.workflowsMonitorId);
+  const monitorActive = !!workflowsMonitorIdRaw && !!workflowItems[workflowsMonitorIdRaw];
+  const workflowsMonitorId = monitorActive ? workflowsMonitorIdRaw : null;
+  const workflowsMonitorCard = useAppSelector((s) =>
+    (monitorActive ? s.dashboardLayout.workflowsMonitorCard : null));
+  const monitorIsLive = useAppSelector((s) =>
+    !!workflowsMonitorId && s.workflows.active.some((a) => a.workflow_id === workflowsMonitorId));
+  const workflowsMonitorLabel = monitorIsLive ? 'Watching' : 'Viewing';
+
   const contentBounds = useMemo(
-    () => computeContentBounds(cards, viewCards, browserCards),
-    [cards, viewCards, browserCards],
+    () => computeContentBounds(cards, viewCards, browserCards, workflowCards, workflowsHub),
+    [cards, viewCards, browserCards, workflowCards, workflowsHub],
   );
 
   const canvas = useCanvasControls(zoomSensitivity, contentBounds, isActive);
@@ -52,6 +67,8 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     viewCards,
     browserCards,
     notes,
+    workflowCards,
+    workflowsHub,
   );
   const {
     toolbarRef, toolbarOpen, setToolbarOpen, searchPaletteOpen, setSearchPaletteOpen,
@@ -146,6 +163,7 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     isActive,
     sessions,
     cards,
+    workflowOpenCards,
     layoutInitialized,
     autoRevealSubAgents,
     expandedSessionIds,
@@ -158,6 +176,8 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     cards,
     viewCards,
     browserCards,
+    workflowCards,
+    workflowsHub,
     notes,
     expandedSessionIds,
     captureNow,
@@ -206,6 +226,7 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     cards,
     viewCards,
     browserCards,
+    workflowCards,
     zoom: canvas.zoom,
     isActive,
     focusedCardId,
@@ -271,6 +292,9 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     glowingBrowserCards,
     cards,
     browserCards,
+    workflowCards,
+    workflowItems,
+    workflowOpenCards,
     viewCards,
     outputs,
     expandedSessionIds,
@@ -278,11 +302,15 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     measuredHeightsRef,
     measuredHeightsTick,
     sessionList,
+    workflowsHub,
+    workflowsMonitorCard,
+    workflowsMonitorLabel,
   });
 
   return {
     c, dashboardId, dashboardName, canvas, selection, sessions, sessionList,
     cards, viewCards, browserCards, notes, outputs, glowingAgentCards,
+    workflowCards, workflowsHub,
     expandedSessionIds, tethers, highlightedCardId, autoFocusSessionId,
     focusedCardId, pendingFocusNoteId, multiDragDelta, shakeDirection,
     neighborDirections, toolbarOpen, searchPaletteOpen, newAgentBounce,

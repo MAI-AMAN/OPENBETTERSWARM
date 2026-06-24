@@ -9,8 +9,12 @@ from fastapi.responses import JSONResponse
 import asyncio
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+
+MCP_SUGGEST_COOLDOWN_S = 300.0
+p_mcp_suggest_cooldown: dict[str, float] = {}
 
 # Dedup concurrent generate-group-meta calls; collapses the 429 thundering herd by sharing one upstream Future per (session, group).
 p_group_meta_inflight: dict[tuple[str, str], asyncio.Future] = {}
@@ -75,23 +79,26 @@ async def send_message(session_id: str, body: dict):
 
     # Run MCP-suggestion classifier in parallel with the agent launch; fails open.
     try:
-        from backend.apps.agents.core.mcp_preflight import run_preflight
-        from backend.apps.agents.core.ws_manager import ws_manager as p_ws
+        last_suggested = p_mcp_suggest_cooldown.get(session_id, 0.0)
+        if time.monotonic() - last_suggested >= MCP_SUGGEST_COOLDOWN_S:
+            from backend.apps.agents.core.mcp_preflight import run_preflight
+            from backend.apps.agents.core.ws_manager import ws_manager as p_ws
 
-        async def p_emit_preflight():
-            try:
-                result = await run_preflight(prompt, task_id=session_id)
-                if result.get("suggestions") or result.get("is_vague"):
-                    await p_ws.send_to_session(session_id, "agent:mcp_suggestions", {
-                        "session_id": session_id,
-                        "suggestions": result.get("suggestions", []),
-                        "is_vague": bool(result.get("is_vague")),
-                    })
-            except Exception:
-                pass
+            async def p_emit_preflight():
+                try:
+                    result = await run_preflight(prompt, task_id=session_id)
+                    if result.get("suggestions") or result.get("is_vague"):
+                        p_mcp_suggest_cooldown[session_id] = time.monotonic()
+                        await p_ws.send_to_session(session_id, "agent:mcp_suggestions", {
+                            "session_id": session_id,
+                            "suggestions": result.get("suggestions", []),
+                            "is_vague": bool(result.get("is_vague")),
+                        })
+                except Exception:
+                    pass
 
-        import asyncio as p_asyncio
-        p_asyncio.create_task(p_emit_preflight())
+            import asyncio as p_asyncio
+            p_asyncio.create_task(p_emit_preflight())
     except Exception:
         pass
 

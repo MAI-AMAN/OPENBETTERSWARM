@@ -11,7 +11,7 @@ import DashboardGlyph from './DashboardGlyph';
 import ShareButton from '@/app/components/share/ShareButton';
 import type { AgentSession } from '@/shared/state/agentsSlice';
 import { saveLayout } from '@/shared/state/dashboardLayoutSlice';
-import type { CardPosition, ViewCardPosition, BrowserCardPosition, NotePosition } from '@/shared/state/dashboardLayoutSlice';
+import type { CardPosition, ViewCardPosition, BrowserCardPosition, NotePosition, WorkflowCardPosition, WorkflowsHubPosition } from '@/shared/state/dashboardLayoutSlice';
 import type { Output } from '@/shared/state/outputsSlice';
 import type { CanvasActions } from '../hooks/interaction/useCanvasControls';
 import { friendlyStatusLabel } from '@/shared/statusLabel';
@@ -22,6 +22,8 @@ interface DashboardHeaderProps {
   cards: Record<string, CardPosition>;
   viewCards: Record<string, ViewCardPosition>;
   browserCards: Record<string, BrowserCardPosition>;
+  workflowCards: Record<string, WorkflowCardPosition>;
+  workflowsHub: WorkflowsHubPosition | null;
   notes: Record<string, NotePosition>;
   expandedSessionIds: string[];
   outputs: Record<string, Output>;
@@ -45,6 +47,8 @@ const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   cards,
   viewCards,
   browserCards,
+  workflowCards,
+  workflowsHub,
   notes,
   expandedSessionIds,
   outputs,
@@ -170,7 +174,7 @@ const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                 // not be on disk yet. The export reads disk, flush the live
                 // layout now so Share captures the current board, not a stale one.
                 if (!dashboardId) return;
-                dispatch(saveLayout({ dashboardId, cards, viewCards, browserCards, notes, expandedSessionIds }));
+                dispatch(saveLayout({ dashboardId, cards, viewCards, browserCards, workflowCards, workflowsHub, notes, expandedSessionIds }));
               }}
             />
           </Box>

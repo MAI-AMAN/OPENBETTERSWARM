@@ -1,6 +1,6 @@
 import { AgentMessage } from '@/shared/state/agentsSlice';
 import { prettyPath, prettyUrl, quoteQuery, bashCommandDetail } from './toolLabels';
-import { parseMcpToolName, getMcpInputSummary, getGmailHeader } from '@/shared/mcpToolMeta';
+import { parseMcpToolName, getMcpInputSummary, getGmailHeader, getWorkflowToolInputDisplay } from '@/shared/mcpToolMeta';
 import { isSettingsWriteTool, isSettingsReadTool, settingsWriteSummary, settingsWriteDisplay } from './settingsToolMeta';
 
 export function getToolData(call: AgentMessage) {
@@ -25,7 +25,7 @@ export function getInputSummary(toolName: string, input: any): string {
     if (isSettingsReadTool(toolName)) return '';
 
     const mcp = parseMcpToolName(toolName);
-    if (mcp.isMcp) return getMcpInputSummary(input);
+    if (mcp.isMcp) return getMcpInputSummary(input, mcp.action, mcp.serverSlug);
 
     const n = toolName.toLowerCase();
     if (isBashTool(toolName)) {
@@ -72,7 +72,10 @@ export function formatInputDisplay(toolName: string, input: any): string {
     if (isSettingsReadTool(toolName)) return '';
 
     const mcp = parseMcpToolName(toolName);
-    if (mcp.isMcp) return formatMcpInputDisplay(input);
+    if (mcp.isMcp) {
+      const workflowDisplay = getWorkflowToolInputDisplay(input, mcp.action, mcp.serverSlug);
+      return workflowDisplay || formatMcpInputDisplay(input);
+    }
 
     const n = toolName.toLowerCase();
     if (isBashTool(toolName)) return input.command || '';

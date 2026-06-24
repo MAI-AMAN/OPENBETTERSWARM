@@ -68,6 +68,9 @@ export interface AgentSession {
   id: string;
   name: string;
   status: 'draft' | 'running' | 'waiting_approval' | 'completed' | 'error' | 'stopped';
+  /** For workflow Test Agent sessions: drives the test card's footer
+   *  (running -> red Force Stop; complete/error -> green close). */
+  workflow_test_state?: 'running' | 'complete' | 'error' | null;
   provider: string;
   model: string;
   mode: string;
@@ -409,6 +412,21 @@ export const updateSystemPrompt = createAsyncThunk(
   }
 );
 
+export const renameSession = createAsyncThunk(
+  'agents/rename',
+  async ({ sessionId, name }: { sessionId: string; name: string }, { dispatch }) => {
+    // Optimistic local update; the backend echoes the new name back over
+    // the agent:status broadcast, which keeps every open card in sync.
+    dispatch(updateSessionName({ sessionId, name }));
+    await fetch(`${AGENTS_API}/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    return { sessionId, name };
+  }
+);
+
 export const updateThinkingLevel = createAsyncThunk(
   'agents/updateThinkingLevel',
   async ({ sessionId, level }: { sessionId: string; level: 'off' | 'low' | 'medium' | 'high' | 'auto' }) => {
@@ -711,6 +729,14 @@ const agentsSlice = createSlice({
       if (action.payload.status === 'running' && !state.trackedNotificationIds.includes(action.payload.sessionId)) {
         state.trackedNotificationIds.push(action.payload.sessionId);
       }
+    },
+
+    setSessionTestState(
+      state,
+      action: PayloadAction<{ sessionId: string; state: 'running' | 'complete' | 'error' }>
+    ) {
+      const session = state.sessions[action.payload.sessionId];
+      if (session) session.workflow_test_state = action.payload.state;
     },
 
     setSessionConnState(
@@ -1018,11 +1044,18 @@ const agentsSlice = createSlice({
       }
     },
 
-    closeSessionFromWs(state, action: PayloadAction<HistorySession>) {
-      const entry = action.payload;
+    closeSessionFromWs(state, action: PayloadAction<HistorySession & { keepSession?: boolean }>) {
+      const { keepSession, ...entry } = action.payload;
       state.history[entry.id] = entry;
 
       const session = state.sessions[entry.id];
+      // keepSession: the user is watching this run live, so a workflow finishing
+      // shouldn't yank the chat out from under them. Keep it as a normal
+      // completed chat (continue / exit) instead of deleting the card.
+      if (keepSession && session) {
+        session.status = (entry.status as AgentSession['status']) || 'completed';
+        return;
+      }
       if (session?.mode === 'browser-agent' && session.parent_session_id) {
         session.status = (entry.status as AgentSession['status']) || 'completed';
       } else {
@@ -1436,6 +1469,7 @@ export const {
   updateSession,
   updateSessionStatus,
   setSessionConnState,
+  setSessionTestState,
   addMessage,
   addOptimisticMessage,
   markOptimisticFailed,

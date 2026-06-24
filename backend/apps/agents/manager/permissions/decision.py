@@ -72,6 +72,7 @@ async def request_user_approval(
     tool_input: object,
     builtin_perms: Dict[str, str],
     sensitive_pattern: Optional[str] = None,
+    timeout: float = 600.0,
 ) -> ApprovalDecision:
     """Send an approval request over WS and wait for the user's decision."""
     safe_input = tool_input if isinstance(tool_input, dict) else {}
@@ -98,6 +99,7 @@ async def request_user_approval(
     })
     decision = ApprovalDecision.model_validate(await ws_manager.send_approval_request(
         session_id, request_id, tool_name, safe_input,
+        timeout=timeout,
         sensitive_pattern=sensitive_pattern,
         sensitive_label=label,
         sensitive_why=why,

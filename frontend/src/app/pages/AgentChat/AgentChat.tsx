@@ -6,6 +6,8 @@ import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import TextField from '@mui/material/TextField';
 import ClickAwayListener from '@mui/material/ClickAwayListener';
+import Fade from '@mui/material/Fade';
+import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
 import CloseIcon from '@mui/icons-material/Close';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
@@ -17,7 +19,7 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import { useAppDispatch, useAppSelector } from '@/shared/hooks';
 import { friendlyStatusLabel } from '@/shared/statusLabel';
-import { openSettingsModal } from '@/shared/state/settingsSlice';
+import { openSettingsModal, dismissMcpSuggestion } from '@/shared/state/settingsSlice';
 import { API_BASE, getAuthToken } from '@/shared/config';
 import {
   sendMessage as sendMessageThunk,
@@ -31,6 +33,7 @@ import {
   duplicateSession,
   setActiveSession,
   updateSessionModel,
+  clearContextOverflow,
   updateSessionMode,
   updateSessionThinkingLevel,
   updateThinkingLevel,
@@ -55,13 +58,18 @@ import MessageActionBar from './shell/MessageActionBar';
 import ToolCallBubble, { ToolPair } from './tool-bubbles/ToolCallBubble';
 import ToolGroupBubble, { RenderItem, ToolGroup, isToolGroup, isToolPair } from './tool-bubbles/ToolGroupBubble';
 import ApprovalBar, { BatchApprovalBar } from './shell/ApprovalBar';
+import ForceStopAgentBar from './ForceStopAgentBar';
 import { RateLimitPill } from './shell/RateLimitPill';
 import ChatInput, { ChatInputHandle } from './ChatInput';
 import ContextDrawer from './shell/ContextDrawer';
 import { ErrorSlime } from '@/app/components/feedback/ErrorSlime';
 import { ContextPath } from '@/app/components/editor/DirectoryBrowser';
-import { setGlowingBrowserCards, fadeGlowingBrowserCards, clearGlowingBrowserCards } from '@/shared/state/dashboardLayoutSlice';
+import { setGlowingBrowserCards, fadeGlowingBrowserCards, clearGlowingBrowserCards, removeCard } from '@/shared/state/dashboardLayoutSlice';
+import type { WorkflowsRunContext } from '@/shared/state/dashboardLayoutSlice';
+import { setCardSidecar, commitDraft, updateWorkflowCard, controlWorkflowRun } from '@/shared/state/workflowsSlice';
+import { shallowEqual } from 'react-redux';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
+import { parseMcpToolName, getMcpInputSummary } from '@/shared/mcpToolMeta';
 
 const CONTEXT_WINDOWS: Record<string, number> = {
   'opus-4-8': 1_000_000,
@@ -232,6 +240,7 @@ interface QueuedMessage {
   attachedSkills?: Array<{ id: string; name: string; content: string }>;
   selectedBrowserIds?: string[];
   selectedAppIds?: string[];
+  attachedRunId?: string;
   selectedSettingIds?: string[];
 }
 
@@ -244,9 +253,23 @@ interface AgentChatProps {
   onDismissGlow?: () => void;
   initialContextPaths?: ContextPath[];
   onBranch?: (newSessionId: string) => void;
+  // Set when this chat is the workflow build/edit agent: the out-of-tokens card
+  // then warns that switching models here also changes the workflow's run model.
+  workflowEditId?: string;
+  // View-only transcript (e.g. the Run Monitor): renders messages + tool calls
+  // but no composer, so the session can't be typed into.
+  readOnly?: boolean;
+  // One-shot text to drop into the composer (e.g. a run attached as context).
+  prefillPrompt?: string;
+  // A workflow run attached as a removable context chip above the composer; while
+  // present, each send routes through onSendRunQuestion so the run's transcript
+  // rides along as hidden context for that turn.
+  runContext?: WorkflowsRunContext;
+  onClearRunContext?: () => void;
+  onSendRunQuestion?: (prompt: string, runId: string) => Promise<void>;
 }
 
-const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose, embedded, autoFocus, isGlowing, onDismissGlow, initialContextPaths, onBranch }) => {
+const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose, embedded, autoFocus, isGlowing, onDismissGlow, initialContextPaths, onBranch, workflowEditId, readOnly, prefillPrompt, runContext, onClearRunContext, onSendRunQuestion }) => {
   const c = useClaudeTokens();
   const STATUS_STYLES: Record<string, { color: string; bg: string }> = {
     running: { color: c.status.success, bg: c.status.successBg },
@@ -257,6 +280,40 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
   };
   const { id: routeId } = useParams<{ id: string }>();
   const id = sessionIdProp || routeId;
+  // A card linked as a workflow sidecar (Test Agent, or a watched run) swaps
+  // its composer for a Force Stop button: continuing the chat is meaningless,
+  // but killing the run is the common need. Once a Test Agent finishes, the
+  // button flips to a green "close" (see workflow_test_state + ForceStopAgentBar).
+  const linkedSidecar = useAppSelector((s) => {
+    const found = Object.values(s.workflows.openCards).find(
+      (cd) => cd.sidecarSessionId === id && (cd.sidecarKind === 'testing' || cd.sidecarKind === 'watching'),
+    );
+    return found
+      ? { workflowId: found.workflowId, runId: found.runId ?? null, kind: found.sidecarKind ?? null }
+      : null;
+  }, shallowEqual);
+  const linkedWorkflowId = linkedSidecar?.workflowId ?? null;
+  const isStoppableSidecar = !!linkedWorkflowId;
+  // A live workflow run being watched owns pause/resume from its workflow
+  // card, so the chat's own "Resume Agent Response" bubble is redundant and
+  // would go stale against the card's Resume. Suppress it for any workflow-run
+  // sidecar, not just the fragile exact "watching" value. Test-run sidecars
+  // keep their chat-level resume behavior.
+  const isWorkflowRunSidecar = useAppSelector((s) => {
+    if (!id) return false;
+    for (const cd of Object.values(s.workflows.openCards)) {
+      if (cd.sidecarSessionId !== id || cd.sidecarKind === 'testing') continue;
+      if (cd.runId) {
+        const run = (s.workflows.runs[cd.workflowId] || []).find((r) => r.id === cd.runId);
+        if (!run || run.session_id === id) return true;
+      }
+      if (cd.sidecarKind === 'watching' || cd.sidecarKind === 'viewing-completed' || cd.sidecarKind === 'viewing-error') return true;
+    }
+    return Object.values(s.workflows.runs).some((runs) =>
+      runs.some((r) => r.session_id === id && r.status === 'running'),
+    );
+  });
+  const testState = useAppSelector((s) => (id ? s.agents.sessions[id]?.workflow_test_state : null) ?? null);
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const session = useAppSelector((state) => (id ? state.agents.sessions[id] : undefined));
@@ -303,12 +360,29 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
   const [heightVersion, setHeightVersion] = useState(0);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [showResumeBubble, setShowResumeBubble] = useState(false);
+  useEffect(() => {
+    if (isWorkflowRunSidecar) setShowResumeBubble(false);
+  }, [isWorkflowRunSidecar]);
   const [awaitingResponse, setAwaitingResponse] = useState(false);
   const [preSendActivityLabel, setPreSendActivityLabel] = useState<string | null>(null);
   const [activatingMcp, setActivatingMcp] = useState<string | null>(null);
   const [activateError, setActivateError] = useState<string | null>(null);
+  // Holds the last non-empty suggestions so the docked banner's exit fade renders
+  // them instead of going blank the instant the array is cleared.
+  const mcpSnapshotRef = useRef<Array<{ id: string; title: string; description: string; reason?: string }>>([]);
   const [mode, setMode] = useState('agent');
   const [model, setModel] = useState('sonnet');
+  // Workflow build chat only: brief "this model now runs the workflow" notice
+  // when the user switches models, so the run-model change isn't silent.
+  const [workflowModelNotice, setWorkflowModelNotice] = useState<string | null>(null);
+  const workflowModelNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Read live in the stable handleSend/dispatchMessage closures without busting
+  // their memo (ChatInput leans on handleSend identity holding across renders).
+  const runContextRef = useRef(runContext);
+  runContextRef.current = runContext;
+  const onSendRunQuestionRef = useRef(onSendRunQuestion);
+  onSendRunQuestionRef.current = onSendRunQuestion;
 
   const wsRef = useRef<ReturnType<typeof createSessionWs> | null>(null);
   // Current status for the WS-cleanup closure (effect deps can't include it).
@@ -421,6 +495,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
           }
         }
       });
+    } else if (msg.attachedRunId && onSendRunQuestionRef.current) {
+      // Run-context question: the backend folds the run transcript into this one
+      // turn and echoes the user bubble + answer over WS, so no optimistic thunk.
+      onSendRunQuestionRef.current(msg.prompt, msg.attachedRunId).catch(() => setAwaitingResponse(false));
     } else {
       if (msg.selectedBrowserIds?.length) {
         dispatch(setGlowingBrowserCards({ browserIds: msg.selectedBrowserIds, sessionId: id, label: 'Use Browser' }));
@@ -461,7 +539,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
         didDispatchQueued = true;
       } else {
         if (curr === 'stopped') {
-          setShowResumeBubble(true);
+          setShowResumeBubble(!isWorkflowRunSidecar);
         }
       }
 
@@ -479,7 +557,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
     if (curr !== 'draft' && !didDispatchQueued) {
       setAwaitingResponse(false);
     }
-  }, [session?.status, mode, modesMap, id, isDraft, dispatch, dispatchMessage]);
+  }, [session?.status, mode, modesMap, id, isDraft, dispatch, dispatchMessage, isWorkflowRunSidecar]);
 
   // A reload remounts past the live running->stopped transition that first shows
   // the resume button, so re-derive it once from the persisted 'stopped' status
@@ -870,7 +948,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
     ) => {
       if (!id) return;
       scrollToBottom();
-      const msg: QueuedMessage = { prompt, images, contextPaths, forcedTools, attachedSkills, selectedBrowserIds, selectedAppIds, selectedSettingIds };
+      const msg: QueuedMessage = { prompt, images, contextPaths, forcedTools, attachedSkills, selectedBrowserIds, selectedAppIds, selectedSettingIds, attachedRunId: runContextRef.current?.runId };
       if (agentBusy) {
         messageQueueRef.current.push(msg);
         setQueueLength(messageQueueRef.current.length);
@@ -887,9 +965,16 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
   }, [id, isDraft, dispatch]);
 
   const handleModelChange = useCallback((newModel: string) => {
+    if (workflowEditId && newModel !== model) {
+      setWorkflowModelNotice(resolveModelLabel(newModel));
+      if (workflowModelNoticeTimer.current) clearTimeout(workflowModelNoticeTimer.current);
+      workflowModelNoticeTimer.current = setTimeout(() => setWorkflowModelNotice(null), 5000);
+    }
     setModel(newModel);
     if (id && !isDraft) dispatch(updateSessionModel({ sessionId: id, model: newModel }));
-  }, [id, isDraft, dispatch]);
+  }, [id, isDraft, dispatch, workflowEditId, model, resolveModelLabel]);
+
+  useEffect(() => () => { if (workflowModelNoticeTimer.current) clearTimeout(workflowModelNoticeTimer.current); }, []);
 
   const handleThinkingLevelChange = useCallback((level: 'off' | 'low' | 'medium' | 'high' | 'auto') => {
     if (!id) return;
@@ -907,8 +992,35 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
 
   const handleStop = useCallback(() => {
     if (!id) return;
+    // A watched live workflow run mirrors the workflow card's Stop: fully stop the
+    // run, not just pause the agent. Test Agent + plain chats stop the session.
+    if (linkedSidecar?.kind === 'watching' && linkedSidecar.runId) {
+      dispatch(controlWorkflowRun({ runId: linkedSidecar.runId, action: 'stop' }));
+      return;
+    }
     dispatch(stopAgent({ sessionId: id }));
-  }, [id, dispatch]);
+  }, [id, dispatch, linkedSidecar]);
+
+  // Finished Test Agent card: drop the tether + remove this card, and either
+  // commit the workflow draft (Save, same as the edit card's "save now") or
+  // leave the draft untouched so the user keeps editing.
+  const onTestContinueEditing = useCallback(() => {
+    if (linkedWorkflowId) dispatch(setCardSidecar({ workflowId: linkedWorkflowId, sessionId: null, kind: null }));
+    if (id) dispatch(removeCard(id));
+  }, [linkedWorkflowId, id, dispatch]);
+
+  const onTestSaveWorkflow = useCallback(async () => {
+    if (linkedWorkflowId) {
+      try {
+        await dispatch(commitDraft(linkedWorkflowId)).unwrap();
+      } catch {
+        return;
+      }
+      dispatch(updateWorkflowCard({ workflowId: linkedWorkflowId, patch: { view: 'saved' } }));
+      dispatch(setCardSidecar({ workflowId: linkedWorkflowId, sessionId: null, kind: null }));
+    }
+    if (id) dispatch(removeCard(id));
+  }, [linkedWorkflowId, id, dispatch]);
 
   const handleResume = useCallback(() => {
     if (!id) return;
@@ -1272,7 +1384,9 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
           const c = p.call.content;
           const tool = typeof c === 'object' ? c.tool || '' : '';
           const input = typeof c === 'object' ? c.input : '';
-          const summary = typeof input === 'string' ? input.slice(0, 120) : JSON.stringify(input).slice(0, 120);
+          const mcp = parseMcpToolName(tool);
+          const friendly = mcp.isMcp ? getMcpInputSummary(input, mcp.action, mcp.serverSlug) : '';
+          const summary = friendly || (typeof input === 'string' ? input.slice(0, 120) : JSON.stringify(input).slice(0, 120));
           return { tool, input_summary: summary };
         });
         dispatch(generateGroupMeta({ sessionId: id, groupId: group.id, toolCalls }));
@@ -1284,7 +1398,9 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
           const c = p.call.content;
           const tool = typeof c === 'object' ? c.tool || '' : '';
           const input = typeof c === 'object' ? c.input : '';
-          const summary = typeof input === 'string' ? input.slice(0, 120) : JSON.stringify(input).slice(0, 120);
+          const mcp = parseMcpToolName(tool);
+          const friendly = mcp.isMcp ? getMcpInputSummary(input, mcp.action, mcp.serverSlug) : '';
+          const summary = friendly || (typeof input === 'string' ? input.slice(0, 120) : JSON.stringify(input).slice(0, 120));
           return { tool, input_summary: summary };
         });
         const resultsSummary = group.pairs
@@ -1547,10 +1663,18 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
             {session.context_overflow && (() => {
               const reason = session.context_overflow.reason;
               const isAuth = reason === 'openswarm_pro_auth_expired' || reason === 'anthropic_auth_invalid' || reason === 'auth_error';
-              const title = isAuth ? 'Sign-in required' : 'Context full';
-              const primaryLabel = isAuth ? 'Open Settings' : 'Start a fresh chat';
+              const isOutOfTokens = reason === 'out_of_tokens';
+              const title = isOutOfTokens ? 'Out of tokens' : isAuth ? 'Sign-in required' : 'Context full';
+              const primaryLabel = isOutOfTokens ? 'Got it' : isAuth ? 'Open Settings' : 'Start a fresh chat';
+              // In the workflow build chat, switching models here also sets the
+              // workflow's scheduled run model, so spell that consequence out.
+              const message = isOutOfTokens && workflowEditId
+                ? `${session.context_overflow.message} Whichever model you switch to here becomes the model this workflow runs on.`
+                : session.context_overflow.message;
               const onPrimary = () => {
-                if (isAuth) {
+                if (isOutOfTokens) {
+                  if (id) dispatch(clearContextOverflow({ sessionId: id }));
+                } else if (isAuth) {
                   dispatch(openSettingsModal('models'));
                 } else {
                   const did = session?.dashboard_id;
@@ -1570,7 +1694,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
                     {title}
                   </Typography>
                   <Typography variant="caption" sx={{ color: c.text.secondary, display: 'block', mb: 1.25 }}>
-                    {session.context_overflow.message}
+                    {message}
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1 }}>
                     <Typography
@@ -1815,7 +1939,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
                 />
               </Box>
             )}
-            {showResumeBubble && session.status === 'stopped' && (
+            {showResumeBubble && session.status === 'stopped' && !isWorkflowRunSidecar && !readOnly && (
               <Box sx={{ display: 'flex', justifyContent: 'flex-start', my: 0.75 }}>
                 <Box
                   onClick={handleResume}
@@ -2153,24 +2277,163 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
                   </Box>
                 );
               })()}
-              <ChatInput
-                ref={chatInputRef}
-                onSend={handleSend}
-                disabled={false}
-                mode={mode}
-                onModeChange={handleModeChange}
-                model={model}
-                onModelChange={handleModelChange}
-                isRunning={agentBusy}
-                onStop={handleStop}
-                queueLength={queueLength}
-                contextEstimate={contextEstimate}
-                sessionId={id}
-                autoFocus={autoFocus}
-                thinkingLevel={session?.thinking_level ?? 'auto'}
-                onThinkingLevelChange={handleThinkingLevelChange}
-                onActivityLabelChange={setPreSendActivityLabel}
-              />
+              {(() => {
+                const list = session.mcp_suggestions ?? [];
+                if (list.length) mcpSnapshotRef.current = list;
+                const display = mcpSnapshotRef.current;
+                return (
+                  <Fade in={list.length > 0} timeout={{ enter: 200, exit: 220 }} unmountOnExit>
+                    <Box sx={{
+                      mx: 2,
+                      mb: 1,
+                      p: 1.5,
+                      borderRadius: 1.5,
+                      border: `1px solid ${c.border.medium}`,
+                      bgcolor: c.bg.secondary,
+                      position: 'relative',
+                    }}>
+                      <Box
+                        role="button"
+                        aria-label="Dismiss integration suggestion"
+                        onClick={() => {
+                          if (!id) return;
+                          dispatch(clearMcpSuggestions({ sessionId: id }));
+                          dispatch(dismissMcpSuggestion(display.map((s) => s.id)));
+                        }}
+                        sx={{
+                          position: 'absolute',
+                          top: 6,
+                          right: 8,
+                          width: 20,
+                          height: 20,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '1rem',
+                          lineHeight: 1,
+                          color: c.text.muted,
+                          cursor: 'pointer',
+                          borderRadius: 0.75,
+                          '&:hover': { color: c.text.primary, bgcolor: c.bg.elevated },
+                        }}
+                      >
+                        ×
+                      </Box>
+                      <Typography variant="body2" sx={{ color: c.text.primary, fontWeight: 500, mb: 0.5, pr: 3 }}>
+                        Looks like this might need an integration
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: c.text.secondary, display: 'block', mb: 1 }}>
+                        Activating one of these will let the agent answer in a single round-trip.
+                      </Typography>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                        {display.map((s) => (
+                          <Box key={s.id} sx={{ flexBasis: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="caption" sx={{ color: c.text.primary, fontWeight: 500 }}>
+                                {s.title}
+                              </Typography>
+                              {s.reason && (
+                                <Typography variant="caption" sx={{ display: 'block', color: c.text.tertiary }}>
+                                  {s.reason}
+                                </Typography>
+                              )}
+                            </Box>
+                            <Typography
+                              component="button"
+                              variant="caption"
+                              disabled={activatingMcp === s.id}
+                              onClick={async () => {
+                                if (activatingMcp) return;
+                                setActivateError(null);
+                                setActivatingMcp(s.id);
+                                try {
+                                  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                                  const tok = (() => { try { return getAuthToken(); } catch { return ''; } })();
+                                  if (tok) headers['Authorization'] = `Bearer ${tok}`;
+                                  const r = await fetch(`${API_BASE}/mcp-meta/activate`, {
+                                    method: 'POST',
+                                    headers,
+                                    body: JSON.stringify({
+                                      server_name: s.id.toLowerCase().replace(/\s+/g, '-'),
+                                      reason: s.reason || 'preflight suggestion',
+                                      parent_session_id: session.id,
+                                    }),
+                                  });
+                                  const body = await r.json().catch(() => ({} as any));
+                                  if (!r.ok) {
+                                    setActivateError(`Activation failed (${r.status})`);
+                                  } else if (body?.status === 'unknown_server') {
+                                    // Not yet connected; jump straight to Actions
+                                    // so the user can finish OAuth. Nothing here
+                                    // can do it on their behalf.
+                                    navigate('/actions');
+                                  } else if (id) {
+                                    // Activation succeeded; clear the banner so the user
+                                    // gets visual confirmation the click did something.
+                                    dispatch(clearMcpSuggestions({ sessionId: id }));
+                                  }
+                                } catch (e: any) {
+                                  setActivateError(e?.message || 'Activation failed');
+                                } finally {
+                                  setActivatingMcp(null);
+                                }
+                              }}
+                              sx={{
+                                cursor: activatingMcp === s.id ? 'wait' : 'pointer',
+                                border: `1px solid ${c.border.medium}`,
+                                borderRadius: 1,
+                                px: 1.25,
+                                py: 0.5,
+                                bgcolor: 'transparent',
+                                color: c.text.primary,
+                                opacity: activatingMcp === s.id ? 0.5 : 1,
+                                '&:hover': { bgcolor: activatingMcp ? 'transparent' : c.bg.elevated },
+                                flexShrink: 0,
+                              }}
+                            >
+                              {activatingMcp === s.id ? 'Activating…' : 'Activate'}
+                            </Typography>
+                          </Box>
+                        ))}
+                      </Box>
+                      {activateError && (
+                        <Typography variant="caption" sx={{ display: 'block', mt: 0.75, color: c.status.error }}>
+                          {activateError}
+                        </Typography>
+                      )}
+                    </Box>
+                  </Fade>
+                );
+              })()}
+              {readOnly ? null : isStoppableSidecar ? (
+                <ForceStopAgentBar onStop={handleStop} onSaveWorkflow={onTestSaveWorkflow} onContinueEditing={onTestContinueEditing} testState={testState} />
+              ) : (
+                <Box sx={{ position: 'relative' }}>
+                  <WorkflowModelNotice c={c} label={workflowModelNotice} />
+                  <ChatInput
+                  ref={chatInputRef}
+                  onSend={handleSend}
+                  disabled={false}
+                  mode={mode}
+                  onModeChange={handleModeChange}
+                  model={model}
+                  onModelChange={handleModelChange}
+                  isRunning={agentBusy}
+                  onStop={handleStop}
+                  queueLength={queueLength}
+                  contextEstimate={contextEstimate}
+                  sessionId={id}
+                  autoFocus={autoFocus}
+                  prefillPrompt={prefillPrompt}
+                  placeholderOverride={runContext ? 'Ask about this run...' : undefined}
+                  runContext={runContext}
+                  onClearRunContext={onClearRunContext}
+                  thinkingLevel={session?.thinking_level ?? 'auto'}
+                  onThinkingLevelChange={handleThinkingLevelChange}
+                  onActivityLabelChange={setPreSendActivityLabel}
+                  />
+                </Box>
+              )}
             </Box>
           </ClickAwayListener>
         )}
@@ -2178,5 +2441,31 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
     </Box>
   );
 };
+
+// Brief toast above the build chat's composer confirming a model switch also
+// changes the model the scheduled workflow will run on. Holds the last label in
+// a ref so the exit fade renders content instead of blanking mid-animation.
+function WorkflowModelNotice({ c, label }: { c: ReturnType<typeof useClaudeTokens>; label: string | null }) {
+  const last = React.useRef<string | null>(null);
+  if (label) last.current = label;
+  const display = last.current;
+  if (!display) return null;
+  return (
+    <Fade in={!!label} timeout={{ enter: 200, exit: 220 }} unmountOnExit>
+      <Box sx={{
+        position: 'absolute', left: 8, right: 8, bottom: 'calc(100% + 8px)',
+        display: 'flex', alignItems: 'center', gap: 1,
+        bgcolor: c.bg.surface, border: `1px solid ${c.border.medium}`,
+        boxShadow: c.shadow.md, borderRadius: '12px',
+        px: 1.75, py: 1, zIndex: 6,
+      }}>
+        <SwapHorizRoundedIcon sx={{ fontSize: 17, color: c.accent.primary, flexShrink: 0 }} />
+        <Box sx={{ fontSize: '0.83rem', color: c.text.primary, lineHeight: 1.4 }}>
+          This workflow will now be using <b>{display}</b>.
+        </Box>
+      </Box>
+    </Fade>
+  );
+}
 
 export default AgentChat;

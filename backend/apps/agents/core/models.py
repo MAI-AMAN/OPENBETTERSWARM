@@ -123,6 +123,7 @@ class AgentSession(BaseModel):
     dashboard_id: Optional[str] = None
     browser_id: Optional[str] = None
     parent_session_id: Optional[str] = None
+    workflow_test_state: Optional[Literal["running", "complete", "error"]] = None
     # Browser memory signals, drive the subtle "remembered/learned" card chip so
     # the user feels the agent getting smarter without lifting a finger.
     memory_recalled: bool = False

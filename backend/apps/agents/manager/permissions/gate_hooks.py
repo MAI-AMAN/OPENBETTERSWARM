@@ -22,6 +22,11 @@ from backend.apps.agents.manager.prompt.prompt_context import (
     toolsearch_loop_redirect,
 )
 from backend.apps.agents.manager.streaming.HookContext import HookContext
+from backend.apps.agents.manager.permissions.workflow_approval import (
+    p_is_claude_schedule_skill,
+    p_note_tool_used,
+    p_resolve_ask,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,19 +35,24 @@ logger = logging.getLogger(__name__)
 async def can_use_tool(
     ctx: HookContext, tool_name: str, input_data: object, context: object
 ) -> Union[PermissionResultAllow, PermissionResultDeny]:
+    if p_is_claude_schedule_skill(tool_name, input_data):
+        p_note_tool_used(ctx.session_id, tool_name, False)
+        return PermissionResultDeny(
+            message="Use the openswarm-schedule MCP tools instead of Claude's internal schedule skill."
+        )
     sensitive_pattern: Optional[str] = None
     if tool_name != "AskUserQuestion":
         policy, sensitive_pattern = path_gate.maybe_override_policy(
             effective_policy(tool_name, ctx.builtin_perms, ctx.policy_defaults), tool_name, input_data
         )
         if policy == "always_allow":
+            p_note_tool_used(ctx.session_id, tool_name, True)
             return PermissionResultAllow(updated_input=input_data)
         if policy == "deny":
+            p_note_tool_used(ctx.session_id, tool_name, False)
             return PermissionResultDeny(message="Tool denied by permission policy")
 
-    decision = await request_user_approval(
-        ctx.session, ctx.session_id, tool_name, input_data, ctx.builtin_perms, sensitive_pattern=sensitive_pattern
-    )
+    decision = await p_resolve_ask(ctx, tool_name, input_data, sensitive_pattern)
     if decision.behavior == "allow":
         return PermissionResultAllow(
             updated_input=decision.updated_input if decision.updated_input is not None else input_data
@@ -126,11 +136,24 @@ async def pre_tool_hook(ctx: HookContext, input_data: dict, tool_use_id: Optiona
 
     if tool_name and tool_name != "AskUserQuestion":
         tool_input = input_data.get("tool_input", {})
+        if p_is_claude_schedule_skill(tool_name, tool_input):
+            p_note_tool_used(ctx.session_id, tool_name, False)
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": hook_event,
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Use the openswarm-schedule MCP tools instead of Claude's internal schedule skill.",
+                }
+            }
         policy, sensitive_pattern = path_gate.maybe_override_policy(
             effective_policy(tool_name, ctx.builtin_perms, ctx.policy_defaults), tool_name, tool_input
         )
 
+        if policy == "always_allow":
+            p_note_tool_used(ctx.session_id, tool_name, True)
+
         if policy == "deny":
+            p_note_tool_used(ctx.session_id, tool_name, False)
             return {
                 "hookSpecificOutput": {
                     "hookEventName": hook_event,
@@ -140,9 +163,7 @@ async def pre_tool_hook(ctx: HookContext, input_data: dict, tool_use_id: Optiona
             }
 
         if policy == "ask":
-            decision = await request_user_approval(
-                ctx.session, ctx.session_id, tool_name, tool_input, ctx.builtin_perms, sensitive_pattern=sensitive_pattern
-            )
+            decision = await p_resolve_ask(ctx, tool_name, tool_input, sensitive_pattern)
 
             if decision.behavior == "allow":
                 if tool_use_id:
