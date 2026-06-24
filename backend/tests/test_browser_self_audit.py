@@ -71,10 +71,10 @@ def test_audit_fires_every_n_finished_tasks(monkeypatch, tmp_path):
 
     class p_SyncThread:
         def __init__(self, target=None, **kw):
-            self._t = target
+            self.p_t = target
 
         def start(self):
-            self._t()
+            self.p_t()
     monkeypatch.setattr(m.threading, "Thread", p_SyncThread)
 
     log = [{"tool": "BrowserClickIndex", "elapsed_ms": 5, "result_summary": "ok"}]

@@ -41,10 +41,10 @@ def p_created_with() -> str:
 
 class p_Ctx:
     def __init__(self, local_to_bundle: dict[tuple, str]):
-        self._m = local_to_bundle
+        self.p_m = local_to_bundle
 
     def bundle_id_for(self, etype: EntityType, local_id: str) -> str | None:
-        return self._m.get((etype, local_id))
+        return self.p_m.get((etype, local_id))
 
 
 # ---------- export ----------

@@ -19,7 +19,7 @@ class ModeExportable:
     def __init__(self, mode_id: str, name: str, data: dict):
         self.local_id = mode_id
         self.name = name
-        self._data = data
+        self.p_data = data
 
     @classmethod
     def load(cls, local_id: str) -> "ModeExportable | None":
@@ -33,7 +33,7 @@ class ModeExportable:
         return cls(local_id, d.get("name") or local_id, d)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return {k: v for k, v in self._data.items() if k not in P_DROP}
+        return {k: v for k, v in self.p_data.items() if k not in P_DROP}
 
     def files(self) -> dict[str, bytes]:
         return {}

@@ -28,7 +28,7 @@ class p_FakeResp:
 class p_FakeClient:
     """Stands in for httpx.AsyncClient; returns a canned response."""
     def __init__(self, resp: p_FakeResp):
-        self._resp = resp
+        self.p_resp = resp
 
     async def __aenter__(self):
         return self
@@ -37,7 +37,7 @@ class p_FakeClient:
         return False
 
     async def post(self, *a, **k):
-        return self._resp
+        return self.p_resp
 
 
 def p_patch_client(monkeypatch, resp: p_FakeResp):

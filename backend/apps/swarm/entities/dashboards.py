@@ -19,7 +19,7 @@ class DashboardExportable:
     def __init__(self, did: str, name: str, data: dict):
         self.local_id = did
         self.name = name
-        self._data = data
+        self.p_data = data
 
     @classmethod
     def load(cls, local_id: str) -> "DashboardExportable | None":
@@ -29,7 +29,7 @@ class DashboardExportable:
         return cls(local_id, data.get("name") or "Dashboard", data)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        layout = dict(self._data.get("layout") or {})
+        layout = dict(self.p_data.get("layout") or {})
         cards = {}
         for sid, card in (layout.get("cards") or {}).items():
             bid = ctx.bundle_id_for(EntityType.session, sid)
@@ -53,7 +53,7 @@ class DashboardExportable:
             c["spawned_by"] = ctx.bundle_id_for(EntityType.session, spawn) if spawn else None
             browser_cards[bkey] = c
         expanded = [b for b in (ctx.bundle_id_for(EntityType.session, s) for s in (layout.get("expanded_session_ids") or [])) if b]
-        return {"name": self._data.get("name") or "Dashboard", "layout": {
+        return {"name": self.p_data.get("name") or "Dashboard", "layout": {
             **layout, "cards": cards, "view_cards": view_cards,
             "browser_cards": browser_cards, "notes": layout.get("notes") or {},
             "expanded_session_ids": expanded,
@@ -63,7 +63,7 @@ class DashboardExportable:
         return {}
 
     def dependencies(self) -> list[DepRef]:
-        layout = self._data.get("layout") or {}
+        layout = self.p_data.get("layout") or {}
         deps = [DepRef(EntityType.session, sid, "has_agent") for sid in (layout.get("cards") or {})]
         deps += [DepRef(EntityType.app, oid, "has_app") for oid in (layout.get("view_cards") or {})]
         return deps

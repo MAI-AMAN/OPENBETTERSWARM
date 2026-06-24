@@ -32,7 +32,7 @@ class SessionExportable:
     def __init__(self, sid: str, name: str, data: dict):
         self.local_id = sid
         self.name = name
-        self._data = data
+        self.p_data = data
 
     @classmethod
     def load(cls, local_id: str) -> "SessionExportable | None":
@@ -52,31 +52,31 @@ class SessionExportable:
         return cls(local_id, d.get("name") or "Agent", d)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return {k: self._data.get(k) for k in P_KEEP if k in self._data}
+        return {k: self.p_data.get(k) for k in P_KEEP if k in self.p_data}
 
     def files(self) -> dict[str, bytes]:
         return {}
 
     def dependencies(self) -> list[DepRef]:
-        mode = self._data.get("mode")
+        mode = self.p_data.get("mode")
         if mode and mode not in P_BUILTIN_MODES:
             return [DepRef(EntityType.mode, mode, "uses_mode")]
         return []
 
     def requirements(self) -> list[Requirement]:
         reqs: list[Requirement] = []
-        for mcp in self._data.get("active_mcps") or []:
+        for mcp in self.p_data.get("active_mcps") or []:
             reqs.append(Requirement(
                 kind=RequirementKind.mcp_action, key=mcp, label=mcp,
                 detail="An agent here uses this action.",
             ))
-        mode = self._data.get("mode") or "agent"
+        mode = self.p_data.get("mode") or "agent"
         if mode in P_BUILTIN_MODES and mode != "agent":
             reqs.append(Requirement(
                 kind=RequirementKind.builtin_mode, key=mode, label=f"{mode} mode",
                 detail="A built-in mode an agent runs in.",
             ))
-        provider = self._data.get("provider") or "anthropic"
+        provider = self.p_data.get("provider") or "anthropic"
         reqs.append(Requirement(
             kind=RequirementKind.api_key, key=provider, label=f"A {provider} model",
             detail="Set up this provider so the agents can run.",

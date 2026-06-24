@@ -48,7 +48,7 @@ class WorkflowExportable:
     def __init__(self, local_id: str, name: str, data: dict):
         self.local_id = local_id
         self.name = name
-        self._data = data
+        self.p_data = data
 
     @classmethod
     def load(cls, local_id: str) -> "WorkflowExportable | None":
@@ -62,7 +62,7 @@ class WorkflowExportable:
         return cls(local_id, data.get("title") or "Untitled workflow", data)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return sanitize_workflow(self._data)
+        return sanitize_workflow(self.p_data)
 
     def files(self) -> dict[str, bytes]:
         return {}
@@ -72,18 +72,18 @@ class WorkflowExportable:
 
     def requirements(self) -> list[Requirement]:
         reqs: list[Requirement] = []
-        for name in (self._data.get("actions") or {}).get("configured_sets") or []:
+        for name in (self.p_data.get("actions") or {}).get("configured_sets") or []:
             reqs.append(Requirement(
                 kind=RequirementKind.mcp_action, key=name, label=name,
                 detail="This workflow uses this action.",
             ))
-        mode = self._data.get("mode") or "agent"
+        mode = self.p_data.get("mode") or "agent"
         if mode in P_BUILTIN_MODES and mode != "agent":
             reqs.append(Requirement(
                 kind=RequirementKind.builtin_mode, key=mode, label=f"{mode} mode",
                 detail="A built-in mode this workflow runs in.",
             ))
-        provider = self._data.get("provider") or "anthropic"
+        provider = self.p_data.get("provider") or "anthropic"
         reqs.append(Requirement(
             kind=RequirementKind.api_key, key=provider, label=f"A {provider} model",
             detail="Set up this provider to run the workflow.",

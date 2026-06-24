@@ -20,16 +20,16 @@ class p_FakeClient:
     """Minimal Anthropic-shaped client: client.messages.create(...)."""
 
     def __init__(self, resp=None, raise_exc=None):
-        self._resp = resp
-        self._raise = raise_exc
+        self.p_resp = resp
+        self.p_raise = raise_exc
         self.calls = []
         self.messages = self
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)
-        if self._raise:
-            raise self._raise
-        return self._resp
+        if self.p_raise:
+            raise self.p_raise
+        return self.p_resp
 
 
 def test_returns_extracted_guidance_and_assembles_prompt():

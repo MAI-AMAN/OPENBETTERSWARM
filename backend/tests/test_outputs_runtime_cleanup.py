@@ -146,7 +146,7 @@ async def test_stop_all_kills_active():
             await asyncio.sleep(0.05)
         else:
             raise AssertionError(f"port {port} not released after stop_all")
-        assert not m.runtimes and not m._idle_lru, "manager should be empty after stop_all"
+        assert not m.runtimes and not m.idle_lru, "manager should be empty after stop_all"
     print("PASS test_stop_all_kills_active")
 
 
@@ -161,7 +161,7 @@ async def test_stop_all_kills_idle():
         # Detach -> moves into LRU + SIGSTOP'd. If stop_all forgets to
         # SIGCONT before SIGTERM, the kill queues and the process hangs.
         await m.detach("ws-idle")
-        assert "ws-idle" in m._idle_lru, "should be in idle LRU"
+        assert "ws-idle" in m.idle_lru, "should be in idle LRU"
         # Confirm the process is suspended (T state on Linux, T on darwin).
         # Skip the OS check; just rely on the eventual kill working.
         killed = await m.stop_all()

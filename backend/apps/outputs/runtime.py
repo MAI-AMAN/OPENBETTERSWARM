@@ -85,15 +85,15 @@ class AppRuntime:
         # _start_new_mode). frontend_url returns null until this flips,
         # so the preview pane doesn't try to navigate to an unbound port
         # and show a "Site can't be reached" error mid-npm-install.
-        self._frontend_ready: bool = False
+        self.p_frontend_ready: bool = False
         # True while the process tree is SIGSTOP'd in the idle pool. A frozen
         # vite still holds its port but can't answer it, so frontend_url must
         # stay null while suspended (else the webview loads a dead port = the
         # ERR_FAILED on fast app-switching).
-        self._suspended: bool = False
+        self.p_suspended: bool = False
         self.process: Optional[asyncio.subprocess.Process] = None
         self.log_buffer: deque[LogLine] = deque(maxlen=LOG_BUFFER_LINES)
-        self._subscribers: set[LogSubscriber] = set()
+        self.p_subscribers: set[LogSubscriber] = set()
         # Recent build/runtime errors scraped from stderr; drained by
         # the agent's post-tool hook after Write/Edit so the agent sees
         # vite/babel/uvicorn errors in its next turn and can self-fix
@@ -101,10 +101,10 @@ class AppRuntime:
         self.recent_errors: deque[str] = deque(maxlen=RECENT_ERRORS_MAX)
         self.render_state: Optional[str] = None
         self.render_error_text: str = ""
-        self._stdout_task: Optional[asyncio.Task] = None
-        self._stderr_task: Optional[asyncio.Task] = None
-        self._wait_task: Optional[asyncio.Task] = None
-        self._frontend_ready_task: Optional[asyncio.Task] = None
+        self.p_stdout_task: Optional[asyncio.Task] = None
+        self.p_stderr_task: Optional[asyncio.Task] = None
+        self.p_wait_task: Optional[asyncio.Task] = None
+        self.p_frontend_ready_task: Optional[asyncio.Task] = None
         self.p_lock = asyncio.Lock()
 
     def drain_errors(self) -> list[str]:
@@ -151,7 +151,7 @@ class AppRuntime:
         # the ERR_FAILED you see on reopen. No live process, no URL.
         # And gated on `not _suspended`: a SIGSTOP'd idle runtime is "running"
         # (returncode is None) but frozen, so its port won't answer.
-        if self.frontend_port and self._frontend_ready and self.running and not self._suspended:
+        if self.frontend_port and self.p_frontend_ready and self.running and not self.p_suspended:
             return f"http://127.0.0.1:{self.frontend_port}/"
         return None
 
@@ -283,13 +283,13 @@ class AppRuntime:
             return False
         backend_note = f" + backend on {self.port}" if self.port else ""
         self._broadcast(LogLine("runtime", f"[runtime] {launch_desc} started; frontend on {self.frontend_port}{backend_note} (pid {self.process.pid})"))
-        self._stdout_task = asyncio.create_task(self._pipe_stream(self.process.stdout, "stdout"))
-        self._stderr_task = asyncio.create_task(self._pipe_stream(self.process.stderr, "stderr"))
-        self._wait_task = asyncio.create_task(self._await_exit())
+        self.p_stdout_task = asyncio.create_task(self._pipe_stream(self.process.stdout, "stdout"))
+        self.p_stderr_task = asyncio.create_task(self._pipe_stream(self.process.stderr, "stderr"))
+        self.p_wait_task = asyncio.create_task(self._await_exit())
         # Kick off the port-bind poller so frontend_url flips on once
         # Vite is actually accepting connections.
-        self._frontend_ready = False
-        self._frontend_ready_task = asyncio.create_task(self._await_frontend_bind())
+        self.p_frontend_ready = False
+        self.p_frontend_ready_task = asyncio.create_task(self._await_frontend_bind())
         return True
 
     def _resolve_launch(self, env: dict) -> tuple[list[str], str, str]:
@@ -368,7 +368,7 @@ class AppRuntime:
                         await writer.wait_closed()
                     except Exception:
                         pass
-                    self._frontend_ready = True
+                    self.p_frontend_ready = True
                     self._broadcast(LogLine(
                         "runtime",
                         f"[runtime] frontend ready at http://127.0.0.1:{port}/",
@@ -424,9 +424,9 @@ class AppRuntime:
             self.process = None
             return False
         self._broadcast(LogLine("runtime", f"[runtime] backend started on port {self.port} (pid {self.process.pid})"))
-        self._stdout_task = asyncio.create_task(self._pipe_stream(self.process.stdout, "stdout"))
-        self._stderr_task = asyncio.create_task(self._pipe_stream(self.process.stderr, "stderr"))
-        self._wait_task = asyncio.create_task(self._await_exit())
+        self.p_stdout_task = asyncio.create_task(self._pipe_stream(self.process.stdout, "stdout"))
+        self.p_stderr_task = asyncio.create_task(self._pipe_stream(self.process.stderr, "stderr"))
+        self.p_wait_task = asyncio.create_task(self._await_exit())
         return True
 
     def _spawn_env_base(self) -> dict[str, str]:
@@ -448,8 +448,8 @@ class AppRuntime:
             if not self.process or self.process.returncode is not None:
                 # Still cancel the bind poller in case stop() races a
                 # never-launched runtime; defensive no-op otherwise.
-                if self._frontend_ready_task and not self._frontend_ready_task.done():
-                    self._frontend_ready_task.cancel()
+                if self.p_frontend_ready_task and not self.p_frontend_ready_task.done():
+                    self.p_frontend_ready_task.cancel()
                 return
             try:
                 # Walk the descendant tree first so vite/uvicorn grandchildren
@@ -468,9 +468,9 @@ class AppRuntime:
                 pass
             # Cancel the bind poller so it stops scanning a port that's
             # gone away, and reset the readiness flag.
-            if self._frontend_ready_task and not self._frontend_ready_task.done():
-                self._frontend_ready_task.cancel()
-            self._frontend_ready = False
+            if self.p_frontend_ready_task and not self.p_frontend_ready_task.done():
+                self.p_frontend_ready_task.cancel()
+            self.p_frontend_ready = False
 
     async def restart(self) -> bool:
         await self.stop()
@@ -480,7 +480,7 @@ class AppRuntime:
         """Register a log subscriber. Immediately replays the ring buffer
         so a Terminal pane that opens mid-session shows context. Returns
         an unsubscribe function."""
-        self._subscribers.add(cb)
+        self.p_subscribers.add(cb)
         for line in list(self.log_buffer):
             try:
                 cb(line)
@@ -488,14 +488,14 @@ class AppRuntime:
                 pass
 
         def p_unsub() -> None:
-            self._subscribers.discard(cb)
+            self.p_subscribers.discard(cb)
 
         return p_unsub
 
     def _broadcast(self, line: LogLine) -> None:
         self.log_buffer.append(line)
         # Snapshot subscribers; they can self-remove during dispatch.
-        for cb in list(self._subscribers):
+        for cb in list(self.p_subscribers):
             try:
                 cb(line)
             except Exception:
@@ -536,7 +536,7 @@ class AppRuntime:
         # Unclean death (vite crash, OOM, orphaned parent) must drop readiness;
         # otherwise frontend_url keeps advertising a dead port and the preview
         # navigates into ERR_FAILED. stop() already does this for clean stops.
-        self._frontend_ready = False
+        self.p_frontend_ready = False
         self._broadcast(LogLine("runtime", f"[runtime] backend exited with code {rc}"))
 
 
@@ -553,11 +553,11 @@ class AppRuntimeManager:
     def __init__(self) -> None:
         # workspace_id → AppRuntime, currently has >=1 subscriber.
         self.runtimes: dict[str, AppRuntime] = {}
-        self._attached: dict[str, int] = {}
+        self.p_attached: dict[str, int] = {}
         # workspace_id → AppRuntime with no subscribers but still
         # alive. OrderedDict gives O(1) move_to_end + popitem(last=False)
         # for LRU semantics.
-        self._idle_lru: "OrderedDict[str, AppRuntime]" = OrderedDict()
+        self.idle_lru: "OrderedDict[str, AppRuntime]" = OrderedDict()
         self.p_lock = asyncio.Lock()
 
     async def attach(self, workspace_id: str, workspace_path: str) -> AppRuntime:
@@ -571,7 +571,7 @@ class AppRuntimeManager:
             if rt is None:
                 # Maybe the runtime is sitting idle in the LRU; revive
                 # it without paying the spawn cost again.
-                idle_rt = self._idle_lru.pop(workspace_id, None)
+                idle_rt = self.idle_lru.pop(workspace_id, None)
                 if idle_rt is not None and idle_rt.running:
                     rt = idle_rt
                     rt.workspace_path = workspace_path
@@ -580,7 +580,7 @@ class AppRuntimeManager:
                     # SIGCONT the process tree if A2 had it paused while
                     # idle. Pair with the SIGSTOP in detach() below.
                     resume_process_tree(rt.process)
-                    rt._suspended = False
+                    rt.p_suspended = False
                 else:
                     if idle_rt is not None:
                         # Stale idle entry; process died while idling.
@@ -595,7 +595,7 @@ class AppRuntimeManager:
                 # folder), trust the latest caller; they have the
                 # current truth.
                 rt.workspace_path = workspace_path
-            self._attached[workspace_id] = self._attached.get(workspace_id, 0) + 1
+            self.p_attached[workspace_id] = self.p_attached.get(workspace_id, 0) + 1
         if not revived and not rt.running:
             await rt.start()
         # Stop any dead idle runtime outside the lock to avoid blocking.
@@ -610,11 +610,11 @@ class AppRuntimeManager:
         to_idle: Optional[AppRuntime] = None
         to_reap: list[AppRuntime] = []
         async with self.p_lock:
-            count = self._attached.get(workspace_id, 0) - 1
+            count = self.p_attached.get(workspace_id, 0) - 1
             if count > 0:
-                self._attached[workspace_id] = count
+                self.p_attached[workspace_id] = count
                 return
-            self._attached.pop(workspace_id, None)
+            self.p_attached.pop(workspace_id, None)
             rt = self.runtimes.pop(workspace_id, None)
             if rt is None:
                 return
@@ -625,12 +625,12 @@ class AppRuntimeManager:
             if not rt.running:
                 to_reap.append(rt)
             else:
-                self._idle_lru[workspace_id] = rt
-                self._idle_lru.move_to_end(workspace_id)
+                self.idle_lru[workspace_id] = rt
+                self.idle_lru.move_to_end(workspace_id)
                 suspend_process_tree(rt.process)
-                rt._suspended = True
-                while len(self._idle_lru) > MAX_IDLE_RUNTIMES:
-                    _, old_rt = self._idle_lru.popitem(last=False)
+                rt.p_suspended = True
+                while len(self.idle_lru) > MAX_IDLE_RUNTIMES:
+                    _, old_rt = self.idle_lru.popitem(last=False)
                     # Reaping a stopped process: SIGCONT first so the
                     # SIGTERM in stop() can be delivered cleanly (a
                     # SIGSTOP'd process can't run its own shutdown).
@@ -647,7 +647,7 @@ class AppRuntimeManager:
             except Exception:
                 logger.exception("failed to reap idle runtime %s", workspace_id)
         if to_idle is not None:
-            logger.debug("workspace %s idled (LRU size now %d)", workspace_id, len(self._idle_lru))
+            logger.debug("workspace %s idled (LRU size now %d)", workspace_id, len(self.idle_lru))
 
     def get(self, workspace_id: str) -> Optional[AppRuntime]:
         # Active subscribers see the live runtime; idle-pool members
@@ -656,7 +656,7 @@ class AppRuntimeManager:
         rt = self.runtimes.get(workspace_id)
         if rt is not None:
             return rt
-        return self._idle_lru.get(workspace_id)
+        return self.idle_lru.get(workspace_id)
 
     def drain_errors_for_path(self, file_path: str) -> list[str]:
         """If `file_path` falls under one of the live workspace
@@ -675,7 +675,7 @@ class AppRuntimeManager:
         # navigated away from the workspace mid-build, but the agent
         # could still be editing files; the LRU keeps the runtime alive
         # for ~3 idle slots.
-        for rt in (*self.runtimes.values(), *self._idle_lru.values()):
+        for rt in (*self.runtimes.values(), *self.idle_lru.values()):
             try:
                 ws_root = os.path.abspath(rt.workspace_path)
             except Exception:
@@ -685,18 +685,18 @@ class AppRuntimeManager:
         return []
 
     def get_render_state_for_workspace(self, workspace_id: str) -> tuple[Optional[str], str]:
-        rt = self.runtimes.get(workspace_id) or self._idle_lru.get(workspace_id)
+        rt = self.runtimes.get(workspace_id) or self.idle_lru.get(workspace_id)
         if rt is None:
             return None, ""
         return rt.render_state, rt.render_error_text
 
     def reset_render_state_for_workspace(self, workspace_id: str) -> None:
-        rt = self.runtimes.get(workspace_id) or self._idle_lru.get(workspace_id)
+        rt = self.runtimes.get(workspace_id) or self.idle_lru.get(workspace_id)
         if rt is not None:
             rt.reset_render_state()
 
     async def restart(self, workspace_id: str, workspace_path: Optional[str] = None) -> Optional[AppRuntime]:
-        rt = self.runtimes.get(workspace_id) or self._idle_lru.get(workspace_id)
+        rt = self.runtimes.get(workspace_id) or self.idle_lru.get(workspace_id)
         if rt is None:
             return None
         if workspace_path:
@@ -718,12 +718,12 @@ class AppRuntimeManager:
             victims: list[AppRuntime] = []
             for rt in list(self.runtimes.values()):
                 victims.append(rt)
-            for rt in list(self._idle_lru.values()):
+            for rt in list(self.idle_lru.values()):
                 resume_process_tree(rt.process)
                 victims.append(rt)
             self.runtimes.clear()
-            self._idle_lru.clear()
-            self._attached.clear()
+            self.idle_lru.clear()
+            self.p_attached.clear()
         if not victims:
             return 0
         await asyncio.gather(

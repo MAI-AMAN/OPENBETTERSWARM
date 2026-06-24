@@ -286,7 +286,7 @@ def test_terminal_event_visible_after_full_eviction(p_patch_persist_dir):
 
         # Simulate a process restart: clear the in-memory ring buffer
         # but keep the persisted terminal file.
-        seq_log._per_session.pop(sid, None)
+        seq_log.per_session.pop(sid, None)
 
         with client.websocket_connect(f"/ws/agents/{sid}") as ws:
             ws.send_text(json.dumps({"event": "client:hello", "data": {"last_seq": 0, "connection_uuid": "c1"}}))

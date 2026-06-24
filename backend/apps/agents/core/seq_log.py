@@ -34,10 +34,10 @@ class SeqLogStore:
     """Process-wide store. Per-session locks live inside `p_SessionSeqLog`."""
 
     def __init__(self, persist_dir: Optional[str] = None) -> None:
-        self._per_session: dict[str, p_SessionSeqLog] = {}
+        self.per_session: dict[str, p_SessionSeqLog] = {}
         # Coarse lock guards only the setdefault path; never crosses an await.
-        self._dict_lock = asyncio.Lock()
-        self._persist_dir = persist_dir
+        self.p_dict_lock = asyncio.Lock()
+        self.p_persist_dir = persist_dir
         if persist_dir:
             try:
                 os.makedirs(persist_dir, exist_ok=True)
@@ -45,18 +45,18 @@ class SeqLogStore:
                 logger.warning("seq_log: failed to create persist dir %s", persist_dir)
 
     async def _get_or_create(self, session_id: str) -> p_SessionSeqLog:
-        log = self._per_session.get(session_id)
+        log = self.per_session.get(session_id)
         if log is not None:
             return log
-        async with self._dict_lock:
-            log = self._per_session.get(session_id)
+        async with self.p_dict_lock:
+            log = self.per_session.get(session_id)
             if log is None:
                 log = p_SessionSeqLog()
-                self._per_session[session_id] = log
+                self.per_session[session_id] = log
             return log
 
     def _peek(self, session_id: str) -> Optional[p_SessionSeqLog]:
-        return self._per_session.get(session_id)
+        return self.per_session.get(session_id)
 
     @asynccontextmanager
     async def stamp(
@@ -99,13 +99,13 @@ class SeqLogStore:
         return log.seq if log else 0
 
     def _terminal_path(self, session_id: str) -> Optional[str]:
-        if not self._persist_dir:
+        if not self.p_persist_dir:
             return None
         # Session ids are uuid4 hex; sanitize anyway against path traversal.
         safe = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
         if not safe:
             return None
-        return os.path.join(self._persist_dir, f"{safe}.json")
+        return os.path.join(self.p_persist_dir, f"{safe}.json")
 
     def persist_terminal(self, session_id: str, payload_str: str) -> None:
         """Atomic write of a terminal event for post-restart clients; best-effort, never blocks broadcast."""
@@ -134,7 +134,7 @@ class SeqLogStore:
 
     def clear(self, session_id: str) -> None:
         """Drop in-memory log and persisted terminal; for full deletion only, closed-but-retained sessions keep it."""
-        self._per_session.pop(session_id, None)
+        self.per_session.pop(session_id, None)
         path = self._terminal_path(session_id)
         if path and os.path.exists(path):
             try:

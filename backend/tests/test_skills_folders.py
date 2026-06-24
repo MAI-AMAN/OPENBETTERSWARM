@@ -168,7 +168,7 @@ def test_swarm_export_folder_skill_carries_supporting_files(skills_dir):
     files = exp.files()
     assert "scripts/go.py" in files
     assert files["scripts/go.py"] == b"print(1)"
-    assert exp._payload["content"] == "render"
+    assert exp.payload["content"] == "render"
 
 
 def test_swarm_import_writes_folder_when_files_present(skills_dir):

@@ -20,8 +20,8 @@ class SkillExportable:
     def __init__(self, local_id: str, name: str, payload: dict, files: dict[str, bytes] | None = None):
         self.local_id = local_id
         self.name = name
-        self._payload = payload
-        self._files = files or {}
+        self.payload = payload
+        self.p_files = files or {}
 
     @classmethod
     def load(cls, local_id: str) -> "SkillExportable | None":
@@ -46,10 +46,10 @@ class SkillExportable:
         return cls(local_id, name, payload, files)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return dict(self._payload)
+        return dict(self.payload)
 
     def files(self) -> dict[str, bytes]:
-        return dict(self._files)
+        return dict(self.p_files)
 
     def dependencies(self) -> list[DepRef]:
         return []
