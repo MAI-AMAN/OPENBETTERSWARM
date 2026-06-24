@@ -15,11 +15,11 @@ from uuid import uuid4
 from ..exportable import DepRef, ExportContext, RemapTable
 from ..models import EntityType, Requirement, RequirementKind
 
-_BUILTIN_MODES = {"agent", "ask", "plan", "view-builder", "skill-builder"}
+P_BUILTIN_MODES = {"agent", "ask", "plan", "view-builder", "skill-builder"}
 # Transcript fields ride along so the shared agent keeps its history; ids inside
 # (message ids, branch ids, their parent/fork refs) are self-consistent within
 # the one session file, so they carry verbatim with no remap.
-_KEEP = (
+P_KEEP = (
     "name", "provider", "model", "mode", "system_prompt", "allowed_tools",
     "max_turns", "thinking_level",
     "messages", "branches", "active_branch_id", "tool_group_meta",
@@ -52,14 +52,14 @@ class SessionExportable:
         return cls(local_id, d.get("name") or "Agent", d)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return {k: self._data.get(k) for k in _KEEP if k in self._data}
+        return {k: self._data.get(k) for k in P_KEEP if k in self._data}
 
     def files(self) -> dict[str, bytes]:
         return {}
 
     def dependencies(self) -> list[DepRef]:
         mode = self._data.get("mode")
-        if mode and mode not in _BUILTIN_MODES:
+        if mode and mode not in P_BUILTIN_MODES:
             return [DepRef(EntityType.mode, mode, "uses_mode")]
         return []
 
@@ -71,7 +71,7 @@ class SessionExportable:
                 detail="An agent here uses this action.",
             ))
         mode = self._data.get("mode") or "agent"
-        if mode in _BUILTIN_MODES and mode != "agent":
+        if mode in P_BUILTIN_MODES and mode != "agent":
             reqs.append(Requirement(
                 kind=RequirementKind.builtin_mode, key=mode, label=f"{mode} mode",
                 detail="A built-in mode an agent runs in.",

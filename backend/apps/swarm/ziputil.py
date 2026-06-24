@@ -26,7 +26,7 @@ class BundleError(Exception):
     """Bundle is malformed or unsafe. Message is safe to show the user."""
 
 
-def _content_digest(entries: dict[str, bytes]) -> str:
+def p_content_digest(entries: dict[str, bytes]) -> str:
     """Order-independent sha256 over every non-manifest entry (path + bytes)."""
     h = hashlib.sha256()
     for path in sorted(entries):
@@ -57,7 +57,7 @@ def pack(manifest: dict, payloads: dict[str, dict], files: dict[str, bytes]) -> 
         entries[f"entities/{bid}/payload.json"] = json.dumps(payload, indent=2).encode("utf-8")
     for path, data in files.items():
         entries[path] = data
-    manifest = {**manifest, "checksum": _content_digest(entries)}
+    manifest = {**manifest, "checksum": p_content_digest(entries)}
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
@@ -66,7 +66,7 @@ def pack(manifest: dict, payloads: dict[str, dict], files: dict[str, bytes]) -> 
     return buf.getvalue()
 
 
-def _sandbox_entries(sandbox: str) -> dict[str, bytes]:
+def p_sandbox_entries(sandbox: str) -> dict[str, bytes]:
     """Every file under the sandbox except the manifest, keyed by forward-slash
     relpath so it matches the keys pack() hashed (cross-platform)."""
     out: dict[str, bytes] = {}
@@ -88,11 +88,11 @@ def verify_checksum(sandbox: str, manifest: dict) -> None:
     expected = manifest.get("checksum")
     if not expected:
         return
-    if _content_digest(_sandbox_entries(sandbox)) != expected:
+    if p_content_digest(p_sandbox_entries(sandbox)) != expected:
         raise BundleError("this .swarm looks corrupted or was modified")
 
 
-def _safe_member_path(name: str, sandbox: str) -> str:
+def p_safe_member_path(name: str, sandbox: str) -> str:
     if name.startswith(("/", "\\")) or (len(name) > 1 and name[1] == ":"):
         raise BundleError("bundle contains an absolute path")
     dest = os.path.realpath(os.path.join(sandbox, name))
@@ -141,7 +141,7 @@ def unpack(raw: bytes) -> str:
         for zi in infos:
             if zi.is_dir():
                 continue
-            dest = _safe_member_path(zi.filename, sandbox)
+            dest = p_safe_member_path(zi.filename, sandbox)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with zf.open(zi) as src, open(dest, "wb") as out:
                 while True:

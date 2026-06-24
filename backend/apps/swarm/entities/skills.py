@@ -42,7 +42,7 @@ class SkillExportable:
         }
         files: dict[str, bytes] = {}
         if kind == "folder":
-            files = _read_supporting_files(os.path.join(store.SKILLS_DIR, local_id))
+            files = p_read_supporting_files(os.path.join(store.SKILLS_DIR, local_id))
         return cls(local_id, name, payload, files)
 
     def serialize(self, ctx: ExportContext) -> dict:
@@ -60,14 +60,14 @@ class SkillExportable:
     @classmethod
     def conflict(cls, payload: dict) -> str | None:
         slug = payload.get("slug") or ""
-        if slug and _slug_taken(slug):
+        if slug and p_slug_taken(slug):
             return "already exists; will be added as a copy"
         return None
 
     @classmethod
     def import_(cls, payload: dict, files: dict[str, bytes], remap: RemapTable) -> str:
         base = (payload.get("slug") or payload.get("name") or "skill").lower().replace(" ", "-")
-        slug = _free_slug(base)
+        slug = p_free_slug(base)
         meta = {
             "name": payload.get("name", slug),
             "description": payload.get("description", ""),
@@ -96,7 +96,7 @@ class SkillExportable:
             store._save_index(index)
 
 
-def _read_supporting_files(skill_dir: str) -> dict[str, bytes]:
+def p_read_supporting_files(skill_dir: str) -> dict[str, bytes]:
     """Every file in a skill folder except SKILL.md, as {relpath: bytes}."""
     out: dict[str, bytes] = {}
     for root, _dirs, names in os.walk(skill_dir):
@@ -113,7 +113,7 @@ def _read_supporting_files(skill_dir: str) -> dict[str, bytes]:
     return out
 
 
-def _slug_taken(slug: str) -> bool:
+def p_slug_taken(slug: str) -> bool:
     return (
         slug in store._load_index()
         or os.path.isfile(os.path.join(store.SKILLS_DIR, f"{slug}.md"))
@@ -121,14 +121,14 @@ def _slug_taken(slug: str) -> bool:
     )
 
 
-def _free_slug(base: str) -> str:
+def p_free_slug(base: str) -> str:
     base = base or "skill"
-    if not _slug_taken(base):
+    if not p_slug_taken(base):
         return base
     cand = f"{base}-imported"
-    if not _slug_taken(cand):
+    if not p_slug_taken(cand):
         return cand
     i = 2
-    while _slug_taken(f"{base}-imported-{i}"):
+    while p_slug_taken(f"{base}-imported-{i}"):
         i += 1
     return f"{base}-imported-{i}"

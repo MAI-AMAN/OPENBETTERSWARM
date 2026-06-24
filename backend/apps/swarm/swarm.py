@@ -25,31 +25,31 @@ from .ziputil import MAX_TOTAL_BYTES, BundleError
 
 logger = logging.getLogger(__name__)
 
-_STAGING: dict[str, dict] = {}
-_STAGING_TTL = 30 * 60  # 30 minutes
+P_STAGING: dict[str, dict] = {}
+P_STAGING_TTL = 30 * 60  # 30 minutes
 
 
-def _gc_staging() -> None:
+def p_gc_staging() -> None:
     now = time.time()
-    for token in list(_STAGING):
-        if now - _STAGING[token]["created_at"] > _STAGING_TTL:
-            _discard(token)
+    for token in list(P_STAGING):
+        if now - P_STAGING[token]["created_at"] > P_STAGING_TTL:
+            p_discard(token)
 
 
-def _discard(token: str) -> None:
-    entry = _STAGING.pop(token, None)
+def p_discard(token: str) -> None:
+    entry = P_STAGING.pop(token, None)
     if entry:
         shutil.rmtree(entry["sandbox"], ignore_errors=True)
 
 
 @asynccontextmanager
 async def swarm_lifespan():
-    _gc_staging()
+    p_gc_staging()
     try:
         yield
     finally:
-        for token in list(_STAGING):
-            _discard(token)
+        for token in list(P_STAGING):
+            p_discard(token)
 
 
 swarm = SubApp("swarm", swarm_lifespan)
@@ -93,9 +93,9 @@ async def import_preflight(file: UploadFile = File(...)) -> ImportPreflightRespo
         review = closure.review_bundle(sandbox, manifest)
     except BundleError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    _gc_staging()
+    p_gc_staging()
     token = uuid.uuid4().hex
-    _STAGING[token] = {"sandbox": sandbox, "manifest": manifest, "created_at": time.time()}
+    P_STAGING[token] = {"sandbox": sandbox, "manifest": manifest, "created_at": time.time()}
     return ImportPreflightResponse(
         summary=closure.summarize(manifest),
         staging_token=token,
@@ -107,7 +107,7 @@ async def import_preflight(file: UploadFile = File(...)) -> ImportPreflightRespo
 
 @swarm.router.post("/import/commit")
 async def import_commit(body: ImportCommitRequest) -> ImportCommitResponse:
-    entry = _STAGING.get(body.staging_token)
+    entry = P_STAGING.get(body.staging_token)
     if not entry:
         raise HTTPException(status_code=404, detail="import session expired; please re-open the file")
     try:
@@ -117,7 +117,7 @@ async def import_commit(body: ImportCommitRequest) -> ImportCommitResponse:
     except BundleError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
-        _discard(body.staging_token)
+        p_discard(body.staging_token)
     if root_id is None:
         raise HTTPException(status_code=400, detail="bundle has no root entity")
     return ImportCommitResponse(

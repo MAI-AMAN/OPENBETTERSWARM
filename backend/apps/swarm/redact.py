@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 # Substrings that mark a field name as secret (matched case-insensitively).
-_DENY_SUBSTRINGS = (
+P_DENY_SUBSTRINGS = (
     "api_key", "apikey", "secret", "password", "passwd", "credential", "oauth",
     "bearer", "subscription_token", "access_token", "refresh_token",
     "session_token", "auth_token", "private_key",
@@ -16,7 +16,7 @@ _DENY_SUBSTRINGS = (
 
 # Exact field names that are sensitive or per-install identity (the substring
 # pass alone would miss these).
-_DENY_EXACT = {
+P_DENY_EXACT = {
     "token", "installation_id", "user_id", "free_trial_token",
     "free_trial_remaining", "free_trial_runs_limit", "openswarm_bearer_token",
     "openswarm_usage_cached", "connected_account_email", "oauth_tokens",
@@ -35,9 +35,9 @@ from backend.common.secret_scan import (  # noqa: E402
 
 def is_denied_key(key: str) -> bool:
     k = key.lower()
-    if k in _DENY_EXACT:
+    if k in P_DENY_EXACT:
         return True
-    return any(sub in k for sub in _DENY_SUBSTRINGS)
+    return any(sub in k for sub in P_DENY_SUBSTRINGS)
 
 
 def scrub_payload(value: Any) -> Any:

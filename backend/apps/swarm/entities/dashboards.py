@@ -23,7 +23,7 @@ class DashboardExportable:
 
     @classmethod
     def load(cls, local_id: str) -> "DashboardExportable | None":
-        data = _read(local_id)
+        data = p_read(local_id)
         if data is None:
             return None
         return cls(local_id, data.get("name") or "Dashboard", data)
@@ -111,21 +111,21 @@ class DashboardExportable:
                 "expanded_session_ids": expanded,
             },
         }
-        _write(new_did, doc)
-        _retag_sessions(cards.keys(), new_did)
+        p_write(new_did, doc)
+        p_retag_sessions(cards.keys(), new_did)
         return new_did
 
     @classmethod
     def rollback(cls, local_id: str) -> None:
         import os
-        d = _dash_dir()
+        d = p_dash_dir()
         if d:
             p = os.path.join(d, f"{local_id}.json")
             if os.path.exists(p):
                 os.remove(p)
 
 
-def _dash_dir() -> str | None:
+def p_dash_dir() -> str | None:
     try:
         from backend.config.paths import DASHBOARDS_DIR
         return DASHBOARDS_DIR
@@ -133,22 +133,22 @@ def _dash_dir() -> str | None:
         return None
 
 
-def _read(did: str) -> dict | None:
+def p_read(did: str) -> dict | None:
     import os
     from backend.config.json_store import read_json_or_none
-    d = _dash_dir()
+    d = p_dash_dir()
     return read_json_or_none(os.path.join(d, f"{did}.json")) if d else None
 
 
-def _write(did: str, doc: dict) -> None:
+def p_write(did: str, doc: dict) -> None:
     import os
     from backend.config.json_store import atomic_write_json
-    d = _dash_dir()
+    d = p_dash_dir()
     if d:
         atomic_write_json(os.path.join(d, f"{did}.json"), doc)
 
 
-def _retag_sessions(session_ids, dashboard_id: str) -> None:
+def p_retag_sessions(session_ids, dashboard_id: str) -> None:
     # Best-effort: a hiccup here must not orphan the just-written dashboard.
     from backend.apps.agents.manager.session.session_store import load_session_data, save_session
     for sid in session_ids:

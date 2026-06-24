@@ -134,7 +134,7 @@ def test_app_export_drops_machine_env(tmp_path, monkeypatch):
 
 
 def test_workflow_sanitize_disables_schedule_and_strips_pii():
-    from backend.apps.swarm.entities.workflows import _sanitize_workflow
+    from backend.apps.swarm.entities.workflows import sanitize_workflow
     raw = {
         "id": "wf123",
         "title": "Daily digest",
@@ -147,7 +147,7 @@ def test_workflow_sanitize_disables_schedule_and_strips_pii():
         "mode": "agent",
         "provider": "anthropic",
     }
-    out = _sanitize_workflow(raw)
+    out = sanitize_workflow(raw)
     # An imported workflow must not auto-run or carry the sharer's identity.
     assert out["schedule"]["enabled"] is False
     assert out["schedule"]["runs_count"] == 0
@@ -384,8 +384,8 @@ def test_dashboard_import_remaps_to_fresh_local_ids(monkeypatch):
     from backend.apps.swarm.exportable import RemapTable
 
     written: dict = {}
-    monkeypatch.setattr(dmod, "_write", lambda did, doc: written.update({did: doc}))
-    monkeypatch.setattr(dmod, "_retag_sessions", lambda ids, did: None)
+    monkeypatch.setattr(dmod, "p_write", lambda did, doc: written.update({did: doc}))
+    monkeypatch.setattr(dmod, "p_retag_sessions", lambda ids, did: None)
     remap = RemapTable()
     remap.assign("SBID", "newsess")
     remap.assign("ABID", "newapp")
@@ -422,8 +422,8 @@ def test_dashboard_remap_invariant_generative(monkeypatch):
     from backend.apps.swarm.models import EntityType
 
     written: dict = {}
-    monkeypatch.setattr(dmod, "_write", lambda did, doc: written.update({did: doc}))
-    monkeypatch.setattr(dmod, "_retag_sessions", lambda ids, did: None)
+    monkeypatch.setattr(dmod, "p_write", lambda did, doc: written.update({did: doc}))
+    monkeypatch.setattr(dmod, "p_retag_sessions", lambda ids, did: None)
 
     rng = random.Random(1234)
     for _ in range(60):

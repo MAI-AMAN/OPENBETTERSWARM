@@ -18,7 +18,7 @@ from backend.config.paths import OUTPUTS_DIR, OUTPUTS_WORKSPACE_DIR
 from ..exportable import DepRef, ExportContext, RemapTable
 from ..models import EntityType, Requirement
 
-_MAX_APP_FILE = 25 * 1024 * 1024  # matches ziputil per-entry cap
+P_MAX_APP_FILE = 25 * 1024 * 1024  # matches ziputil per-entry cap
 
 
 class AppExportable:
@@ -61,7 +61,7 @@ class AppExportable:
                 if os.path.islink(full):
                     continue
                 try:
-                    if os.path.getsize(full) > _MAX_APP_FILE:
+                    if os.path.getsize(full) > P_MAX_APP_FILE:
                         continue
                     with open(full, "rb") as f:
                         data = f.read()
@@ -85,13 +85,13 @@ class AppExportable:
         for rel, data in files.items():
             if not rel.startswith("workspace/"):
                 continue
-            dest = _safe_join(folder, rel[len("workspace/"):])
+            dest = p_safe_join(folder, rel[len("workspace/"):])
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "wb") as f:
                 f.write(data)
             wrote_workspace = True
         if wrote_workspace:
-            _localize_env(folder)
+            p_localize_env(folder)
 
         o = Output(
             name=payload.get("name") or "Imported App",
@@ -115,7 +115,7 @@ class AppExportable:
             os.remove(p)
 
 
-def _safe_join(folder: str, rel: str) -> str:
+def p_safe_join(folder: str, rel: str) -> str:
     dest = os.path.realpath(os.path.join(folder, rel))
     root = os.path.realpath(folder)
     if dest != root and not dest.startswith(root + os.sep):
@@ -123,7 +123,7 @@ def _safe_join(folder: str, rel: str) -> str:
     return dest
 
 
-def _free_port() -> int:
+def p_free_port() -> int:
     s = socket.socket()
     try:
         s.bind(("127.0.0.1", 0))
@@ -132,7 +132,7 @@ def _free_port() -> int:
         s.close()
 
 
-def _localize_env(folder: str) -> None:
+def p_localize_env(folder: str) -> None:
     """Regenerate the workspace .env on the importer's machine: a fresh port plus
     this install's absolute template/debugger paths (the source's were dropped)."""
     env_path = os.path.join(folder, ".env")
@@ -151,7 +151,7 @@ def _localize_env(folder: str) -> None:
         )
     except Exception:
         return
-    patch_env_port(env_path, "FRONTEND_PORT", str(_free_port()))
+    patch_env_port(env_path, "FRONTEND_PORT", str(p_free_port()))
     patch_env_port(env_path, "OPENSWARM_TEMPLATE_BACKEND_PATH", TEMPLATE_BACKEND_PATH)
     patch_env_port(env_path, "OPENSWARM_DEBUGGER_PATH", DEBUGGER_PATH)
     try:

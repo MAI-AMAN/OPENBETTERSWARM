@@ -10,7 +10,7 @@ from ..exportable import DepRef, ExportContext, RemapTable
 from ..models import EntityType, Requirement
 
 # Machine-relative or install-owned fields that must not ride along.
-_DROP = {"is_builtin", "default_folder"}
+P_DROP = {"is_builtin", "default_folder"}
 
 
 class ModeExportable:
@@ -23,7 +23,7 @@ class ModeExportable:
 
     @classmethod
     def load(cls, local_id: str) -> "ModeExportable | None":
-        store = _store()
+        store = p_store()
         if store is None:
             return None
         m = store.load_mode(local_id)
@@ -33,7 +33,7 @@ class ModeExportable:
         return cls(local_id, d.get("name") or local_id, d)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return {k: v for k, v in self._data.items() if k not in _DROP}
+        return {k: v for k, v in self._data.items() if k not in P_DROP}
 
     def files(self) -> dict[str, bytes]:
         return {}
@@ -46,8 +46,8 @@ class ModeExportable:
 
     @classmethod
     def import_(cls, payload: dict, files: dict[str, bytes], remap: RemapTable) -> str:
-        store = _store()
-        model = _model()
+        store = p_store()
+        model = p_model()
         if store is None or model is None:
             from ..ziputil import BundleError
             raise BundleError("can't import this mode on this build")
@@ -63,7 +63,7 @@ class ModeExportable:
         return mid
 
 
-def _store():
+def p_store():
     try:
         from backend.apps.modes import modes
         return modes
@@ -71,7 +71,7 @@ def _store():
         return None
 
 
-def _model():
+def p_model():
     try:
         from backend.apps.modes.models import Mode
         return Mode

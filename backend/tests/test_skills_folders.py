@@ -209,12 +209,12 @@ async def test_create_writes_folder_and_supersedes_legacy_flat(skills_dir):
 
 def test_stage_zip_carries_supporting_files_into_sandbox():
     import io as _io, zipfile, os as _os, shutil
-    from backend.apps.swarm.closure import _stage_skill_from_zip
+    from backend.apps.swarm.closure import stage_skill_from_zip
     buf = _io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("my-skill/SKILL.md", "do it")
         zf.writestr("my-skill/scripts/run.sh", "echo hi")
-    sandbox, manifest, warnings = _stage_skill_from_zip(buf.getvalue(), "my-skill.zip", [])
+    sandbox, manifest, warnings = stage_skill_from_zip(buf.getvalue(), "my-skill.zip", [])
     try:
         bid = manifest.entities[0].bundle_id
         files_dir = _os.path.join(sandbox, "entities", bid, "files")
