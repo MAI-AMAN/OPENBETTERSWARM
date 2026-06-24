@@ -266,7 +266,7 @@ async def apply_settings_update(body: AppSettings, protect_fields: set[str] | No
         if id_props:
             p_identify(id_props)
         if body.user_email:
-            from backend.apps.service.analytics import track_link_email
+            from backend.apps.service.analytics.client import track_link_email
             track_link_email(body.user_email)
 
     await save_settings_async(body)

@@ -147,7 +147,7 @@ class AgentLaunchMixin:
         })
 
         try:
-            from backend.apps.service.analytics import track_agent_created
+            from backend.apps.service.analytics.client import track_agent_created
             track_agent_created(id=session.id, dashboard_id=session.dashboard_id)
         except Exception:
             pass
