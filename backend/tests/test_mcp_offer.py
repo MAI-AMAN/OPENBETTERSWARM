@@ -80,7 +80,7 @@ def _stub_classifier(is_vague, ids):
 def test_preflight_default_suppresses_suggestions_on_concrete_prompt(monkeypatch):
     # Launch path: a concrete (non-vague) prompt must NOT interrupt with a card.
     monkeypatch.setattr(pf, "load_all_tools", lambda: [])
-    monkeypatch.setattr(pf, "_call_classifier", _stub_classifier(False, ["Google Workspace"]))
+    monkeypatch.setattr(pf, "p_call_classifier", _stub_classifier(False, ["Google Workspace"]))
     out = asyncio.run(run_preflight("refactor foo.ts to use the new client", timeout_s=5))
     assert out["suggestions"] == []
 
@@ -89,7 +89,7 @@ def test_preflight_require_vague_false_keeps_suggestions(monkeypatch):
     # MCPSearch path: the agent already proved it needs an integration, so keep the suggestion
     # even though the prompt is concrete (is_vague False).
     monkeypatch.setattr(pf, "load_all_tools", lambda: [])
-    monkeypatch.setattr(pf, "_call_classifier", _stub_classifier(False, ["Google Workspace"]))
+    monkeypatch.setattr(pf, "p_call_classifier", _stub_classifier(False, ["Google Workspace"]))
     out = asyncio.run(run_preflight("check my unread emails", timeout_s=5, require_vague=False))
     assert [s["id"] for s in out["suggestions"]] == ["Google Workspace"]
     assert set(out["suggestions"][0].keys()) == OFFER_SHAPE
@@ -98,6 +98,6 @@ def test_preflight_require_vague_false_keeps_suggestions(monkeypatch):
 def test_preflight_require_vague_false_still_drops_hallucinated_ids(monkeypatch):
     # require_vague=False must NOT loosen the vetted-id revalidation: a made-up id is still dropped.
     monkeypatch.setattr(pf, "load_all_tools", lambda: [])
-    monkeypatch.setattr(pf, "_call_classifier", _stub_classifier(False, ["TotallyFakeServer"]))
+    monkeypatch.setattr(pf, "p_call_classifier", _stub_classifier(False, ["TotallyFakeServer"]))
     out = asyncio.run(run_preflight("do the thing", timeout_s=5, require_vague=False))
     assert out["suggestions"] == []

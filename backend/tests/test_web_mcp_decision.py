@@ -12,7 +12,7 @@ def _call(**kw):
     base = dict(model="m", router_model_id="cc/opus", api_type="anthropic",
                 anthropic_api_key=None, connection_mode="own_key")
     base.update(kw)
-    with patch("backend.apps.agents.providers.registry._find_builtin_model", return_value=None):
+    with patch("backend.apps.agents.providers.registry.find_builtin_model", return_value=None):
         return should_register_web_mcp(**base)
 
 
@@ -40,7 +40,7 @@ def test_subscription_route_claude_non_pro_registers():
 
 def test_direct_anthropic_api_route_uses_native_path():
     entry = {"route": "api", "api": "anthropic"}
-    with patch("backend.apps.agents.providers.registry._find_builtin_model", return_value=entry):
+    with patch("backend.apps.agents.providers.registry.find_builtin_model", return_value=entry):
         out = should_register_web_mcp(
             model="claude-x", router_model_id="claude-3-5-api", api_type="anthropic",
             anthropic_api_key="sk-ant-xxx", connection_mode="own_key",

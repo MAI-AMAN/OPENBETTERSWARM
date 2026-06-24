@@ -445,7 +445,7 @@ async def run_browser_agent(
     from backend.apps.settings.settings import load_settings
     from backend.apps.settings.credentials import get_anthropic_client_for_model
     from backend.apps.agents.providers.registry import (
-        _find_builtin_model,
+        find_builtin_model,
         resolve_model_id_for_sdk,
         resolve_aux_model,
     )
@@ -457,7 +457,7 @@ async def run_browser_agent(
     # type, etc.) through 9Router's claude→openai translator is UNVERIFIED , 
     # if translation is poor, the user should manually switch this session
     # back to Claude in the model picker.
-    if _find_builtin_model(model) is not None:
+    if find_builtin_model(model) is not None:
         api_model = resolve_model_id_for_sdk(model, browser_settings)
     else:
         # Unknown model string; fall back to whatever aux model is available

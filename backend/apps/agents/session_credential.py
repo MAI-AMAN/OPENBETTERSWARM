@@ -25,9 +25,9 @@ from typing import Any, Literal, TYPE_CHECKING
 
 from backend.apps.agents.providers.registry import (
     _CUSTOM_VALUE_PREFIX,
-    _custom_provider_slug_for_lookup,
-    _find_builtin_model,
-    _find_custom_provider_for_value,
+    custom_provider_slug_for_lookup,
+    find_builtin_model,
+    find_custom_provider_for_value,
     get_api_type,
 )
 
@@ -73,9 +73,9 @@ class PoweringCredential:
 
 
 def _custom_slug_for_model(model_value: str, settings: AppSettings) -> str | None:
-    cp = _find_custom_provider_for_value(settings, model_value)
+    cp = find_custom_provider_for_value(settings, model_value)
     if cp is not None:
-        return _custom_provider_slug_for_lookup(getattr(cp, "name", ""))
+        return custom_provider_slug_for_lookup(getattr(cp, "name", ""))
     # Fall back to the slug encoded in the picker value itself.
     if isinstance(model_value, str) and model_value.startswith(_CUSTOM_VALUE_PREFIX):
         slug = model_value[len(_CUSTOM_VALUE_PREFIX):].partition("/")[0]
@@ -89,7 +89,7 @@ def resolve_powering_credential(model_value: str, settings: AppSettings) -> Powe
     `model_value` is the session's short model name (e.g. "opus-4-8", "sonnet-api",
     "custom/lmstudio/llama"), exactly what AgentSession.model holds.
     """
-    entry = _find_builtin_model(model_value)
+    entry = find_builtin_model(model_value)
     api = (entry or {}).get("api") or get_api_type(model_value)
     route = (entry or {}).get("route")
     mode = getattr(settings, "connection_mode", "own_key")
@@ -166,7 +166,7 @@ def _powering_custom_slug_present(new_providers: Any, slug: str) -> bool:
         return False
     for cp in new_providers:
         name = cp.get("name") if isinstance(cp, dict) else getattr(cp, "name", None)
-        if name and _custom_provider_slug_for_lookup(name) == slug:
+        if name and custom_provider_slug_for_lookup(name) == slug:
             return True
     return False
 

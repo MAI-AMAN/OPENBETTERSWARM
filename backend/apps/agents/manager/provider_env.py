@@ -28,7 +28,7 @@ async def configure_provider_env(
     from backend.apps.agents.providers.registry import _NINEROUTER_MODEL_PREFIXES as NINEROUTER_MODEL_PREFIXES
     resolved_is_9router = isinstance(resolved_model, str) and resolved_model.startswith(NINEROUTER_MODEL_PREFIXES)
 
-    from backend.apps.agents.providers.registry import _find_builtin_model as find_builtin_model
+    from backend.apps.agents.providers.registry import find_builtin_model as find_builtin_model
     model_entry = find_builtin_model(session.model)
     is_pinned_api_route = (
         model_entry is not None
@@ -81,7 +81,7 @@ async def configure_provider_env(
                     "providers need 9Router to translate the Anthropic "
                     "protocol, install Node.js and restart the app."
                 )
-        from backend.apps.agents.providers.registry import _find_custom_provider_for_value as find_custom_provider_for_value
+        from backend.apps.agents.providers.registry import find_custom_provider_for_value as find_custom_provider_for_value
         cp = find_custom_provider_for_value(global_settings, session.model)
         env = {
             "ANTHROPIC_API_KEY": "9router",

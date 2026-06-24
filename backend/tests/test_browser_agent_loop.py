@@ -71,7 +71,7 @@ def _install(monkeypatch, primary, aux):
     import backend.apps.agents.agent_manager as am_mod
 
     monkeypatch.setattr(settings_mod, "load_settings", lambda: {"fake": True}, raising=True)
-    monkeypatch.setattr(reg_mod, "_find_builtin_model", lambda m: object(), raising=True)
+    monkeypatch.setattr(reg_mod, "find_builtin_model", lambda m: object(), raising=True)
     monkeypatch.setattr(reg_mod, "resolve_model_id_for_sdk", lambda m, s: "primary-x", raising=True)
 
     async def _aux_resolve(s, preferred_tier="haiku"):

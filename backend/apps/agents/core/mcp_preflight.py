@@ -79,7 +79,7 @@ _PATH_LIKE = re.compile(r"^[./~]|/[\w\-]+/|\.[a-zA-Z]{1,5}\b")
 _SHELL_PREFIX = re.compile(r"^\s*[\$!/]")
 
 
-def _is_obviously_local(prompt: str) -> bool:
+def p_is_obviously_local(prompt: str) -> bool:
     """True for prompts that obviously can't benefit from MCP (very short, shell-ish, single path)."""
     s = prompt.strip()
     if len(s) < 8:
@@ -100,21 +100,21 @@ async def run_preflight(prompt: str, timeout_s: float = 8.0, task_id: str | None
     if not prompt or not prompt.strip():
         return default
 
-    if _is_obviously_local(prompt):
+    if p_is_obviously_local(prompt):
         return default
 
     try:
         settings = load_settings()
-        available = _build_available_shortlist(settings)
+        available = p_build_available_shortlist(settings)
 
         result = await asyncio.wait_for(
-            _call_classifier(settings, prompt, available, task_id),
+            p_call_classifier(settings, prompt, available, task_id),
             timeout=timeout_s,
         )
         # Re-validate ids against the curated shortlist so hallucinations can't reach the frontend.
         valid_ids = {e["id"] for e in CURATED_SHORTLIST}
         result["suggestions"] = [
-            _decorate(s, available) for s in result.get("suggestions", [])
+            p_decorate(s, available) for s in result.get("suggestions", [])
             if isinstance(s, dict) and s.get("id") in valid_ids
         ]
         result["suggestions"] = [s for s in result["suggestions"] if s is not None]
@@ -131,7 +131,7 @@ async def run_preflight(prompt: str, timeout_s: float = 8.0, task_id: str | None
         return default
 
 
-def _build_available_shortlist(settings) -> list[CuratedEntry]:
+def p_build_available_shortlist(settings) -> list[CuratedEntry]:
     """Curated entries that are NOT currently enabled and NOT dismissed."""
     try:
         enabled_names = {t.name for t in load_all_tools() if getattr(t, "enabled", False)}
@@ -158,7 +158,7 @@ def offer_for_gated_server(server_name: str, settings) -> CuratedEntry | None:
     # ("Google Workspace"). Match on the slug of both sides so neither form is a load-bearing string.
     slug = _sanitize_server_name(server_name)
     entry = next(
-        (e for e in _build_available_shortlist(settings) if _sanitize_server_name(e["id"]) == slug),
+        (e for e in p_build_available_shortlist(settings) if _sanitize_server_name(e["id"]) == slug),
         None,
     )
     if entry is None:
@@ -166,7 +166,7 @@ def offer_for_gated_server(server_name: str, settings) -> CuratedEntry | None:
     return {"id": entry["id"], "title": entry["title"], "description": entry["description"], "reason": ""}
 
 
-def _decorate(llm_suggestion: dict, available: list[CuratedEntry]) -> dict | None:
+def p_decorate(llm_suggestion: dict, available: list[CuratedEntry]) -> dict | None:
     """Expand an LLM-returned {id, reason} into the full frontend shape."""
     entry = next((e for e in available if e["id"] == llm_suggestion["id"]), None)
     if entry is None:
@@ -179,7 +179,7 @@ def _decorate(llm_suggestion: dict, available: list[CuratedEntry]) -> dict | Non
     }
 
 
-async def _call_classifier(settings, prompt: str, available: list[CuratedEntry], task_id: str | None = None) -> dict:
+async def p_call_classifier(settings, prompt: str, available: list[CuratedEntry], task_id: str | None = None) -> dict:
     """One aux-model call, returns validated JSON {is_vague, suggestions}."""
     aux_model, _base = await resolve_aux_model(settings, preferred_tier="haiku")
     client = get_anthropic_client_for_model(settings, aux_model)

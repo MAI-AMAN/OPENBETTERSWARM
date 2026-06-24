@@ -143,7 +143,7 @@ class SeqLogStore:
                 pass
 
 
-def _default_persist_dir() -> Optional[str]:
+def p_default_persist_dir() -> Optional[str]:
     try:
         from backend.config.paths import DATA_ROOT
         return os.path.join(DATA_ROOT, "agents", "terminal_events")
@@ -151,4 +151,4 @@ def _default_persist_dir() -> Optional[str]:
         return None
 
 
-seq_log = SeqLogStore(persist_dir=_default_persist_dir())
+seq_log = SeqLogStore(persist_dir=p_default_persist_dir())

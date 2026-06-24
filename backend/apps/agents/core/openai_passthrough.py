@@ -31,7 +31,7 @@ _HOP_HEADERS = {
 }
 
 
-def _is_gpt5(model: str) -> bool:
+def p_is_gpt5(model: str) -> bool:
     m = (model or "").strip().lower()
     if not m:
         return False
@@ -52,7 +52,7 @@ _GPT5_UNSUPPORTED_PARAMS = (
 )
 
 
-def _scrub_gpt5_params(body: bytes) -> bytes:
+def scrub_gpt5_params(body: bytes) -> bytes:
     """For GPT-5: rename max_tokens→max_completion_tokens and drop the sampling
     params the reasoning models reject. Bytes in/out, never raises."""
     if not body:
@@ -61,7 +61,7 @@ def _scrub_gpt5_params(body: bytes) -> bytes:
         parsed = json.loads(body)
     except Exception:
         return body
-    if not isinstance(parsed, dict) or not _is_gpt5(str(parsed.get("model") or "")):
+    if not isinstance(parsed, dict) or not p_is_gpt5(str(parsed.get("model") or "")):
         return body
     mutated = False
     if "max_tokens" in parsed:
@@ -85,7 +85,7 @@ def _scrub_gpt5_params(body: bytes) -> bytes:
 )
 async def passthrough(rest: str, request: Request):
     body = await request.body()
-    body = _scrub_gpt5_params(body)
+    body = scrub_gpt5_params(body)
 
     forward_headers: dict[str, str] = {}
     for k, v in request.headers.items():

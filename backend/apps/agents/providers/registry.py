@@ -21,7 +21,7 @@ from .openrouter import (
 from .pricing import (
     compute_billing_kind,
     compute_tiers,
-    _heuristic_tiers,
+    heuristic_tiers,
 )
 from .thinking import thinking_params_for
 
@@ -155,7 +155,7 @@ BUILTIN_MODELS: dict[str, list[dict[str, Any]]] = {
 _CUSTOM_VALUE_PREFIX = "custom/"
 
 
-def _custom_provider_slug_for_lookup(name: str) -> str:
+def custom_provider_slug_for_lookup(name: str) -> str:
     """Mirror nine_router._custom_provider_slug; duplicated here to avoid
     importing from nine_router (circular: nine_router imports from settings)."""
     import re
@@ -163,7 +163,7 @@ def _custom_provider_slug_for_lookup(name: str) -> str:
     return s or "custom"
 
 
-def _find_custom_provider_for_value(settings, value: str):
+def find_custom_provider_for_value(settings, value: str):
     """Look up the CustomProvider whose slug matches the slug encoded in a
     `custom/<slug>/<model_id>` picker value. Returns None if no match."""
     if not isinstance(value, str) or not value.startswith(_CUSTOM_VALUE_PREFIX):
@@ -173,12 +173,12 @@ def _find_custom_provider_for_value(settings, value: str):
     if not slug:
         return None
     for cp in getattr(settings, "custom_providers", None) or []:
-        if _custom_provider_slug_for_lookup(getattr(cp, "name", "")) == slug:
+        if custom_provider_slug_for_lookup(getattr(cp, "name", "")) == slug:
             return cp
     return None
 
 
-def _find_builtin_model(short_name: str) -> dict | None:
+def find_builtin_model(short_name: str) -> dict | None:
     """Look up a model entry by its short `value`.
 
     OpenRouter entries (prefixed `or:<vendor>/<model>`) and custom-provider
@@ -223,11 +223,11 @@ def _find_builtin_model(short_name: str) -> dict | None:
 
 
 def get_api_type(short_name: str) -> str:
-    entry = _find_builtin_model(short_name)
+    entry = find_builtin_model(short_name)
     return (entry or {}).get("api", "anthropic")
 
 
-def _antigravity_connected() -> bool:
+def p_antigravity_connected() -> bool:
     """True if a live Antigravity OAuth lane exists in 9Router. Synchronous
     probe (this resolver is sync) with a tight timeout; any hiccup reads as
     'no' so a slow/absent 9Router never blocks model resolution for long."""
@@ -249,7 +249,7 @@ def _antigravity_connected() -> bool:
 
 def resolve_model_id_for_sdk(short_name: str, settings: AppSettings) -> str:
     """Short model name → id string for ClaudeAgentOptions."""
-    entry = _find_builtin_model(short_name)
+    entry = find_builtin_model(short_name)
     if entry is None:
         return short_name
     if entry.get("route") == "cc":
@@ -294,7 +294,7 @@ def resolve_model_id_for_sdk(short_name: str, settings: AppSettings) -> str:
         if isinstance(rid, str) and rid.startswith("gc/"):
             suffix = rid[len("gc/"):]
             ag_suffix = _ANTIGRAVITY_MAP.get(suffix)
-            if ag_suffix and _antigravity_connected():
+            if ag_suffix and p_antigravity_connected():
                 return "ag/" + ag_suffix
             if getattr(settings, "google_api_key", None):
                 return "gemini/" + suffix

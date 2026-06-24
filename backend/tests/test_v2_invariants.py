@@ -582,15 +582,15 @@ def test_resolve_sdk_gemini_prefers_antigravity_over_api_key():
     from backend.apps.settings.models import AppSettings
     s = AppSettings()
     s.google_api_key = "ai-studio-key"
-    with patch.object(registry, "_antigravity_connected", return_value=True):
+    with patch.object(registry, "p_antigravity_connected", return_value=True):
         # flash IS AG-serveable -> AG wins over the key
         assert registry.resolve_model_id_for_sdk("gemini-3-flash", s) == "ag/gemini-3-flash"
-    with patch.object(registry, "_antigravity_connected", return_value=False):
+    with patch.object(registry, "p_antigravity_connected", return_value=False):
         # AG not connected -> key
         assert registry.resolve_model_id_for_sdk("gemini-3-flash", s) == "gemini/gemini-3-flash-preview"
     # No key, no AG -> gc/ subscription lane untouched
     s2 = AppSettings()
-    with patch.object(registry, "_antigravity_connected", return_value=False):
+    with patch.object(registry, "p_antigravity_connected", return_value=False):
         assert registry.resolve_model_id_for_sdk("gemini-3-flash", s2) == "gc/gemini-3-flash-preview"
 
 
@@ -1254,13 +1254,13 @@ def test_get_api_type_openai():
 
 
 def test_find_builtin_model_returns_none_for_unknown():
-    from backend.apps.agents.providers.registry import _find_builtin_model
-    assert _find_builtin_model("not-a-real-model-xyz") is None
+    from backend.apps.agents.providers.registry import find_builtin_model
+    assert find_builtin_model("not-a-real-model-xyz") is None
 
 
 def test_find_builtin_model_returns_dict_for_known():
-    from backend.apps.agents.providers.registry import _find_builtin_model
-    sonnet = _find_builtin_model("sonnet")
+    from backend.apps.agents.providers.registry import find_builtin_model
+    sonnet = find_builtin_model("sonnet")
     assert sonnet is not None
     assert sonnet.get("api") == "anthropic"
 
@@ -1766,20 +1766,20 @@ def test_gpt5_param_scrub_drops_unsupported_sampling_knobs():
     Live-confirmed the 400s against the OpenAI API 2026-06-14."""
     import json
     from backend.apps.agents.proxy.anthropic_proxy import _scrub_request_for_openai_gpt5
-    from backend.apps.agents.core.openai_passthrough import _scrub_gpt5_params
+    from backend.apps.agents.core.openai_passthrough import scrub_gpt5_params
     dirty = json.dumps({"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}],
                         "max_tokens": 200, "temperature": 0, "top_p": 0.9,
                         "frequency_penalty": 0.5, "presence_penalty": 0.1, "logprobs": True}).encode()
-    for fn in (_scrub_request_for_openai_gpt5, _scrub_gpt5_params):
+    for fn in (_scrub_request_for_openai_gpt5, scrub_gpt5_params):
         out = json.loads(fn(dirty))
         assert out.get("max_completion_tokens") == 200 and "max_tokens" not in out, fn.__name__
         for k in ("temperature", "top_p", "frequency_penalty", "presence_penalty", "logprobs"):
             assert k not in out, f"{fn.__name__} left {k}"
     # temperature==1 is the one allowed value; don't over-strip it
-    assert json.loads(_scrub_gpt5_params(json.dumps(
+    assert json.loads(scrub_gpt5_params(json.dumps(
         {"model": "gpt-5", "temperature": 1}).encode())).get("temperature") == 1
     # non-gpt-5 models are untouched
-    assert json.loads(_scrub_gpt5_params(json.dumps(
+    assert json.loads(scrub_gpt5_params(json.dumps(
         {"model": "gpt-4o", "temperature": 0, "top_p": 0.5}).encode())) == \
         {"model": "gpt-4o", "temperature": 0, "top_p": 0.5}
 
@@ -2300,8 +2300,8 @@ def test_custom_provider_value_synthesises_route_api_entry():
     api='custom' entry whose model_id is the 9Router routing string
     `cp-<slug>/<bare>`. agent_manager keys on api='custom' and resolved_model
     must be the cp- prefixed string for 9Router to forward correctly."""
-    from backend.apps.agents.providers.registry import _find_builtin_model
-    entry = _find_builtin_model("custom/ollama-cloud/gpt-oss:120b")
+    from backend.apps.agents.providers.registry import find_builtin_model
+    entry = find_builtin_model("custom/ollama-cloud/gpt-oss:120b")
     assert entry is not None
     assert entry.get("api") == "custom"
     assert entry.get("route") == "api"
@@ -2320,28 +2320,28 @@ def test_custom_provider_value_with_multi_segment_model_id():
     """Model ids may contain '/' (e.g. meta-llama/llama-3-70b-instruct on
     Together AI). Synthesis must use partition on the FIRST '/' so the
     rest of the model id stays intact."""
-    from backend.apps.agents.providers.registry import _find_builtin_model
-    entry = _find_builtin_model("custom/together-ai/meta-llama/llama-3-70b-instruct")
+    from backend.apps.agents.providers.registry import find_builtin_model
+    entry = find_builtin_model("custom/together-ai/meta-llama/llama-3-70b-instruct")
     assert entry is not None
     assert entry.get("model_id") == "cp-together-ai/meta-llama/llama-3-70b-instruct"
 
 
 def test_custom_provider_lookup_finds_entry_by_slug():
-    """_find_custom_provider_for_value must slugify the same way as the
+    """find_custom_provider_for_value must slugify the same way as the
     UI/sync layer so name 'Ollama Cloud' resolves to the value
     'custom/ollama-cloud/...'."""
-    from backend.apps.agents.providers.registry import _find_custom_provider_for_value
+    from backend.apps.agents.providers.registry import find_custom_provider_for_value
     from backend.apps.settings.models import AppSettings, CustomProvider
     s = AppSettings(custom_providers=[
         CustomProvider(name="Ollama Cloud", base_url="https://ollama.com/v1", api_key="x"),
         CustomProvider(name="Together AI", base_url="https://api.together.xyz/v1", api_key="y"),
     ])
-    cp = _find_custom_provider_for_value(s, "custom/ollama-cloud/gpt-oss:120b")
+    cp = find_custom_provider_for_value(s, "custom/ollama-cloud/gpt-oss:120b")
     assert cp is not None and cp.name == "Ollama Cloud"
-    cp2 = _find_custom_provider_for_value(s, "custom/together-ai/meta-llama/llama-3-70b")
+    cp2 = find_custom_provider_for_value(s, "custom/together-ai/meta-llama/llama-3-70b")
     assert cp2 is not None and cp2.name == "Together AI"
     # Unknown slug → None.
-    assert _find_custom_provider_for_value(s, "custom/nonexistent/whatever") is None
+    assert find_custom_provider_for_value(s, "custom/nonexistent/whatever") is None
 
 
 def test_get_context_window_custom_provider_value_format():
@@ -2365,22 +2365,22 @@ def test_custom_provider_slug_is_url_safe():
     """The slug must be alnum-and-dash only, it's used both as the 9Router
     prefix and as a URL path segment. Spaces, slashes, and special chars
     must all be folded to dashes."""
-    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
-    assert _custom_provider_slug_for_lookup("Ollama Cloud") == "ollama-cloud"
-    assert _custom_provider_slug_for_lookup("My/Local LM!!!") == "my-local-lm"
-    assert _custom_provider_slug_for_lookup("") == "custom"
-    assert _custom_provider_slug_for_lookup("   ") == "custom"
+    from backend.apps.agents.providers.registry import custom_provider_slug_for_lookup
+    assert custom_provider_slug_for_lookup("Ollama Cloud") == "ollama-cloud"
+    assert custom_provider_slug_for_lookup("My/Local LM!!!") == "my-local-lm"
+    assert custom_provider_slug_for_lookup("") == "custom"
+    assert custom_provider_slug_for_lookup("   ") == "custom"
 
 
 def test_custom_provider_slug_unicode_collapses_safely():
     """Unicode names are folded to ASCII-safe dashes; emojis/accents drop."""
-    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
+    from backend.apps.agents.providers.registry import custom_provider_slug_for_lookup
     # Accented chars get stripped (regex is [a-zA-Z0-9-] only).
-    assert _custom_provider_slug_for_lookup("Tögether AI 🚀") == "t-gether-ai"
+    assert custom_provider_slug_for_lookup("Tögether AI 🚀") == "t-gether-ai"
     # Pure-emoji name → fallback "custom".
-    assert _custom_provider_slug_for_lookup("🚀💎") == "custom"
+    assert custom_provider_slug_for_lookup("🚀💎") == "custom"
     # Trailing/leading dashes get stripped.
-    assert _custom_provider_slug_for_lookup("---weird---") == "weird"
+    assert custom_provider_slug_for_lookup("---weird---") == "weird"
 
 
 def test_custom_provider_slug_does_not_collide_with_routing_prefixes():
@@ -2388,8 +2388,8 @@ def test_custom_provider_slug_does_not_collide_with_routing_prefixes():
     built-in prefixes (cc/, cx/, gc/, ag/, gemini/, openrouter/) used by
     resolved_is_9router. cp- starts with 'c' and dash so it can't be
     confused with cc/, but verify the dispatch logic agrees."""
-    from backend.apps.agents.providers.registry import _find_builtin_model
-    entry = _find_builtin_model("custom/cc/whatever")  # adversarial slug "cc"
+    from backend.apps.agents.providers.registry import find_builtin_model
+    entry = find_builtin_model("custom/cc/whatever")  # adversarial slug "cc"
     assert entry is not None
     routed = entry["model_id"]
     assert routed == "cp-cc/whatever"
@@ -2402,7 +2402,7 @@ def test_custom_provider_models_with_special_chars():
     (deepseek 'deepseek-v3.1'), version suffixes (':free'), and slashes
     (Together 'meta-llama/Llama-3-70B'). All must round-trip without
     being mangled."""
-    from backend.apps.agents.providers.registry import _find_builtin_model
+    from backend.apps.agents.providers.registry import find_builtin_model
     cases = [
         "custom/ollama/gpt-oss:120b",
         "custom/together/meta-llama/Llama-3.3-70B-Instruct",
@@ -2411,7 +2411,7 @@ def test_custom_provider_models_with_special_chars():
         "custom/groq/llama-3.3-70b-versatile",
     ]
     for v in cases:
-        e = _find_builtin_model(v)
+        e = find_builtin_model(v)
         assert e is not None, f"failed: {v}"
         # Bare-model portion is everything after first slash after the slug.
         rest = v[len("custom/"):]
@@ -2421,12 +2421,12 @@ def test_custom_provider_models_with_special_chars():
 
 def test_custom_provider_value_with_invalid_format_returns_none():
     """Malformed picker values (no slug, no model) must not synthesise a
-    bogus entry, they should miss _find_builtin_model entirely so the
+    bogus entry, they should miss find_builtin_model entirely so the
     dispatch loop falls through to the 'unknown model' branch."""
-    from backend.apps.agents.providers.registry import _find_builtin_model
-    assert _find_builtin_model("custom/") is None
-    assert _find_builtin_model("custom/onlyslug") is None
-    assert _find_builtin_model("custom//onlymodel") is None  # empty slug
+    from backend.apps.agents.providers.registry import find_builtin_model
+    assert find_builtin_model("custom/") is None
+    assert find_builtin_model("custom/onlyslug") is None
+    assert find_builtin_model("custom//onlymodel") is None  # empty slug
 
 
 def test_custom_provider_get_api_type_returns_custom():
@@ -2486,10 +2486,10 @@ def test_custom_provider_two_providers_get_distinct_slugs():
     """Two custom providers with different display names must produce
     two different slugs / routing prefixes, otherwise 9Router will route
     both to whichever connection was created last."""
-    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
-    a = _custom_provider_slug_for_lookup("Ollama Cloud")
-    b = _custom_provider_slug_for_lookup("Together AI")
-    c = _custom_provider_slug_for_lookup("Groq")
+    from backend.apps.agents.providers.registry import custom_provider_slug_for_lookup
+    a = custom_provider_slug_for_lookup("Ollama Cloud")
+    b = custom_provider_slug_for_lookup("Together AI")
+    c = custom_provider_slug_for_lookup("Groq")
     assert len({a, b, c}) == 3
 
 
@@ -2500,10 +2500,10 @@ def test_custom_provider_slug_collision_after_sanitize():
     test just documents that post-slug collisions DO collide and the
     UI-level uniqueness check (in Settings.tsx) is the right enforcement
     layer, backend resolution would always pick the first match."""
-    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
-    assert _custom_provider_slug_for_lookup("Ollama Cloud") == \
-           _custom_provider_slug_for_lookup("ollama-cloud") == \
-           _custom_provider_slug_for_lookup("OLLAMA cloud")
+    from backend.apps.agents.providers.registry import custom_provider_slug_for_lookup
+    assert custom_provider_slug_for_lookup("Ollama Cloud") == \
+           custom_provider_slug_for_lookup("ollama-cloud") == \
+           custom_provider_slug_for_lookup("OLLAMA cloud")
 
 
 def test_list_models_includes_complete_custom_providers_excludes_incomplete():
@@ -2634,11 +2634,11 @@ def test_custom_provider_resolve_aux_model_unaffected():
 def test_custom_provider_with_very_long_name_still_works():
     """No upper bound on name length anywhere in the pipeline. Verify a
     250-char name slugs cleanly."""
-    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup, _find_builtin_model
+    from backend.apps.agents.providers.registry import custom_provider_slug_for_lookup, find_builtin_model
     long_name = "a" * 250
-    slug = _custom_provider_slug_for_lookup(long_name)
+    slug = custom_provider_slug_for_lookup(long_name)
     assert slug == long_name
-    entry = _find_builtin_model(f"custom/{slug}/some-model")
+    entry = find_builtin_model(f"custom/{slug}/some-model")
     assert entry is not None
     assert entry["model_id"] == f"cp-{slug}/some-model"
 

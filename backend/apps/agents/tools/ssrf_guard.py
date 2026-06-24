@@ -46,7 +46,7 @@ _BLOCKED_V6_NETS = [
 ]
 
 
-async def _resolve_host_async(host: str) -> list[str]:
+async def p_resolve_host_async(host: str) -> list[str]:
     """Resolve host to all IPs (v4 + v6) without blocking the event loop."""
     loop = asyncio.get_event_loop()
     try:
@@ -56,7 +56,7 @@ async def _resolve_host_async(host: str) -> list[str]:
     return list({info[4][0] for info in infos})
 
 
-def _is_forbidden_ip(ip_str: str) -> bool:
+def p_is_forbidden_ip(ip_str: str) -> bool:
     """True iff this IP is in a blocked range. Loopback is allowed (see module docstring)."""
     try:
         ip = ipaddress.ip_address(ip_str)
@@ -88,17 +88,17 @@ async def assert_safe_url(url: str) -> str:
 
     try:
         ipaddress.ip_address(host)
-        if _is_forbidden_ip(host):
+        if p_is_forbidden_ip(host):
             raise SSRFBlocked(f"URL host {host} is in a blocked range.")
         return url
     except ValueError:
         pass
 
-    resolved = await _resolve_host_async(host)
+    resolved = await p_resolve_host_async(host)
     if not resolved:
         raise SSRFBlocked(f"No DNS records for {host}.")
     for ip in resolved:
-        if _is_forbidden_ip(ip):
+        if p_is_forbidden_ip(ip):
             raise SSRFBlocked(f"Host {host} resolves to forbidden IP {ip}.")
     return url
 

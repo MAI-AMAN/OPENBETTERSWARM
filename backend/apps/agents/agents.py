@@ -487,7 +487,7 @@ async def probe_model(body: dict):
         from backend.apps.agents.providers.registry import (
             resolve_model_id_for_sdk,
             get_api_type,
-            _find_builtin_model,
+            find_builtin_model,
             _NINEROUTER_MODEL_PREFIXES,
         )
         from backend.apps.settings.settings import load_settings
@@ -495,7 +495,7 @@ async def probe_model(body: dict):
         settings = load_settings()
         api_type = get_api_type(short_name)
         resolved = resolve_model_id_for_sdk(short_name, settings)
-        entry = _find_builtin_model(short_name) or {}
+        entry = find_builtin_model(short_name) or {}
         route = entry.get("route")
         connection_mode = getattr(settings, "connection_mode", "own_key")
 
@@ -774,14 +774,14 @@ async def list_models():
                 result[f"OpenRouter · {pretty}"] = entries
 
     # Custom OpenAI-compatible providers (Ollama Cloud, Together, etc); addressed via custom/<slug>/<model_id>.
-    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
+    from backend.apps.agents.providers.registry import custom_provider_slug_for_lookup
     for cp in (getattr(settings, "custom_providers", None) or []):
         cp_name = (getattr(cp, "name", "") or "").strip()
         cp_base_url = (getattr(cp, "base_url", "") or "").strip()
         cp_models = getattr(cp, "models", None) or []
         if not cp_name or not cp_base_url or not cp_models:
             continue
-        slug = _custom_provider_slug_for_lookup(cp_name)
+        slug = custom_provider_slug_for_lookup(cp_name)
         entries: list[dict] = []
         for m in cp_models:
             bare = (m.get("value") or m.get("id") or "").strip()

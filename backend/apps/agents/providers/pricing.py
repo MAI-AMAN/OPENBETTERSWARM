@@ -185,7 +185,7 @@ MODEL_TIERS: dict[str, tuple[int, int, int]] = {
 }
 
 
-def _heuristic_tiers(label: str, output_cost_per_1m: float, reasoning: bool) -> tuple[int, int, int]:
+def heuristic_tiers(label: str, output_cost_per_1m: float, reasoning: bool) -> tuple[int, int, int]:
     """Fallback tier scoring for models not in MODEL_TIERS. Tries to
     extract a parameter count from the label (8B/70B/235B/etc.) and
     use that as a stronger size signal than cost alone, since open-
@@ -310,7 +310,7 @@ def compute_tiers(
         if c in MODEL_TIERS:
             return MODEL_TIERS[c]
 
-    return _heuristic_tiers(label, output_cost_per_1m, reasoning)
+    return heuristic_tiers(label, output_cost_per_1m, reasoning)
 
 
 def compute_billing_kind(

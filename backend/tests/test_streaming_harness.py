@@ -65,7 +65,7 @@ def _capture_env(monkeypatch, settings, api_type, resolved_model, model_entry):
     monkeypatch.setattr(am, "load_settings", lambda: settings, raising=True)
     monkeypatch.setattr(reg, "get_api_type", lambda model: api_type, raising=True)
     monkeypatch.setattr(reg, "resolve_model_id_for_sdk", lambda model, s: resolved_model, raising=True)
-    monkeypatch.setattr(reg, "_find_builtin_model", lambda model: model_entry, raising=True)
+    monkeypatch.setattr(reg, "find_builtin_model", lambda model: model_entry, raising=True)
     captured = {}
 
     async def capturing_query(*args, **kwargs):
@@ -172,7 +172,7 @@ def test_loop_builds_direct_anthropic_key_env(monkeypatch):
     monkeypatch.setattr(am, "load_settings", lambda: settings, raising=True)
     monkeypatch.setattr(reg, "get_api_type", lambda model: "anthropic", raising=True)
     monkeypatch.setattr(reg, "resolve_model_id_for_sdk", lambda model, s: "claude-sonnet-4-6", raising=True)
-    monkeypatch.setattr(reg, "_find_builtin_model", lambda model: None, raising=True)
+    monkeypatch.setattr(reg, "find_builtin_model", lambda model: None, raising=True)
 
     captured = {}
 

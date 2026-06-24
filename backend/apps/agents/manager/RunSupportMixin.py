@@ -267,7 +267,7 @@ class RunSupportMixin:
             return
 
         try:
-            from backend.apps.agents.providers.registry import _find_builtin_model as find_builtin_model
+            from backend.apps.agents.providers.registry import find_builtin_model as find_builtin_model
             entry = find_builtin_model(session.model)
             if not entry or entry.get("api") != "anthropic":
                 return  # other providers handle caching automatically

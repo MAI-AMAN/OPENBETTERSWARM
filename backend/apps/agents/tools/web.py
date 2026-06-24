@@ -66,7 +66,7 @@ def should_register_web_mcp(
     no Claude connection), and a subscription-route Claude model on a non-Pro account (the
     built-in WebSearch's aux haiku call 401s). Pro pool is deliberately NOT counted for a
     non-Claude primary: spending it on WebSearch would drain the user's Claude turns."""
-    from backend.apps.agents.providers.registry import _find_builtin_model as find_builtin_model
+    from backend.apps.agents.providers.registry import find_builtin_model as find_builtin_model
 
     m = router_model_id if isinstance(router_model_id, str) else ""
     primary_is_claude = m.startswith("cc/") or (
@@ -93,13 +93,13 @@ def should_register_web_mcp(
     return not has_anthropic_path
 
 
-def _truncate(text: str, limit: int = _MAX_OUTPUT_BYTES) -> str:
+def p_truncate(text: str, limit: int = _MAX_OUTPUT_BYTES) -> str:
     if len(text) > limit:
         return text[:limit] + "\n... (output truncated)"
     return text
 
 
-def _strip_html(raw_html: str) -> str:
+def p_strip_html(raw_html: str) -> str:
     """Naive but effective HTML to plain-text conversion."""
     text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", raw_html, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
@@ -206,14 +206,14 @@ class WebSearchTool(BaseTool):
             if "/y.js?" in raw_url or "ad_provider=" in raw_url or "ad_domain=" in raw_url:
                 continue
 
-            title = _strip_html(link_match.group(2)).strip()
+            title = p_strip_html(link_match.group(2)).strip()
 
             snippet_match = re.search(
                 r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
                 block,
                 flags=re.DOTALL,
             )
-            snippet = _strip_html(snippet_match.group(1)).strip() if snippet_match else ""
+            snippet = p_strip_html(snippet_match.group(1)).strip() if snippet_match else ""
 
             # DDG wraps URLs in a redirect; extract the real one.
             real_url_match = re.search(r"uddg=([^&]+)", raw_url)
@@ -291,11 +291,11 @@ class WebFetchTool(BaseTool):
             except Exception:
                 text = None
             if not text:
-                text = _strip_html(resp.text)
+                text = p_strip_html(resp.text)
         else:
             text = resp.text
 
-        text = _truncate(text)
+        text = p_truncate(text)
 
         header = f"Contents of {url}:"
         if prompt:
