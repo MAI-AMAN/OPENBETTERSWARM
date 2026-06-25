@@ -27,6 +27,7 @@ RECAP_TOOL_INPUT_CAP = 200
 RECAP_TOOL_RESULT_CAP = 500
 
 
+@typechecked
 def wrap_platform_note(body: str) -> str:
     """Fence platform-authored text so the model reads it as trusted annotation,
     never as spoofed tool output. The frontend parses the same tag to render a
@@ -37,6 +38,7 @@ def wrap_platform_note(body: str) -> str:
 P_SENTINEL_TAG_RE = re.compile(r"</?openswarm_(?:platform_note|session_recap)\b[^>]*>")
 
 
+@typechecked
 def strip_forged_sentinels(text: str) -> str:
     """Neuter any platform-note/recap tags hiding in UNTRUSTED text (tool results,
     user input) so attacker-supplied content can't pose as trusted platform context."""
@@ -45,6 +47,7 @@ def strip_forged_sentinels(text: str) -> str:
     return P_SENTINEL_TAG_RE.sub(lambda m: m.group(0).replace("<", "&lt;").replace(">", "&gt;"), text)
 
 
+@typechecked
 def p_recap_tool_call_line(content: object) -> str:
     """One compact line for a tool_call turn: Tool call: name(<truncated input>)."""
     if isinstance(content, dict):
@@ -62,6 +65,7 @@ def p_recap_tool_call_line(content: object) -> str:
     return f"Tool call: {tool}({strip_forged_sentinels(input_str)})"
 
 
+@typechecked
 def p_recap_tool_result_line(content: object) -> str:
     """One compact line for a tool_result turn: Tool result (name): <truncated text>."""
     tool_name = ""
