@@ -17,7 +17,6 @@ from backend.apps.agents.manager.session.session_store import (
     save_session,
     build_search_text,
 )
-from backend.apps.agents.manager.session.sync_session_close import sync_session_close
 from backend.apps.agents.manager.session.apply_context_window import apply_context_window
 from backend.apps.agents.manager.session import resume_and_duplicate
 from backend.apps.agents.manager.view_builder_state import (
@@ -36,10 +35,6 @@ class SessionLifecycle(AgentManagerProtocol):
     @typechecked
     def build_search_text(session: AgentSession, max_len: int = 5000) -> str:
         return build_search_text(session, max_len)
-
-    @typechecked
-    def sync_session_close(self, session: AgentSession, close_reason: str = "user"):
-        sync_session_close(session, close_reason)
 
     @typechecked
     async def close_session(self, session_id: str) -> None:
@@ -75,8 +70,6 @@ class SessionLifecycle(AgentManagerProtocol):
         ev = self.cancel_events.get(session_id)
         if ev:
             ev.set()
-
-        self.sync_session_close(session)
 
         doc_data = session.model_dump(mode="json")
         doc_data["search_text"] = self.build_search_text(session)

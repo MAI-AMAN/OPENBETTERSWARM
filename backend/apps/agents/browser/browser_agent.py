@@ -778,7 +778,6 @@ async def run_browser_agent(
             except Exception:
                 pass
             session.status = "completed"
-            agent_manager.sync_session_close(session)
             await ws_manager.send_to_session(session_id, "agent:status", {
                 "session_id": session_id, "status": "completed",
                 "session": session.model_dump(mode="json"),
@@ -1908,7 +1907,6 @@ async def run_browser_agent(
             except Exception as e:
                 logger.warning(f"[browser-agent {session_id}] keep_open persist failed: {e}")
 
-        agent_manager.sync_session_close(session)
         await ws_manager.send_to_session(session_id, "agent:status", {
             "session_id": session_id,
             "status": final_status,

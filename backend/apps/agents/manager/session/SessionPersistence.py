@@ -1,7 +1,7 @@
 """Bulk session persistence across the WHOLE store, the startup/shutdown orchestration that
 operates on every session at once (reconcile stale-running, flush-all on shutdown, restore-all
 on boot). Split from SessionLifecycle (which handles ONE session at a time) so each file is
-one concern. self.sessions / self.sync_session_close resolve across the MRO as before."""
+one concern. self.sessions resolves across the MRO as before."""
 
 import logging
 
@@ -52,8 +52,6 @@ class SessionPersistence(AgentManagerProtocol):
             for req in list(session.pending_approvals):
                 ws_manager.resolve_approval(req.id, {"behavior": "deny", "message": "Server shutting down"})
             session.pending_approvals = []
-            # Tag this close as "shutdown" so the cloud can tell it apart from a user-initiated close. The desktop doesn't care; the tag rides along in the dump for whoever consumes it.
-            self.sync_session_close(session, close_reason="shutdown")
             doc_data = session.model_dump(mode="json")
             doc_data["search_text"] = self.build_search_text(session)
             save_session(session_id, doc_data)
