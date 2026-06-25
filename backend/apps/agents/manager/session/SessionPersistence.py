@@ -80,7 +80,14 @@ class SessionPersistence(AgentManagerProtocol):
             if session.closed_at is not None:
                 continue
             if session.status in ("running", "waiting_approval"):
-                session.status = "stopped"
+                # The app died mid-turn. If the last message in the active branch is already an
+                # assistant reply, the turn finished streaming and only the status finalize was lost
+                # (-> completed, no spurious "Resume" button); otherwise the agent was genuinely cut
+                # off owing a response (-> stopped, resumable).
+                branch = session.active_branch_id or "main"
+                p_branch_msgs = [m for m in session.messages if (m.branch_id or "main") == branch]
+                p_last = p_branch_msgs[-1] if p_branch_msgs else None
+                session.status = "completed" if (p_last is not None and p_last.role == "assistant") else "stopped"
             session.pending_approvals = []
             apply_context_window(session)
             self.sessions[session.id] = session
