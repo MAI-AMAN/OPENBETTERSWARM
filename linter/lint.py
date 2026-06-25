@@ -18,6 +18,8 @@ from checks.knip import run_knip
 from checks.endpoints import run_endpoint_check
 from checks.classes import run_class_check
 from checks.cycles import run_cycle_check
+from checks.no_underscore_names import run_underscore_check
+from checks.p_private import run_p_private_check
 from watchfiles import watch, DefaultFilter
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -29,7 +31,7 @@ def load_config() -> dict[str, Any]:
         return json.load(f)
 
 
-def run_checks(root: Path) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str], list[str]]:
+def run_checks(root: Path) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str], list[str], list[str], list[str]]:
     config = load_config()
     enabled: dict[str, bool] = config.get("enabled", {})
     rules: dict[str, int] = config["rules"]
@@ -105,7 +107,12 @@ def run_checks(root: Path) -> tuple[list[str], list[str], list[str], list[str], 
     aliases: dict[str, str] = rules.get("import-cycle-aliases", {})
     cycle_errors = run_cycle_check(root, excludes, aliases, exceptions, ignores) if enabled.get("import-cycles", True) else []
 
-    return sorted(structural_errors), sorted(vulture_errors), sorted(eslint_errors), sorted(knip_errors), sorted(endpoint_errors), sorted(class_errors), sorted(cycle_errors)
+    # Convention checks (ported from Haik's linter): ban leading-underscore names
+    # (dead-code tooling blind spot) and enforce p_-private access boundaries.
+    underscore_errors = run_underscore_check(root, exceptions, excludes, ignores) if enabled.get("no-underscore-names", False) else []
+    p_private_errors = run_p_private_check(root, exceptions, excludes, ignores) if enabled.get("p-private", False) else []
+
+    return sorted(structural_errors), sorted(vulture_errors), sorted(eslint_errors), sorted(knip_errors), sorted(endpoint_errors), sorted(class_errors), sorted(cycle_errors), sorted(underscore_errors), sorted(p_private_errors)
 
 
 def _print_section(name: str, errors: list[str]) -> None:
@@ -119,7 +126,8 @@ def print_results(
     structural_errors: list[str], vulture_errors: list[str],
     eslint_errors: list[str], knip_errors: list[str],
     endpoint_errors: list[str], class_errors: list[str],
-    cycle_errors: list[str],
+    cycle_errors: list[str], underscore_errors: list[str],
+    p_private_errors: list[str],
 ) -> None:
     _print_section("structural", structural_errors)
     _print_section("vulture", vulture_errors)
@@ -128,6 +136,8 @@ def print_results(
     _print_section("endpoints", endpoint_errors)
     _print_section("classes", class_errors)
     _print_section("import-cycles", cycle_errors)
+    _print_section("no-underscore-names", underscore_errors)
+    _print_section("p-private", p_private_errors)
 
 
 def watch_loop(root: Path) -> None:
