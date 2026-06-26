@@ -243,8 +243,9 @@ export function useTethers({
 
       const midX = x1 + (x2 - x1) / 2;
       const midY = y1 + (y2 - y1) / 2;
-      const labelX = isVertical ? midX : midX + (x2 - midX) * 0.15;
-      const labelY = isVertical ? midY + (y2 - midY) * 0.15 : y2;
+      // Center the pill on the line midpoint: the box is left-anchored at labelX, so back off half its text width (same trick as the monitor "Watching" label).
+      const labelX = midX - (label.length * 7.5) / 2;
+      const labelY = midY;
 
       return {
         key,
