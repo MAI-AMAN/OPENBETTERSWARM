@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Any
+from typing import Any, Optional
 
 import httpx
+from typeguard import typechecked
 
 from backend.apps.agents.tools.base import BaseTool, ToolContext
 from backend.apps.agents.tools.ssrf_guard import SSRFBlocked, safe_fetch
 
-_HTTP_TIMEOUT = 30
-_MAX_OUTPUT_BYTES = 250 * 1024  # ~250 KB covers ~95% of articles/wikis/docs.
-_USER_AGENT = (
+P_HTTP_TIMEOUT = 30
+P_MAX_OUTPUT_BYTES = 250 * 1024  # ~250 KB covers ~95% of articles/wikis/docs.
+P_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
@@ -48,13 +49,57 @@ def anthropic_web_search_is_reliable(*, uses_direct_anthropic_api: bool,
     return bool(uses_direct_anthropic_api or is_pro)
 
 
-def _truncate(text: str, limit: int = _MAX_OUTPUT_BYTES) -> str:
+@typechecked
+def should_register_web_mcp(
+    *,
+    model: str,
+    router_model_id: object,
+    api_type: Optional[str],
+    anthropic_api_key: Optional[str],
+    connection_mode: str,
+) -> bool:
+    """True when the agent loop must register the DDG-backed openswarm-web MCP because the
+    primary model has NO reliable native Anthropic web-search path. We prefer Anthropic's
+    hosted search (return False) whenever it's actually reachable, and cascade through our own
+    /api/web/search (Gemini -> OpenAI -> DuckDuckGo) otherwise. The three no-path cases:
+    a non-Claude primary, a custom-provider session (ANTHROPIC_BASE_URL points at 9Router with
+    no Claude connection), and a subscription-route Claude model on a non-Pro account (the
+    built-in WebSearch's aux haiku call 401s). Pro pool is deliberately NOT counted for a
+    non-Claude primary: spending it on WebSearch would drain the user's Claude turns."""
+    from backend.apps.agents.providers.registry import find_builtin_model as find_builtin_model
+
+    m = router_model_id if isinstance(router_model_id, str) else ""
+    primary_is_claude = m.startswith("cc/") or (
+        isinstance(router_model_id, str)
+        and not router_model_id.startswith(("cc/", "cx/", "gc/", "ag/", "gemini/"))
+        and api_type == "anthropic"
+    )
+    is_custom_session = api_type == "custom"
+    web_model_entry = find_builtin_model(model)
+    uses_direct_anthropic_api = (
+        web_model_entry is not None
+        and web_model_entry.get("route") == "api"
+        and web_model_entry.get("api") == "anthropic"
+        and bool(anthropic_api_key)
+    )
+    has_anthropic_path = (
+        not is_custom_session
+        and primary_is_claude
+        and anthropic_web_search_is_reliable(
+            uses_direct_anthropic_api=uses_direct_anthropic_api,
+            is_pro=(connection_mode in ("openswarm-pro", "free-trial")),
+        )
+    )
+    return not has_anthropic_path
+
+
+def p_truncate(text: str, limit: int = P_MAX_OUTPUT_BYTES) -> str:
     if len(text) > limit:
         return text[:limit] + "\n... (output truncated)"
     return text
 
 
-def _strip_html(raw_html: str) -> str:
+def p_strip_html(raw_html: str) -> str:
     """Naive but effective HTML to plain-text conversion."""
     text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", raw_html, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
@@ -94,7 +139,7 @@ class WebSearchTool(BaseTool):
         num_results: int = input_data.get("num_results", 5)
 
         try:
-            results = await self._search_ddg(query, num_results)
+            results = await self.search_ddg(query, num_results)
             if not results:
                 return [{"type": "text", "text": f"No search results found for: {query}"}]
             return [{"type": "text", "text": results}]
@@ -107,20 +152,18 @@ class WebSearchTool(BaseTool):
             return [{"type": "text", "text": f"Web search error: {exc}"}]
 
     @staticmethod
-    async def _search_ddg(query: str, num_results: int) -> str:
+    async def search_ddg(query: str, num_results: int) -> str:
         """Query DuckDuckGo HTML endpoint and parse results."""
         async with httpx.AsyncClient(
-            timeout=_HTTP_TIMEOUT,
+            timeout=P_HTTP_TIMEOUT,
             follow_redirects=True,
-            headers={"User-Agent": _USER_AGENT},
+            headers={"User-Agent": P_USER_AGENT},
         ) as client:
             resp = await client.post(
                 "https://html.duckduckgo.com/html/",
                 data={"q": query},
             )
-            # DDG serves its throttle challenge as 202 (a ~14KB no-results page),
-            # which is a 2xx so raise_for_status() sails right past it. Catch it
-            # explicitly so we report "rate-limited" instead of a bogus "no hits".
+            # DDG serves its throttle challenge as 202 (a ~14KB no-results page), which is a 2xx so raise_for_status() sails right past it. Catch it explicitly so we report "rate-limited" instead of a bogus "no hits".
             if resp.status_code == 202:
                 raise DDGRateLimited(query)
             resp.raise_for_status()
@@ -155,20 +198,18 @@ class WebSearchTool(BaseTool):
 
             raw_url = html.unescape(link_match.group(1))
 
-            # Drop sponsored rows: DDG ads point at its own y.js click-tracker
-            # (ad_domain/ad_provider) instead of a real uddg= redirect, so they'd
-            # otherwise show up as junk "duckduckgo.com/y.js?ad_..." results.
+            # Drop sponsored rows: DDG ads point at its own y.js click-tracker (ad_domain/ad_provider) instead of a real uddg= redirect, so they'd otherwise show up as junk "duckduckgo.com/y.js?ad_..." results.
             if "/y.js?" in raw_url or "ad_provider=" in raw_url or "ad_domain=" in raw_url:
                 continue
 
-            title = _strip_html(link_match.group(2)).strip()
+            title = p_strip_html(link_match.group(2)).strip()
 
             snippet_match = re.search(
                 r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
                 block,
                 flags=re.DOTALL,
             )
-            snippet = _strip_html(snippet_match.group(1)).strip() if snippet_match else ""
+            snippet = p_strip_html(snippet_match.group(1)).strip() if snippet_match else ""
 
             # DDG wraps URLs in a redirect; extract the real one.
             real_url_match = re.search(r"uddg=([^&]+)", raw_url)
@@ -218,8 +259,8 @@ class WebFetchTool(BaseTool):
             resp = await safe_fetch(
                 url,
                 method="GET",
-                headers={"User-Agent": _USER_AGENT},
-                timeout=_HTTP_TIMEOUT,
+                headers={"User-Agent": P_USER_AGENT},
+                timeout=P_HTTP_TIMEOUT,
             )
             resp.raise_for_status()
         except SSRFBlocked as exc:
@@ -246,11 +287,11 @@ class WebFetchTool(BaseTool):
             except Exception:
                 text = None
             if not text:
-                text = _strip_html(resp.text)
+                text = p_strip_html(resp.text)
         else:
             text = resp.text
 
-        text = _truncate(text)
+        text = p_truncate(text)
 
         header = f"Contents of {url}:"
         if prompt:

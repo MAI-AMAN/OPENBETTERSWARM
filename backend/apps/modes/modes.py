@@ -19,10 +19,10 @@ async def modes_lifespan():
     chat_path = os.path.join(DATA_DIR, "chat.json")
     if os.path.exists(chat_path):
         try:
-            import json as _json
-            with open(chat_path) as _f:
-                _data = _json.load(_f)
-            if _data.get("is_builtin") is True and _data.get("id") == "chat":
+            import json as p_json
+            with open(chat_path) as p_f:
+                p_data = p_json.load(p_f)
+            if p_data.get("is_builtin") is True and p_data.get("id") == "chat":
                 os.remove(chat_path)
                 logger.info("Removed deprecated built-in chat.json (merged into ask)")
         except Exception:
@@ -30,14 +30,14 @@ async def modes_lifespan():
     for builtin in BUILTIN_MODES:
         path = os.path.join(DATA_DIR, f"{builtin.id}.json")
         if not os.path.exists(path):
-            _save(builtin)
+            save(builtin)
     yield
 
 
 modes = SubApp("modes", modes_lifespan)
 
 
-def _load_all() -> list[Mode]:
+def load_all() -> list[Mode]:
     result = []
     if not os.path.exists(DATA_DIR):
         return result
@@ -53,11 +53,11 @@ def _load_all() -> list[Mode]:
     return result
 
 
-def _save(mode: Mode):
+def save(mode: Mode):
     atomic_write_json(os.path.join(DATA_DIR, f"{mode.id}.json"), mode.model_dump())
 
 
-def _load(mode_id: str) -> Mode:
+def load(mode_id: str) -> Mode:
     data = read_json_or_none(os.path.join(DATA_DIR, f"{mode_id}.json"))
     if data is None:
         raise HTTPException(status_code=404, detail="Mode not found")
@@ -73,12 +73,12 @@ def load_mode(mode_id: str) -> Mode | None:
 @modes.router.get("/list")
 async def list_modes():
     builtin_defaults = {m.id: m.model_dump() for m in BUILTIN_MODES}
-    return {"modes": [m.model_dump() for m in _load_all()], "builtin_defaults": builtin_defaults}
+    return {"modes": [m.model_dump() for m in load_all()], "builtin_defaults": builtin_defaults}
 
 
 @modes.router.get("/{mode_id}")
 async def get_mode(mode_id: str):
-    return _load(mode_id).model_dump()
+    return load(mode_id).model_dump()
 
 
 @modes.router.post("/create")
@@ -94,16 +94,16 @@ async def create_mode(body: ModeCreate):
         default_folder=body.default_folder,
         is_builtin=False,
     )
-    _save(mode)
+    save(mode)
     return {"ok": True, "mode": mode.model_dump()}
 
 
 @modes.router.put("/{mode_id}")
 async def update_mode(mode_id: str, body: ModeUpdate):
-    mode = _load(mode_id)
+    mode = load(mode_id)
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(mode, k, v)
-    _save(mode)
+    save(mode)
     return {"ok": True, "mode": mode.model_dump()}
 
 
@@ -113,13 +113,13 @@ async def reset_mode(mode_id: str):
     builtin = next((m for m in BUILTIN_MODES if m.id == mode_id), None)
     if not builtin:
         raise HTTPException(status_code=400, detail="Only built-in modes can be reset")
-    _save(builtin)
+    save(builtin)
     return {"ok": True, "mode": builtin.model_dump()}
 
 
 @modes.router.delete("/{mode_id}")
 async def delete_mode(mode_id: str):
-    mode = _load(mode_id)
+    mode = load(mode_id)
     if mode.is_builtin:
         raise HTTPException(status_code=403, detail="Cannot delete built-in modes")
     path = os.path.join(DATA_DIR, f"{mode_id}.json")

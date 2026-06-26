@@ -6,11 +6,8 @@ prompt, and the turn/report invariants. Exceeds the 300-LOC soft ceiling on
 purpose because it is one cohesive data blob, not multiple responsibilities.
 """
 
-# Two prompt levers that A/B-proved out and now ship unconditionally. THINK_SHORTER
-# (no prose beside action tools; ReportProgress IS the thinking) cut per-turn output
-# ~28% and roughly halved narration turns. MERGE_VERIFY (a confirmed `expect` is the
-# proof, skip the re-check) drops a wasted round-trip at the end.
-_THINK_SHORTER = (
+# Two prompt levers that A/B-proved out and now ship unconditionally. THINK_SHORTER (no prose beside action tools; ReportProgress IS the thinking) cut per-turn output ~28% and roughly halved narration turns. MERGE_VERIFY (a confirmed `expect` is the proof, skip the re-check) drops a wasted round-trip at the end.
+P_THINK_SHORTER = (
     "Do NOT write a free-text sentence next to your action tools: your ReportProgress "
     "fields ARE your thinking, and a separate prose explanation just repeats them and slows "
     "the turn. Don't narrate to the user as you go either. When the task is done you finish by "
@@ -18,7 +15,7 @@ _THINK_SHORTER = (
     "tools, no prose.\n"
 )
 
-_MERGE_VERIFY = (
+P_MERGE_VERIFY = (
     "When that `expect` CONFIRMS (the result says 'Confirmed: ...'), that IS your "
     "verification: go STRAIGHT to calling Done. Do NOT spend an "
     "extra screenshot or read turn to re-check what the confirmation already proved, that "
@@ -32,10 +29,8 @@ MODEL_MAP = {
     "haiku": "claude-haiku-4-5-20251001",
 }
 
-# The change an action should cause, declared by the agent and CONFIRMED after the
-# action runs (success is observed, never assumed). A hit returns fast; a miss tells
-# the agent it may not have worked instead of letting it claim a false success.
-_EXPECT_DESC = {
+# The change an action should cause, declared by the agent and CONFIRMED after the action runs (success is observed, never assumed). A hit returns fast; a miss tells the agent it may not have worked instead of letting it claim a false success.
+P_EXPECT_DESC = {
     "type": "string",
     "description": (
         "Optional but recommended: LITERAL text that should be VISIBLE on the page "
@@ -264,7 +259,7 @@ BROWSER_TOOLS_SCHEMA = [
             "type": "object",
             "properties": {
                 "selector": {"type": "string", "description": "CSS selector of the element to click."},
-                "expect": _EXPECT_DESC,
+                "expect": P_EXPECT_DESC,
             },
             "required": ["selector"],
         },
@@ -387,7 +382,7 @@ BROWSER_TOOLS_SCHEMA = [
                         "to fill a compose/message box reliably."
                     ),
                 },
-                "expect": _EXPECT_DESC,
+                "expect": P_EXPECT_DESC,
             },
             "required": ["index"],
         },
@@ -648,13 +643,9 @@ BROWSER_TOOLS_SCHEMA = [
     },
 ]
 
-# Schema-forced batching: the model ignored every prompt-level batching
-# invitation (0 adoptions across 8 measured runs), so the single-step mutating
-# tools are not offered to it at all; acting means a BrowserBatch array, and
-# the one deliberate solo path is BrowserClickIndex (irreversible step with
-# expect, or a text-box fill). Executors and replay still support everything.
-_SOLO_MUTATORS_HIDDEN = {"BrowserNavigate", "BrowserClick", "BrowserType", "BrowserScroll", "BrowserPressKey"}
-MODEL_VISIBLE_TOOLS = [t for t in BROWSER_TOOLS_SCHEMA if t["name"] not in _SOLO_MUTATORS_HIDDEN]
+# Schema-forced batching: the model ignored every prompt-level batching invitation (0 adoptions across 8 measured runs), so the single-step mutating tools are not offered to it at all; acting means a BrowserBatch array, and the one deliberate solo path is BrowserClickIndex (irreversible step with expect, or a text-box fill). Executors and replay still support everything.
+P_SOLO_MUTATORS_HIDDEN = {"BrowserNavigate", "BrowserClick", "BrowserType", "BrowserScroll", "BrowserPressKey"}
+MODEL_VISIBLE_TOOLS = [t for t in BROWSER_TOOLS_SCHEMA if t["name"] not in P_SOLO_MUTATORS_HIDDEN]
 
 ACTION_MAP = {
     "BrowserScreenshot": "screenshot",
@@ -674,8 +665,7 @@ ACTION_MAP = {
     "BrowserDetectWebMCP": "detect_webmcp",
     "BrowserListRoutes": "list_routes",
     "BrowserReplayRoute": "replay_route",
-    # Internal replay primitive (skill replay calls it directly; not in the
-    # LLM-facing schema). Re-resolves a click target by role+name.
+    # Internal replay primitive (skill replay calls it directly; not in the LLM-facing schema). Re-resolves a click target by role+name.
     "BrowserClickByName": "click_by_name",
 }
 
@@ -720,7 +710,7 @@ SYSTEM_PROMPT = (
     "needs (the exact selector, index, or value). Each token you write is generated one at a "
     "time and is the main thing that slows a turn, so write the fewest that still carry the "
     "plan forward. Only write working_memory when you learn something NEW this turn; else 'none'.\n"
-    + _THINK_SHORTER +
+    + P_THINK_SHORTER +
     "Emit ReportProgress and your action tool(s) together in the same response. "
     "If you skip ReportProgress, your action tools will be REJECTED with an error "
     "and you will have to retry. This is not optional. Read-only tools "
@@ -751,7 +741,7 @@ SYSTEM_PROMPT = (
     "inspections, or screenshots just because the post-type state only re-lists the rows "
     "that CHANGED, the unchanged Send is still there at its number. If clicking it comes "
     "back 'NOT confirmed', only THEN re-list to find where it moved.\n"
-    + _MERGE_VERIFY + "\n"
+    + P_MERGE_VERIFY + "\n"
 
     "## Loop awareness\n"
     "If you see a tool result containing 'LOOP DETECTED' or '⚠️', it means you "
@@ -905,10 +895,8 @@ SYSTEM_PROMPT = (
 
 MAX_TURNS = 40
 
-# Tools that count as "action tools"; calling any of these in a turn requires
-# the model to also call ReportProgress in the same turn (after the first
-# turn). Read-only tools and meta tools are exempt.
-_ACTION_TOOLS_REQUIRING_REPORT = {
+# Tools that count as "action tools"; calling any of these in a turn requires the model to also call ReportProgress in the same turn (after the first turn). Read-only tools and meta tools are exempt.
+ACTION_TOOLS_REQUIRING_REPORT = {
     "BrowserClick",
     "BrowserType",
     "BrowserNavigate",

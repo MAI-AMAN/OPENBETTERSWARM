@@ -29,7 +29,7 @@ from backend.main import app
 SERVER = os.path.join(os.path.dirname(os.path.dirname(__file__)), "apps", "agents", "settings_meta_server.py")
 
 
-def _free_port() -> int:
+def p_free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
@@ -40,9 +40,9 @@ def _free_port() -> int:
 @pytest.fixture
 def live_backend():
     import backend.auth as auth_mod
-    if not auth_mod._TOKEN:
-        auth_mod._TOKEN = secrets.token_urlsafe(32)
-    port = _free_port()
+    if not auth_mod.TOKEN:
+        auth_mod.TOKEN = secrets.token_urlsafe(32)
+    port = p_free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -51,20 +51,20 @@ def live_backend():
             break
         time.sleep(0.05)
     assert getattr(server, "started", False), "uvicorn did not start"
-    yield port, auth_mod._TOKEN
+    yield port, auth_mod.TOKEN
     server.should_exit = True
     thread.join(timeout=5)
 
 
 @pytest.fixture
 def reset_settings():
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     original = load_settings().model_copy(deep=True)
     yield
-    _save_settings(original)
+    save_settings(original)
 
 
-def _run_stdio(port: int, token: str, session_id: str, changes: dict) -> str:
+def p_run_stdio(port: int, token: str, session_id: str, changes: dict) -> str:
     env = {
         **os.environ,
         "OPENSWARM_PORT": str(port),
@@ -84,21 +84,20 @@ def _run_stdio(port: int, token: str, session_id: str, changes: dict) -> str:
 
 def test_live_stdio_settingswrite_refuses_live_key_clears_other(live_backend, reset_settings):
     port, token = live_backend
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     from backend.apps.agents.agent_manager import agent_manager
     from backend.apps.agents.core.models import AgentSession
 
-    # A real run on opus-4-8 in own_key mode: the Anthropic key powers it; an
-    # OpenAI key is also connected (the "other provider").
+    # A real run on opus-4-8 in own_key mode: the Anthropic key powers it; an OpenAI key is also connected (the "other provider").
     s = load_settings()
     s.connection_mode = "own_key"
     s.anthropic_api_key = "sk-ant-LIVE-do-not-clear"
     s.openai_api_key = "sk-oai-OTHER-ok-to-clear"
-    _save_settings(s)
+    save_settings(s)
     agent_manager.sessions["live-stdio-test"] = AgentSession(id="live-stdio-test", name="t", model="opus-4-8")
 
     try:
-        text = _run_stdio(port, token, "live-stdio-test",
+        text = p_run_stdio(port, token, "live-stdio-test",
                           {"anthropic_api_key": "", "openai_api_key": "", "theme": "light"})
     finally:
         agent_manager.sessions.pop("live-stdio-test", None)

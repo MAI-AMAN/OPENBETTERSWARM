@@ -19,9 +19,11 @@ import {
   handleApproval,
   collapseSession,
   closeSession,
+  renameSession,
 } from '@/shared/state/agentsSlice';
 import { displayChatTitle, isLegacyAutoName } from '@/shared/state/sessionDisplay';
 import { Typewriter } from '@/app/components/feedback/Animated';
+import InlineEditableTitle from '@/app/components/InlineEditableTitle';
 import {
   setCardPosition,
   setCardSize,
@@ -38,8 +40,98 @@ import { useDashboardActive } from '@/shared/hooks/useDashboardActive';
 import { useOverlayScrollPassthrough } from '../hooks/interaction/useOverlayScrollPassthrough';
 import { useStreamingMessage } from '@/shared/state/streamingSlice';
 import { isCanvasInteractionActive, onCanvasInteractionEnd } from '@/shared/canvasInteractionState';
+import { setCardSidecar } from '@/shared/state/workflowsSlice';
+import { openWorkflowsApp } from '@/shared/state/dashboardLayoutSlice';
 import { getAgentWorkTime, fmtSeconds } from '@/shared/agentWorkTime';
 import { friendlyStatusLabel } from '@/shared/statusLabel';
+
+/** Extract up to 3 substantive user-prompt steps to seed a workflow. */
+function isWorkflowSuggestionTool(toolName: unknown, mcpServer?: unknown): boolean {
+  const normalizedTool = String(toolName || '').toLowerCase();
+  const normalizedServer = String(mcpServer || '').toLowerCase();
+  if (!normalizedTool) return false;
+  if (normalizedTool === 'suggestconverttoworkflow') return true;
+  if (normalizedTool.endsWith('__suggestconverttoworkflow')) return true;
+  return normalizedTool.includes('suggestconverttoworkflow') && (
+    normalizedTool.includes('openswarm-schedule') ||
+    normalizedServer.includes('openswarm-schedule')
+  );
+}
+
+function isScheduleWorkflowTool(toolName: unknown): boolean {
+  const normalizedTool = String(toolName || '').toLowerCase();
+  if (!normalizedTool) return false;
+  return normalizedTool === 'scheduleworkflow' || normalizedTool.endsWith('__scheduleworkflow');
+}
+
+function parseWorkflowSuggestion(text: unknown): { reason: string; cadence: string } | null {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed?.reason || typeof parsed.reason !== 'string') return null;
+    return {
+      reason: parsed.reason,
+      cadence: typeof parsed.cadence === 'string'
+        ? parsed.cadence
+        : (typeof parsed.suggested_cadence === 'string' ? parsed.suggested_cadence : ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseWorkflowSuggestionFromContent(content: any): { reason: string; cadence: string } | null {
+  return parseWorkflowSuggestion(
+    content?.text ??
+    content?.content?.[0]?.text ??
+    content?.result ??
+    content?.output,
+  );
+}
+
+/** Detect if the session has a completed SuggestConvertToWorkflow tool call. */
+function findWorkflowSuggestion(session: AgentSession): { reason: string; cadence: string } | null {
+  let found: { reason: string; cadence: string } | null = null;
+  for (const msg of session.messages || []) {
+    const msgAny = msg as any;
+    const directContent = msgAny.content;
+    if (msgAny.role === 'tool_result') {
+      const toolName = directContent?.tool_name ?? directContent?.tool ?? directContent?.name ?? msgAny.tool_name;
+      if (isWorkflowSuggestionTool(toolName, directContent?.mcpServer ?? msgAny.mcpServer)) {
+        found = parseWorkflowSuggestionFromContent(directContent) || found;
+      }
+    }
+
+    const blocks = Array.isArray(directContent) ? directContent : [];
+    for (const block of blocks) {
+      if (block?.type !== 'tool_result') continue;
+      const toolName = block?.tool_name ?? block?.tool ?? block?.name;
+      if (isWorkflowSuggestionTool(toolName, block?.mcpServer)) {
+        found = parseWorkflowSuggestionFromContent(block) || found;
+      }
+    }
+  }
+  return found;
+}
+
+/** Count completed ScheduleWorkflow tool calls so a new one (vs the mount baseline) can pop the workflow open. */
+function countScheduleWorkflowCalls(session: AgentSession): number {
+  let count = 0;
+  for (const msg of session.messages || []) {
+    const msgAny = msg as any;
+    const directContent = msgAny.content;
+    if (msgAny.role === 'tool_result') {
+      const toolName = directContent?.tool_name ?? directContent?.tool ?? directContent?.name ?? msgAny.tool_name;
+      if (isScheduleWorkflowTool(toolName)) count += 1;
+    }
+    const blocks = Array.isArray(directContent) ? directContent : [];
+    for (const block of blocks) {
+      if (block?.type !== 'tool_result') continue;
+      if (isScheduleWorkflowTool(block?.tool_name ?? block?.tool ?? block?.name)) count += 1;
+    }
+  }
+  return count;
+}
 
 const GoogleServiceIcon: React.FC<{ service: string; size?: number }> = ({ service, size = 16 }) => {
   if (service === 'gmail') {
@@ -168,12 +260,7 @@ const HANDLE_DEFS: { dir: ResizeDir; sx: Record<string, any> }[] = [
 interface OuterProps {
   sessionId: string;
   expanded: boolean;
-  // Stable getter , cards read pan/zoom on demand (drag math) instead of
-  // receiving them as props. Without this, every wheel/pan tick on the
-  // canvas re-rendered every card, even though the canvas root's CSS
-  // transform is what actually moves them visually. Cards only need the
-  // values inside drag callbacks; making it a ref-backed getter keeps
-  // pan/zoom out of memo equality entirely.
+  // Stable getter, cards read pan/zoom on demand (drag math) instead of receiving them as props. Without this, every wheel/pan tick on the canvas re-rendered every card, even though the canvas root's CSS transform is what actually moves them visually. Cards only need the values inside drag callbacks; making it a ref-backed getter keeps pan/zoom out of memo equality entirely.
   getCanvasState: () => { panX: number; panY: number; zoom: number };
   spawnFrom?: { x: number; y: number; type?: 'branch' };
   exitTarget?: { x: number; y: number };
@@ -226,6 +313,41 @@ const AgentCard: React.FC<Props> = ({
   const hasApiKey = !!useAppSelector((s) => s.settings.data.anthropic_api_key);
   const modelsByProvider = useAppSelector((s) => s.models.byProvider);
   const expandedSessionIds = useAppSelector((s) => s.agents.expandedSessionIds);
+  const workflowSuggestion = useMemo(() => findWorkflowSuggestion(session), [session]);
+  // Suppress the convert-suggestion glow when this chat is already entangled with a workflow. Two cases: (a) The session is one of a workflow's runner sessions, OR (b) The session is the source the workflow was originally derived from. Either way a fresh convert would just clone the workflow, which is confusing identity collapse.
+  const workflowRunsMap = useAppSelector((s) => s.workflows.runs);
+  const workflowItems = useAppSelector((s) => s.workflows.items);
+  const linkedWorkflowSidecarId = useAppSelector((s) => {
+    const entry = Object.values(s.workflows.openCards).find((card) => card.sidecarSessionId === session.id);
+    return entry?.workflowId ?? null;
+  });
+  const sourceWorkflow = useMemo(() => {
+    for (const wf of Object.values(workflowItems || {})) {
+      if (wf.source_session_id === session.id) return wf;
+    }
+    return null;
+  }, [workflowItems, session.id]);
+  const isWorkflowRunnerSession = useMemo(() => {
+    // A Test Agent (spawned to validate a workflow draft) isn't a chat to convert; it carries workflow_test_state.
+    if (session.workflow_test_state) return true;
+    for (const arr of Object.values(workflowRunsMap || {})) {
+      for (const r of arr || []) {
+        if (r.session_id === session.id) return true;
+      }
+    }
+    return Boolean(sourceWorkflow);
+  }, [workflowRunsMap, sourceWorkflow, session.id, session.workflow_test_state]);
+  const hasUserPrompt = useMemo(
+    () => (session.messages || []).some((m) => m.role === 'user' && !m.hidden),
+    [session.messages],
+  );
+  const isConvertBlockedByTurn = session.status !== 'completed' && session.status !== 'stopped';
+  const showConvertToWorkflow =
+    !session.is_welcome_draft &&
+    !isWorkflowRunnerSession &&
+    hasUserPrompt &&
+    (session.messages.length >= 2 || isConvertBlockedByTurn || !!workflowSuggestion);
+  const canConvertToWorkflow = showConvertToWorkflow && !isConvertBlockedByTurn;
   // Curated picker label with a tidy fallback for unknowns.
   const friendlyModelLabel = useMemo(() => {
     const value = session.model;
@@ -242,6 +364,39 @@ const AgentCard: React.FC<Props> = ({
   }, [session.model, modelsByProvider]);
   const scrollOverlayRef = useOverlayScrollPassthrough(isSelected);
 
+  const suggestionPulseRef = useRef('');
+  const readyPulseRef = useRef('');
+  useEffect(() => {
+    if (!workflowSuggestion) return;
+    const key = `${workflowSuggestion.reason}|${workflowSuggestion.cadence}`;
+    if (canConvertToWorkflow) {
+      if (readyPulseRef.current === key) return;
+      readyPulseRef.current = key;
+    } else {
+      if (suggestionPulseRef.current === key) return;
+      suggestionPulseRef.current = key;
+    }
+    dispatch(fadeGlowingAgentCard(session.id));
+  }, [workflowSuggestion, canConvertToWorkflow, dispatch, session.id]);
+
+  // When the agent schedules a workflow from this chat, open it in the Workflows app. Baseline the count once on mount so historical schedules (e.g. after an app reload) don't re-open on their own.
+  const scheduleWorkflowCount = useMemo(() => countScheduleWorkflowCalls(session), [session]);
+  const baselineScheduleCountRef = useRef<number | null>(null);
+  const autoOpenedWorkflowIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (baselineScheduleCountRef.current === null) {
+      baselineScheduleCountRef.current = scheduleWorkflowCount;
+      return;
+    }
+    if (scheduleWorkflowCount <= baselineScheduleCountRef.current) return;
+    for (const wf of Object.values(workflowItems || {})) {
+      if (wf.source_session_id !== session.id) continue;
+      if (autoOpenedWorkflowIdsRef.current.has(wf.id)) continue;
+      autoOpenedWorkflowIdsRef.current.add(wf.id);
+      dispatch(openWorkflowsApp({ workflowId: wf.id }));
+    }
+  }, [scheduleWorkflowCount, workflowItems, session.id, dispatch]);
+
   const cardBoxRef = useRef<HTMLDivElement>(null);
   // Ref so ResizeObserver sees latest value without re-attaching when active flips.
   const isDashboardActiveRef = useRef(isDashboardActive);
@@ -252,8 +407,7 @@ const AgentCard: React.FC<Props> = ({
     // Stash height during pan/drag/zoom; flush on gesture end so layout reconciles.
     let suppressedHeight: number | null = null;
     const ro = new ResizeObserver((entries) => {
-      // Short-circuit when dashboard is hidden , observer stays attached so
-      // the next resize after returning to the dashboard fires correctly.
+      // Short-circuit when dashboard is hidden, observer stays attached so the next resize after returning to the dashboard fires correctly.
       if (!isDashboardActiveRef.current) return;
       // Re-measuring per streamed character mid-pan was forcing Dashboard re-renders via setMeasuredHeightsTick.
       if (isCanvasInteractionActive()) {
@@ -468,6 +622,9 @@ const AgentCard: React.FC<Props> = ({
   const handleRemove = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    if (linkedWorkflowSidecarId) {
+      dispatch(setCardSidecar({ workflowId: linkedWorkflowSidecarId, sessionId: null, kind: null }));
+    }
     dispatch(collapseSession(session.id));
     dispatch(removeCard(session.id));
     if (glowEntry) {
@@ -562,10 +719,7 @@ const AgentCard: React.FC<Props> = ({
       }}
       sx={{
         position: 'relative',
-        // contain: streaming chat updates inside don't reflow the dashboard.
-        // Skipping `paint` here because the highlighted/selected/glow
-        // boxShadows legitimately extend past the card border , `paint`
-        // containment would clip those visuals.
+        // contain: streaming chat updates inside don't reflow the dashboard. Skipping `paint` here because the highlighted/selected/glow boxShadows legitimately extend past the card border, `paint` containment would clip those visuals.
         contain: 'layout style',
         // Each card gets its own compositor layer; hover-cross used to cost 100-200ms PRESENTATION by re-painting the whole canvas.
         willChange: 'transform',
@@ -746,16 +900,22 @@ const AgentCard: React.FC<Props> = ({
               borderRadius: 1,
             }}
           >
-            <Typewriter
+            <InlineEditableTitle
               value={displayChatTitle(session)}
-              enabled={!!session.name && !isLegacyAutoName(session.name)}
+              onCommit={(name) => dispatch(renameSession({ sessionId: session.id, name }))}
+              sx={{ flex: '0 1 auto', minWidth: 0, maxWidth: '100%', color: c.text.primary, fontWeight: 600, fontSize: '0.95rem' }}
             >
-              {(t) => (
-                <Typography sx={{ color: c.text.primary, fontWeight: 600, fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {t}
-                </Typography>
-              )}
-            </Typewriter>
+              <Typewriter
+                value={displayChatTitle(session)}
+                enabled={!!session.name && !isLegacyAutoName(session.name)}
+              >
+                {(t) => (
+                  <Typography sx={{ color: c.text.primary, fontWeight: 600, fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t}
+                  </Typography>
+                )}
+              </Typewriter>
+            </InlineEditableTitle>
             {/* Status speaks only when it needs the user; finished work sits quiet. The welcome
                 chat hides its 'draft' label so the title reads clean. */}
             {session.status !== 'completed' && session.status !== 'stopped' && !session.is_welcome_draft && (
@@ -816,23 +976,30 @@ const AgentCard: React.FC<Props> = ({
           </Box>
         </Box>
 
-        <Box sx={{
-          display: isDraft && !expanded ? 'none' : 'flex',
-          gap: 1.5,
-          flexShrink: 0,
-          ...(isDraft && { visibility: 'hidden' }),
-        }}>
-          <Typography variant="caption" sx={{ color: c.text.tertiary }}>
-            {friendlyModelLabel}
-          </Typography>
-          <Typography variant="caption" sx={{ color: c.text.tertiary }}>
-            <ElapsedTimer messages={session.messages} status={session.status} />
-          </Typography>
-          {session.cost_usd > 0 && hasApiKey && (
-            <Typography variant="caption" sx={{ color: c.accent.primary }}>
-              ${session.cost_usd.toFixed(4)}
+        <Box
+          sx={{
+            display: isDraft && !expanded ? 'none' : 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            flexShrink: 0,
+            minWidth: 0,
+            ...(isDraft && { visibility: 'hidden' }),
+          }}
+        >
+          <Box sx={{ display: 'flex', gap: 1.5, minWidth: 0, overflow: 'hidden' }}>
+            <Typography variant="caption" sx={{ color: c.text.tertiary, whiteSpace: 'nowrap' }}>
+              {friendlyModelLabel}
             </Typography>
-          )}
+            <Typography variant="caption" sx={{ color: c.text.tertiary, whiteSpace: 'nowrap' }}>
+              <ElapsedTimer messages={session.messages} status={session.status} />
+            </Typography>
+            {session.cost_usd > 0 && hasApiKey && (
+              <Typography variant="caption" sx={{ color: c.accent.primary, whiteSpace: 'nowrap' }}>
+                ${session.cost_usd.toFixed(4)}
+              </Typography>
+            )}
+          </Box>
         </Box>
       </Box>
 

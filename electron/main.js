@@ -54,6 +54,7 @@ const getPort = require('get-port');
 const http = require('http');
 const affiliateTracking = require('./affiliateTracking');
 const cdpRoutes = require('./cdp-routes');
+const workflowsLifecycle = require('./workflowsLifecycle');
 
 // Squirrel makes the APP create its own shortcuts: on --squirrel-install it must
 // call Update.exe --createShortcut and exit, else the user finds only Setup.exe
@@ -926,6 +927,8 @@ async function startBackend() {
     // app_version="unknown". The path-based fallback stays in place so this
     // change is purely additive.
     OPENSWARM_APP_VERSION: app.getVersion(),
+    // Packaged builds route analytics through the cloud edge; dev leaves it unset so the backend hits the local ingest.
+    ...(isPackaged ? { OPENSWARM_ANALYTICS_URL: 'https://api.openswarm.com' } : {}),
     // Inject the user's BCP 47 locale + IANA timezone. The Python backend
     // doesn't have reliable APIs for either: locale.getdefaultlocale() is
     // deprecated and inconsistent across OSes, and Python's local-tz string
@@ -1068,6 +1071,10 @@ function markBackendReady() {
   if (backendReady) return;
   backendReady = true;
   _backendReadyResolve();
+  try {
+    workflowsLifecycle.setBackend({ port: backendPort, token: authToken });
+    workflowsLifecycle.startPolling();
+  } catch (_) {}
 }
 
 function getAuthTokenFilePath() {
@@ -1817,8 +1824,8 @@ app.whenReady().then(async () => {
       backendPort = parseInt(process.env.OPENSWARM_PORT || '8324', 10);
       console.log(`Dev mode: using existing backend on port ${backendPort}`);
       emitSplashStatus('Connecting to dev backend…');
-      // Load the token before marking ready, same as prod, so renderer
-      // fetches get a real token instead of '' (else they 401).
+      // Load the token before marking ready, same as prod, so the workflow
+      // poller's setBackend() gets a real token instead of '' (else it 401s).
       await loadAuthToken();
       markBackendReady();
     } else {
@@ -2306,6 +2313,10 @@ app.on('before-quit', async (event) => {
   try {
     await postShutdownAllApps(10000);
   } catch (_) {}
+  // Give in-flight workflow runs up to 30s to land so we don't destroy paid LLM work.
+  try {
+    await workflowsLifecycle.drainOnQuit(30);
+  } catch (_) {}
   app.quit();
 });
 
@@ -2540,6 +2551,11 @@ async function installDownloadedUpdate() {
 }
 
 ipcMain.handle('install-update', async () => {
+  // Veto while a workflow is in flight; lifecycle poller fires the deferred install once active drains.
+  try {
+    const vetoed = await workflowsLifecycle.maybeVetoInstall();
+    if (vetoed) return { vetoed: true };
+  } catch (_) {}
   await installDownloadedUpdate();
 });
 

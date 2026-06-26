@@ -55,12 +55,10 @@ export const DefaultToolBubble: React.FC<DefaultToolBubbleProps> = ({
 }) => {
   const c = useClaudeTokens();
   const tc = useTermColors();
-  // JS-driven mount reveal (see useMountReveal). The streaming pill itself glides
-  // in so a tool enters smoothly the moment it starts; when it commits, AgentChat
-  // sets suppressReveal on that same row so the hand-off doesn't re-animate what's
-  // already on screen. mcpCompact rows opt out (the group's row-fade handles them).
+  // JS-driven mount reveal (see useMountReveal). The streaming pill itself glides in so a tool enters smoothly the moment it starts; when it commits, AgentChat sets suppressReveal on that same row so the hand-off doesn't re-animate what's already on screen. mcpCompact rows opt out (the group's row-fade handles them).
   const reveal = useMountReveal();
   const enterStyle = (!mcpCompact && !suppressReveal) ? reveal : {};
+  const canToggleDetails = !!inputSummary && !isStreaming;
 
   return (
     <Box
@@ -89,16 +87,16 @@ export const DefaultToolBubble: React.FC<DefaultToolBubbleProps> = ({
         } as any}
       >
         <Box
-          onClick={toggle}
+          onClick={canToggleDetails ? toggle : undefined}
           sx={{
             display: 'flex',
             alignItems: 'center',
             gap: 0.75,
             px: 1.5,
             py: mcpCompact ? 0.6 : 0.75,
-            cursor: isStreaming ? 'default' : 'pointer',
-            borderBottom: mcpCompact && showBody ? `1px solid ${c.border.subtle}` : 'none',
-            '&:hover': isStreaming ? {} : { bgcolor: 'rgba(0,0,0,0.02)' },
+            cursor: canToggleDetails ? 'pointer' : 'default',
+            borderBottom: mcpCompact && showBody && canToggleDetails ? `1px solid ${c.border.subtle}` : 'none',
+            '&:hover': canToggleDetails ? { bgcolor: 'rgba(0,0,0,0.02)' } : {},
           }}
         >
           {mcpInfo.isMcp && mcpInfo.service
@@ -186,7 +184,7 @@ export const DefaultToolBubble: React.FC<DefaultToolBubbleProps> = ({
           )}
           {showTimer && <ElapsedTimer startTime={call.timestamp} />}
 
-          {!isStreaming && (
+          {canToggleDetails && (
             <IconButton size="small" sx={{ color: c.text.tertiary, p: mcpCompact ? 0.15 : 0.25, flexShrink: 0 }}>
               {showBody ? (
                 <ExpandLessIcon sx={{ fontSize: mcpCompact ? 16 : 18 }} />
@@ -197,7 +195,7 @@ export const DefaultToolBubble: React.FC<DefaultToolBubbleProps> = ({
           )}
         </Box>
 
-        <Collapse in={showBody}>
+        <Collapse in={showBody && canToggleDetails}>
           <Box
             sx={{
               bgcolor: tc.TERM_BG,
@@ -292,6 +290,34 @@ export const DefaultToolBubble: React.FC<DefaultToolBubbleProps> = ({
                 )}
               </pre>
             ) : null}
+
+            {parsedResult?.platformNote && (
+              <Box
+                sx={{
+                  mx: 1.5,
+                  mb: 1,
+                  mt: 0.5,
+                  px: 1,
+                  py: 0.75,
+                  bgcolor: c.bg.surface,
+                  border: `1px solid ${c.border.medium}`,
+                  borderRadius: 1.5,
+                }}
+              >
+                <Typography
+                  sx={{
+                    color: c.text.secondary,
+                    fontSize: '0.72rem',
+                    fontFamily: c.font.mono,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {parsedResult.platformNote}
+                </Typography>
+              </Box>
+            )}
 
             {!parsedResult && isPending && !isStreaming && !isBrowserAgent && (
               <Box sx={{ px: 1.5, pb: 1, pt: 0.5 }}>

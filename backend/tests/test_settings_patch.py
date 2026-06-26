@@ -15,33 +15,33 @@ from fastapi.testclient import TestClient
 from backend.main import app
 
 
-def _auth_headers():
+def p_auth_headers():
     import backend.auth as auth_mod
-    if not auth_mod._TOKEN:
+    if not auth_mod.TOKEN:
         import secrets
-        auth_mod._TOKEN = secrets.token_urlsafe(32)
-    return {"Authorization": f"Bearer {auth_mod._TOKEN}"}
+        auth_mod.TOKEN = secrets.token_urlsafe(32)
+    return {"Authorization": f"Bearer {auth_mod.TOKEN}"}
 
 
 @pytest.fixture
 def client():
-    return TestClient(app, headers=_auth_headers())
+    return TestClient(app, headers=p_auth_headers())
 
 
 @pytest.fixture
 def reset_settings():
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     original = load_settings().model_copy(deep=True)
     yield
-    _save_settings(original)
+    save_settings(original)
 
 
 def test_patch_changes_only_sent_fields(client, reset_settings):
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     s = load_settings()
     s.theme = "dark"
     s.default_mode = "chat"  # as if something else had set this
-    _save_settings(s)
+    save_settings(s)
 
     r = client.patch("/api/settings", json={"theme": "light"})
     assert r.status_code == 200, r.text
@@ -64,14 +64,14 @@ async def test_concurrent_renderer_patch_and_agent_write_both_survive(reset_sett
     """The renderer PATCHes one field while an autonomous agent writes another,
     at the same time. Both must land: the renderer never sends the agent's field,
     so it can't clobber it, and both reads happen fresh under the shared lock."""
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     base = load_settings()
     base.theme = "dark"
     base.default_mode = "agent"
-    _save_settings(base)
+    save_settings(base)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=_auth_headers()) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=p_auth_headers()) as client:
         r1, r2 = await asyncio.gather(
             client.patch("/api/settings", json={"theme": "light"}),
             client.post("/api/settings-meta/write", json={"changes": {"default_mode": "chat"}}),

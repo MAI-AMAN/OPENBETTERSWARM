@@ -4,10 +4,10 @@ import Typography from '@mui/material/Typography';
 import InputBase from '@mui/material/InputBase';
 import CircularProgress from '@mui/material/CircularProgress';
 import Tooltip, { tooltipClasses } from '@mui/material/Tooltip';
+import Snackbar from '@mui/material/Snackbar';
 import Icon from '@mui/material/Icon';
 import { styled } from '@mui/material/styles';
 import AddRounded from '@mui/icons-material/AddRounded';
-import HistoryRounded from '@mui/icons-material/HistoryRounded';
 
 import ChatBubbleTeardrop from './ChatBubbleTeardrop';
 
@@ -22,11 +22,15 @@ const popIn = (i: number) => ({
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded';
 import StickyNote2OutlinedIcon from '@mui/icons-material/StickyNote2Outlined';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
+import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import LanguageIcon from '@mui/icons-material/Language';
 import SearchIcon from '@mui/icons-material/Search';
 import { motion } from 'framer-motion';
 import ChatInput from '@/app/pages/AgentChat/ChatInput';
 import type { ContextPath } from '@/app/components/editor/DirectoryBrowser';
+import SchedulePopover from '@/app/pages/Workflows/SchedulePopover';
+import { openWorkflowCard, fetchAllRuns, upsertRun } from '@/shared/state/workflowsSlice';
+import { addWorkflowCard, openWorkflowsApp, closeWorkflowsApp } from '@/shared/state/dashboardLayoutSlice';
 import { useElementSelection } from '@/app/components/editor/ElementSelectionContext';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { useAppDispatch, useAppSelector } from '@/shared/hooks';
@@ -49,6 +53,7 @@ interface Props {
     forcedTools?: string[],
     attachedSkills?: Array<{ id: string; name: string; content: string }>,
     selectedBrowserIds?: string[],
+    selectedAppIds?: string[],
   ) => void;
   onAddView: (outputId: string) => void;
   onHistoryResume: (sessionId: string) => void;
@@ -119,11 +124,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
     const [mode, setMode] = useState(defaultMode || 'agent');
     const [model, setModel] = useState(defaultModel || 'sonnet');
     const [thinkingLevel, setThinkingLevel] = useState<'off' | 'low' | 'medium' | 'high' | 'auto'>(defaultThinkingLevel || 'auto');
-    // Snap to the persisted Settings defaults as soon as they arrive from the
-    // backend. Without the settingsLoaded guard, the effect fires against the
-    // Redux initialState ('sonnet') before the real default has loaded, and
-    // the settingsApplied flag then locks out the real default for the rest
-    // of the session , so new chats spawn under the stale value.
+    // Snap to the persisted Settings defaults as soon as they arrive from the backend. Without the settingsLoaded guard, the effect fires against the Redux initialState ('sonnet') before the real default has loaded, and the settingsApplied flag then locks out the real default for the rest of the session, so new chats spawn under the stale value.
     const settingsApplied = useRef(false);
     useEffect(() => {
       if (settingsLoaded && !settingsApplied.current) {
@@ -143,11 +144,7 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
       }
       prevInputOpen.current = inputOpen;
     }, [inputOpen, settingsLoaded, defaultMode, defaultModel, defaultThinkingLevel]);
-    // Prefill-driven mode: a Build starter opens the composer in App Builder mode
-    // ('view-builder'); a non-Build starter (no prefillMode) falls back to the
-    // default. Gated on inputOpen + declared last so it wins the reset effects
-    // above regardless of settings-load timing. A later manual pick survives
-    // because none of these deps change on a pick.
+    // Prefill-driven mode: a Build starter opens the composer in App Builder mode ('view-builder'); a non-Build starter (no prefillMode) falls back to the default. Gated on inputOpen + declared last so it wins the reset effects above regardless of settings-load timing. A later manual pick survives because none of these deps change on a pick.
     useEffect(() => {
       if (!inputOpen || !settingsLoaded) return;
       setMode(prefillMode || defaultMode || 'agent');
@@ -179,9 +176,15 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
     const [viewSearch, setViewSearch] = useState('');
     const [historyOpen, setHistoryOpen] = useState(false);
     const [historyQuery, setHistoryQuery] = useState('');
+    const [popoverMode, setPopoverMode] = useState<'search' | 'runs' | 'schedule'>('search');
+    const [expandToast, setExpandToast] = useState<string | null>(null);
     const shortcut = useAppSelector((s) => s.settings.data.new_agent_shortcut);
     const outputs = useAppSelector((s) => s.outputs.items);
     const historySearch = useAppSelector((s) => s.agents.historySearch);
+    const allRuns = useAppSelector((s) => s.workflows.allRuns);
+    const allRunsLoading = useAppSelector((s) => s.workflows.allRunsLoading);
+    const workflowItems = useAppSelector((s) => s.workflows.items);
+    const workflowsHubOpen = useAppSelector((s) => Boolean(s.dashboardLayout.workflowsHub));
 
     const outputList = useMemo(() => Object.values(outputs), [outputs]);
     const filteredOutputs = useMemo(() => {
@@ -213,8 +216,9 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
         forcedTools?: string[],
         attachedSkills?: Array<{ id: string; name: string; content: string }>,
         selectedBrowserIds?: string[],
+        selectedAppIds?: string[],
       ) => {
-        onSend(message, mode, model, images, contextPaths, forcedTools, attachedSkills, selectedBrowserIds);
+        onSend(message, mode, model, images, contextPaths, forcedTools, attachedSkills, selectedBrowserIds, selectedAppIds);
       },
       [onSend, mode, model],
     );
@@ -255,20 +259,17 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
       setViewSearch('');
     }, [viewPickerOpen, dispatch]);
 
+    // Opens the History popover on Chat history, with a tab to the Scheduled tasks run log. The calendar is a separate destination reached via the Schedule pill, never from here.
     const handleOpenHistory = useCallback(() => {
       if (historyOpen) {
         setHistoryOpen(false);
-        setHistoryQuery('');
-        dispatch(clearHistorySearch());
         return;
       }
       setViewPickerOpen(false);
       setViewSearch('');
+      setPopoverMode('search');
       setHistoryOpen(true);
-      setHistoryQuery('');
-      dispatch(clearHistorySearch());
-      dispatch(searchHistory({ q: '', limit: HISTORY_PAGE_SIZE, offset: 0, dashboardId }));
-    }, [historyOpen, dispatch, dashboardId]);
+    }, [historyOpen]);
 
     const handleHistorySelect = useCallback((sessionId: string) => {
       onHistoryResume(sessionId);
@@ -290,16 +291,13 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
     const autoSelectOnNew = useAppSelector((s) => s.settings.data.auto_select_mode_on_new_agent);
     const prevInputOpenRef = useRef(inputOpen);
     useEffect(() => {
-      // Collapsing the composer drops the selecting cursor but KEEPS the selected
-      // elements, so they persist across collapse/reopen like the draft text does.
-      // The selection is cleared on send via ChatInput's clearOwnerElements(ownerId).
+      // Collapsing the composer drops the selecting cursor but KEEPS the selected elements, so they persist across collapse/reopen like the draft text does. The selection is cleared on send via ChatInput's clearOwnerElements(ownerId).
       if (prevInputOpenRef.current && !inputOpen && elementSelection) {
         if (elementSelection.selectMode && elementSelection.activeOwnerId === TOOLBAR_OWNER_ID) {
           elementSelection.setSelectMode(false);
         }
       }
-      // Re-arm select mode on reopen without wiping any in-progress selection
-      // (mirrors the selector button, which only clears when switching owners).
+      // Re-arm select mode on reopen without wiping any in-progress selection (mirrors the selector button, which only clears when switching owners).
       if (!prevInputOpenRef.current && inputOpen && autoSelectOnNew && elementSelection) {
         elementSelection.setActiveOwnerId(TOOLBAR_OWNER_ID);
         elementSelection.setExcludeSelectId(null);
@@ -343,7 +341,8 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
         if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) return;
 
         const el = target instanceof Element ? target : (target as Node).parentElement;
-        if (el?.closest('[role="dialog"], [role="presentation"], .MuiModal-root, .MuiPopover-root')) {
+
+        if (el?.closest('[role="dialog"], [role="presentation"], .MuiModal-root, .MuiPopover-root, [data-toolbar-pills]')) {
           return;
         }
         if (elementSelection?.selectMode && el?.closest('[data-select-type]')) {
@@ -402,6 +401,12 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
       return () => clearTimeout(timer);
     }, [historyQuery, historyOpen, dispatch, dashboardId]);
 
+    useEffect(() => {
+      if (historyOpen && popoverMode === 'runs') {
+        dispatch(fetchAllRuns(200));
+      }
+    }, [historyOpen, popoverMode, dispatch]);
+
     const handleHistoryScroll = useCallback(() => {
       const el = historyListRef.current;
       if (!el) return;
@@ -429,12 +434,12 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
           padding: isExpanded ? '6px' : '5px',
           userSelect: 'none' as const,
           overflow: inputOpen || newAgentBounce || historyOpen ? 'visible' : 'hidden',
-          // historyOpen: width owned by the inline history list; leave undefined so framer-motion measures intrinsic size.
+          // historyOpen: width owned by SchedulePopover; leave undefined so framer-motion measures intrinsic size.
           width: viewPickerOpen ? 580 : historyOpen ? undefined : isExpanded ? 540 : undefined,
         }}
       >
-        {inputOpen ? (
-          // data-onboarding-scope="dock" makes AC's per-agent resolver prefer this dock chat input over existing agent cards.
+        {inputOpen && !historyOpen ? (
+          // historyOpen wins over the composer: clicking Schedule closes the composer via onCancel(), but that's a parent-state update that lands a render late, so without this guard the composer kept covering the calendar (the "Schedule does nothing" bug). data-onboarding-scope="dock" makes AC's per-agent resolver prefer this dock chat input over existing agent cards.
           <div
             data-onboarding-scope="dock"
             style={{ width: '100%', minHeight: 56, paddingBottom: 0, marginBottom: -4 }}
@@ -454,57 +459,37 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
             />
           </div>
         ) : historyOpen ? (
-          // Past-chat search list. Fixed-size bordered surface (matches the
-          // toolbar popover footprint) with a search input + scrollable
-          // results; clicking a row resumes that chat.
-          <Box sx={{ display: 'flex', flexDirection: 'column', width: 620, maxWidth: 620, flexShrink: 0 }}>
-            <Box sx={{
-              width: '100%',
-              height: 420,
-              bgcolor: c.bg.surface,
-              border: `1px solid ${c.border.subtle}`,
-              borderRadius: `${c.radius.lg}px`,
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-            }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, flexShrink: 0 }}>
-                <SearchIcon sx={{ fontSize: 18, color: c.text.muted }} />
-                <InputBase
-                  inputRef={historyInputRef}
-                  value={historyQuery}
-                  onChange={(e) => setHistoryQuery(e.target.value)}
-                  placeholder="Search past chats..."
-                  sx={{ flex: 1, fontSize: '0.85rem', color: c.text.primary, fontFamily: c.font.sans, '& input::placeholder': { color: c.text.ghost, opacity: 1 } }}
-                />
-              </Box>
-              <Box
-                ref={historyListRef}
-                onScroll={handleHistoryScroll}
-                sx={{ flex: 1, overflowY: 'auto', borderTop: `1px solid ${c.border.subtle}` }}
-              >
-                {historySearch.results.length === 0 && !historySearch.loading && (
-                  <Typography sx={{ px: 1.5, py: 2.5, fontSize: '0.82rem', color: c.text.muted, textAlign: 'center' }}>
-                    {historyQuery ? 'No matching chats' : 'No chat history yet'}
-                  </Typography>
-                )}
-                {historySearch.results.map((entry) => (
-                  <Box
-                    key={entry.id}
-                    onClick={() => handleHistorySelect(entry.id)}
-                    sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.9, cursor: 'pointer', '&:hover': { bgcolor: c.bg.elevated } }}
-                  >
-                    <Typography sx={{ flex: 1, fontSize: '0.82rem', color: c.text.primary, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {entry.name}
-                    </Typography>
-                    <Typography sx={{ fontSize: '0.7rem', color: c.text.ghost, flexShrink: 0, whiteSpace: 'nowrap' }}>
-                      {formatRelativeTime(entry.closed_at)}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          </Box>
+          <div style={{ width: '100%' }}>
+            <SchedulePopover
+              mode={popoverMode}
+              onModeChange={setPopoverMode}
+              hideTopChrome
+              chatHistoryOnly
+              historyResults={historySearch.results.map((e) => ({ id: e.id, name: e.name, closed_at: e.closed_at }))}
+              historyLoading={historySearch.loading}
+              historyQuery={historyQuery}
+              onHistoryQueryChange={setHistoryQuery}
+              onHistorySelect={handleHistorySelect}
+              onNewChat={() => { handleCloseHistory(); onNewAgent(); }}
+              onWorkflowSelect={(wid) => {
+                dispatch(openWorkflowsApp({ workflowId: wid }));
+                handleCloseHistory();
+              }}
+              onExpand={() => {
+                dispatch(openWorkflowsApp());
+                handleCloseHistory();
+              }}
+              allRuns={allRuns}
+              allRunsLoading={allRunsLoading}
+              workflowTitleFor={(wid) => workflowItems[wid]?.title || 'Workflow'}
+              onRunOpen={(run) => {
+                dispatch(openWorkflowsApp({ workflowId: run.workflow_id }));
+                handleCloseHistory();
+              }}
+              historyScrollRef={historyListRef as React.RefObject<HTMLDivElement>}
+              onHistoryScroll={handleHistoryScroll}
+            />
+          </div>
         ) : viewPickerOpen ? (
           <div style={{ width: '100%' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1 }}>
@@ -748,15 +733,16 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
               enterDelay={200}
               title={
                 <Box sx={{ textAlign: 'center' }}>
-                  <Box sx={{ fontWeight: 600 }}>History  ⌘O</Box>
+                  <Box sx={{ fontWeight: 600 }}>Workflows</Box>
+                  <Box sx={{ opacity: 0.6, fontSize: '0.7rem', mt: '1px' }}>Schedule and calendar</Box>
                 </Box>
               }
             >
               <Box
                 role="button"
-                aria-label="History"
+                aria-label="Workflows"
                 tabIndex={0}
-                onClick={handleOpenHistory}
+                onClick={() => dispatch(workflowsHubOpen ? closeWorkflowsApp() : openWorkflowsApp())}
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
@@ -764,14 +750,15 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                   width: BTN,
                   height: BTN,
                   borderRadius: `${c.radius.md}px`,
-                  color: c.text.tertiary,
+                  color: workflowsHubOpen ? c.accent.primary : c.text.tertiary,
+                  bgcolor: workflowsHubOpen ? c.bg.secondary : 'transparent',
                   cursor: 'pointer',
                   transition: 'opacity 0.15s, background-color 0.15s',
                   '&:hover': { opacity: 1, bgcolor: c.bg.secondary, color: c.accent.primary },
                   ...popIn(3),
                 }}
               >
-                <HistoryRoundedIcon sx={{ fontSize: 22 }} />
+                <EventRepeatIcon sx={{ fontSize: 22 }} />
               </Box>
             </WarmTooltip>
 
@@ -807,6 +794,40 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
                 }}
               >
                 <StickyNote2OutlinedIcon sx={{ fontSize: 22 }} />
+              </Box>
+            </WarmTooltip>
+
+            <WarmTooltip
+              tokens={c}
+              placement="top"
+              arrow
+              enterDelay={200}
+              title={
+                <Box sx={{ textAlign: 'center' }}>
+                  <Box sx={{ fontWeight: 600 }}>History  ⌘O</Box>
+                </Box>
+              }
+            >
+              <Box
+                role="button"
+                aria-label="History"
+                tabIndex={0}
+                onClick={handleOpenHistory}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: BTN,
+                  height: BTN,
+                  borderRadius: `${c.radius.md}px`,
+                  color: c.text.tertiary,
+                  cursor: 'pointer',
+                  transition: 'opacity 0.15s, background-color 0.15s',
+                  '&:hover': { opacity: 1, bgcolor: c.bg.secondary, color: c.accent.primary },
+                  ...popIn(5),
+                }}
+              >
+                <HistoryRoundedIcon sx={{ fontSize: 22 }} />
               </Box>
             </WarmTooltip>
 
@@ -846,6 +867,13 @@ const DashboardToolbar = React.forwardRef<HTMLDivElement, Props>(
           </div>
         )}
       </MotionBox>
+      <Snackbar
+        open={Boolean(expandToast)}
+        autoHideDuration={3000}
+        onClose={() => setExpandToast(null)}
+        message={expandToast || ''}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
       </>
     );
   },

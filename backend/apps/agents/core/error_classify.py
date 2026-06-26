@@ -1,10 +1,10 @@
 import re
+from typing import Optional
 
-# Secret shapes that must never ride along when we ship a stderr tail or an
-# error string to telemetry. own_key mode means the subprocess stderr can echo
-# the user's OWN provider key, so this scrub is the wall between a diagnostic
-# and a key leak; over-redacting is fine, leaking is not.
-_TELEMETRY_SECRET_PATTERNS = (
+from typeguard import typechecked
+
+# Secret shapes that must never ride along when we ship a stderr tail or an error string to telemetry. own_key mode means the subprocess stderr can echo the user's OWN provider key, so this scrub is the wall between a diagnostic and a key leak; over-redacting is fine, leaking is not.
+P_TELEMETRY_SECRET_PATTERNS = (
     re.compile(r"sk-ant-[A-Za-z0-9_\-]{12,}"),
     re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),
     re.compile(r"AIza[A-Za-z0-9_\-]{20,}"),
@@ -20,15 +20,13 @@ def redact_for_telemetry(text: str, *, limit: int = 2000) -> str:
     error/stderr string goes through here before it leaves the machine."""
     if not text:
         return ""
-    for pat in _TELEMETRY_SECRET_PATTERNS:
+    for pat in P_TELEMETRY_SECRET_PATTERNS:
         text = pat.sub("[redacted]", text)
     return text[-limit:]
 
 
-# Patterns that indicate an upstream transient problem (overload / rate limit /
-# infra blip), safe to silently retry with backoff. Checked against the
-# stringified exception from claude_agent_sdk / Claude CLI.
-_TRANSIENT_CAPACITY_PATTERNS = re.compile(
+# Patterns that indicate an upstream transient problem (overload / rate limit / infra blip), safe to silently retry with backoff. Checked against the stringified exception from claude_agent_sdk / Claude CLI.
+TRANSIENT_CAPACITY_PATTERNS = re.compile(
     r"(?:\b(?:429|500|502|503|504|529)\b"
     r"|overloaded"
     r"|service\s+(?:temporarily\s+)?unavailable"
@@ -42,13 +40,8 @@ _TRANSIENT_CAPACITY_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-# A first message ships the full tool schema; 9Router rewrites Anthropic
-# tools[].input_schema into Gemini function_declarations / OpenAI params, and a
-# construct it can't translate makes the provider 400 (INVALID_ARGUMENT) with
-# zero tokens. That is NOT auth, reconnecting won't help, the request shape is
-# wrong, so we classify it apart and stop the catch-all from showing a
-# "reconnect your subscription" card for a tool-schema 400.
-_TRANSLATION_ERROR_PATTERNS = re.compile(
+# A first message ships the full tool schema; 9Router rewrites Anthropic tools[].input_schema into Gemini function_declarations / OpenAI params, and a construct it can't translate makes the provider 400 (INVALID_ARGUMENT) with zero tokens. That is NOT auth, reconnecting won't help, the request shape is wrong, so we classify it apart and stop the catch-all from showing a "reconnect your subscription" card for a tool-schema 400.
+P_TRANSLATION_ERROR_PATTERNS = re.compile(
     r"(?:function_declarations"
     r"|invalid_argument"
     r"|invalid\s+json\s+payload"
@@ -61,13 +54,8 @@ _TRANSLATION_ERROR_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-# Patterns that look rate-limit-ish but are actually non-transient (user quota,
-# auth, context-window tier gate). Must NOT retry, upgrading, reauthing, or
-# trimming context is required. The long-context-required variant is what
-# Anthropic returns when an OAuth Pro/Max account ships a request whose input
-# exceeds the 200K standard tier and would need the "extra usage" tier; the
-# user can't recover by waiting, so we surface it instead of looping.
-_NON_TRANSIENT_PATTERNS = re.compile(
+# Patterns that look rate-limit-ish but are actually non-transient (user quota, auth, context-window tier gate). Must NOT retry, upgrading, reauthing, or trimming context is required. The long-context-required variant is what Anthropic returns when an OAuth Pro/Max account ships a request whose input exceeds the 200K standard tier and would need the "extra usage" tier; the user can't recover by waiting, so we surface it instead of looping.
+NON_TRANSIENT_PATTERNS = re.compile(
     r"(?:usage\s+cap\s+exceeded"
     r"|reached\s+your\s+OpenSwarm.*plan\s+limit"
     r"|no\s+active\s+subscription"
@@ -82,7 +70,8 @@ _NON_TRANSIENT_PATTERNS = re.compile(
 )
 
 
-def _is_long_context_error(exc: BaseException, extra_text: str = "") -> bool:
+@typechecked
+def is_long_context_error(exc: BaseException, extra_text: str = "") -> bool:
     """True when the upstream error is the 'long context tier required' 429.
 
     Used by the catch-all error path to emit a friendly context-overflow
@@ -99,7 +88,8 @@ def _is_long_context_error(exc: BaseException, extra_text: str = "") -> bool:
     ))
 
 
-def _is_free_trial_exhausted(exc: BaseException, extra_text: str = "") -> bool:
+@typechecked
+def is_free_trial_exhausted(exc: BaseException, extra_text: str = "") -> bool:
     """True when the cloud says the machine's free runs are spent (a 402 with
     type free_trial_exhausted). The catch-all path uses this to flip back to
     own_key and show a friendly connect-a-model upsell instead of a raw error.
@@ -114,7 +104,8 @@ def _is_free_trial_exhausted(exc: BaseException, extra_text: str = "") -> bool:
     ))
 
 
-def _is_translation_error(exc: BaseException, extra_text: str = "") -> bool:
+@typechecked
+def is_translation_error(exc: BaseException, extra_text: str = "") -> bool:
     """True when the upstream 400 is a tool-schema / protocol translation
     failure (9Router rewriting Anthropic tools into Gemini function_declarations
     or OpenAI params), not auth or capacity. Kept distinct so the catch-all
@@ -122,10 +113,11 @@ def _is_translation_error(exc: BaseException, extra_text: str = "") -> bool:
     combined = f"{exc!s}\n{extra_text}".strip()
     if not combined:
         return False
-    return bool(_TRANSLATION_ERROR_PATTERNS.search(combined))
+    return bool(P_TRANSLATION_ERROR_PATTERNS.search(combined))
 
 
-def _is_auth_error(exc: BaseException, extra_text: str = "") -> bool:
+@typechecked
+def is_auth_error(exc: BaseException, extra_text: str = "") -> bool:
     """True when the upstream error is a 401/403 auth failure.
 
     Used by the catch-all error path to surface a friendly "subscription
@@ -136,9 +128,8 @@ def _is_auth_error(exc: BaseException, extra_text: str = "") -> bool:
     combined = f"{exc!s}\n{extra_text}".strip()
     if not combined:
         return False
-    # A tool-schema translation 400 can carry provider/connection wording that
-    # trips the auth regex below; it isn't auth, so don't claim it is.
-    if _is_translation_error(exc, extra_text):
+    # A tool-schema translation 400 can carry provider/connection wording that trips the auth regex below; it isn't auth, so don't claim it is.
+    if is_translation_error(exc, extra_text):
         return False
     return bool(re.search(
         r"\b(401|403)\b"
@@ -153,7 +144,8 @@ def _is_auth_error(exc: BaseException, extra_text: str = "") -> bool:
     ))
 
 
-def _is_unknown_model_error(exc: BaseException, extra_text: str = "") -> bool:
+@typechecked
+def is_unknown_model_error(exc: BaseException, extra_text: str = "") -> bool:
     """True when the upstream rejects the model code itself (e.g. a ChatGPT/Codex
     subscription whose plan doesn't expose the GPT model id we send: code 1211
     'Unknown Model, please check the model code'). The fix isn't retry, it's a
@@ -191,23 +183,65 @@ def parse_retry_after(exc: BaseException, extra_text: str = "") -> int | None:
     return None
 
 
-def _is_transient_capacity_error(exc: BaseException, extra_text: str = "") -> bool:
-    # The Claude CLI's underlying ProcessError stringifies to a generic
-    # "Command failed with exit code 1 / Check stderr output for details";
-    # the real cause (rate_limit_error / No pool capacity available / 429
-    # / overloaded) only surfaces in the subprocess's stderr stream, which
-    # we capture via the SDK's `stderr` callback and pass in as extra_text.
-    # Classify against both so we catch capacity errors regardless of which
-    # channel carried the message.
+@typechecked
+def is_transient_capacity_error(exc: BaseException, extra_text: str = "") -> bool:
+    # The Claude CLI's underlying ProcessError stringifies to a generic "Command failed with exit code 1 / Check stderr output for details"; the real cause (rate_limit_error / No pool capacity available / 429 / overloaded) only surfaces in the subprocess's stderr stream, which we capture via the SDK's `stderr` callback and pass in as extra_text. Classify against both so we catch capacity errors regardless of which channel carried the message.
     combined = f"{exc!s}\n{extra_text}".strip()
     if not combined:
         return False
-    if _NON_TRANSIENT_PATTERNS.search(combined):
+    if NON_TRANSIENT_PATTERNS.search(combined):
         return False
-    if _TRANSIENT_CAPACITY_PATTERNS.search(combined):
+    if TRANSIENT_CAPACITY_PATTERNS.search(combined):
         return True
-    # Pool-exhaustion copy from the OpenSwarm proxy ("No pool capacity
-    # available. Try again shortly."), matches the capacity family too.
+    # Pool-exhaustion copy from the OpenSwarm proxy ("No pool capacity available. Try again shortly."), matches the capacity family too.
     if re.search(r"no\s+pool\s+capacity", combined, re.IGNORECASE):
         return True
     return False
+
+
+# Exponential-ish backoff schedule (seconds) for silently retrying a transient upstream capacity error before giving up and surfacing the rate-limit pill.
+CAPACITY_BACKOFFS = [5, 15, 45, 90, 180]
+
+
+@typechecked
+def capacity_retry_wait(exc: BaseException, attempt: int, extra_text: str = "") -> Optional[int]:
+    """Seconds to wait before retrying a transient upstream capacity error (429 / overload /
+    5xx / network blip), or None when the error isn't transient or the backoff budget for
+    this turn is already spent. Keeps the retry DECISION testable; the loop owns the wait."""
+    if is_transient_capacity_error(exc, extra_text=extra_text) and 0 <= attempt < len(CAPACITY_BACKOFFS):
+        return CAPACITY_BACKOFFS[attempt]
+    return None
+
+
+@typechecked
+def is_out_of_tokens(exc: BaseException, extra_text: str = "") -> bool:
+    combined = f"{exc!s}\n{extra_text}".strip()
+    if not combined:
+        return False
+    return bool(re.search(
+        r"usage\s+cap\s+exceeded"
+        r"|reached\s+your\s+OpenSwarm.*plan\s+limit"
+        r"|usage\s+limit"
+        r"|insufficient_quota"
+        r"|exceeded\s+your\s+current\s+quota"
+        r"|quota\s+exceeded"
+        r"|credit\s+balance\s+is\s+too\s+low"
+        r"|out\s+of\s+credits",
+        combined,
+        re.IGNORECASE,
+    ))
+
+
+@typechecked
+def extract_reset_hint(text: str) -> str:
+    """Pull a human reset phrase ('at 7:42 AM', 'in 2h 30m', 'after 1m 59s') out of
+    a provider usage error so we can tell the user when their limit comes back.
+    """
+    if not text:
+        return ""
+    m = re.search(
+        r"(?:try\s+again|resets?|reset)\s+((?:in|at|after)\s+[^.\n)]{1,40})",
+        text,
+        re.IGNORECASE,
+    )
+    return m.group(1).strip() if m else ""

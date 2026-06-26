@@ -10,8 +10,8 @@ import os
 import shutil
 
 from backend.apps.skills import skills as store
-from ..exportable import DepRef, ExportContext, RemapTable
-from ..models import EntityType, Requirement
+from backend.apps.swarm.exportable import DepRef, ExportContext, RemapTable
+from backend.apps.swarm.models import EntityType, Requirement
 
 
 class SkillExportable:
@@ -20,17 +20,17 @@ class SkillExportable:
     def __init__(self, local_id: str, name: str, payload: dict, files: dict[str, bytes] | None = None):
         self.local_id = local_id
         self.name = name
-        self._payload = payload
-        self._files = files or {}
+        self.payload = payload
+        self.p_files = files or {}
 
     @classmethod
     def load(cls, local_id: str) -> "SkillExportable | None":
-        md_path, kind = store._skill_md_path(local_id)
+        md_path, kind = store.skill_md_path(local_id)
         if not md_path:
             return None
         with open(md_path, encoding="utf-8") as f:
             content = f.read()
-        meta = store._load_index().get(local_id, {})
+        meta = store.load_index().get(local_id, {})
         name = meta.get("name") or local_id.replace("-", " ").replace("_", " ").title()
         payload = {
             "slug": local_id,
@@ -42,14 +42,14 @@ class SkillExportable:
         }
         files: dict[str, bytes] = {}
         if kind == "folder":
-            files = _read_supporting_files(os.path.join(store.SKILLS_DIR, local_id))
+            files = p_read_supporting_files(os.path.join(store.SKILLS_DIR, local_id))
         return cls(local_id, name, payload, files)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return dict(self._payload)
+        return dict(self.payload)
 
     def files(self) -> dict[str, bytes]:
-        return dict(self._files)
+        return dict(self.p_files)
 
     def dependencies(self) -> list[DepRef]:
         return []
@@ -60,22 +60,20 @@ class SkillExportable:
     @classmethod
     def conflict(cls, payload: dict) -> str | None:
         slug = payload.get("slug") or ""
-        if slug and _slug_taken(slug):
+        if slug and p_slug_taken(slug):
             return "already exists; will be added as a copy"
         return None
 
     @classmethod
     def import_(cls, payload: dict, files: dict[str, bytes], remap: RemapTable) -> str:
         base = (payload.get("slug") or payload.get("name") or "skill").lower().replace(" ", "-")
-        slug = _free_slug(base)
+        slug = p_free_slug(base)
         meta = {
             "name": payload.get("name", slug),
             "description": payload.get("description", ""),
             "command": payload.get("command", slug),
         }
-        # Every imported skill lands as a folder (SKILL.md + any supporting files),
-        # one path for one-file and multi-file skills alike. write_folder_skill is
-        # path-traversal-safe, so an untrusted bundle can't escape the skill dir.
+        # Every imported skill lands as a folder (SKILL.md + any supporting files), one path for one-file and multi-file skills alike. write_folder_skill is path-traversal-safe, so an untrusted bundle can't escape the skill dir.
         bundle = {"SKILL.md": payload.get("content", "")}
         for rel, data in files.items():
             bundle[rel] = data.decode("utf-8", errors="replace")
@@ -90,16 +88,16 @@ class SkillExportable:
             shutil.rmtree(skill_dir, ignore_errors=True)
         if os.path.isfile(flat):
             os.remove(flat)
-        index = store._load_index()
+        index = store.load_index()
         if local_id in index:
             index.pop(local_id, None)
-            store._save_index(index)
+            store.save_index(index)
 
 
-def _read_supporting_files(skill_dir: str) -> dict[str, bytes]:
+def p_read_supporting_files(skill_dir: str) -> dict[str, bytes]:
     """Every file in a skill folder except SKILL.md, as {relpath: bytes}."""
     out: dict[str, bytes] = {}
-    for root, _dirs, names in os.walk(skill_dir):
+    for root, p_dirs, names in os.walk(skill_dir):
         for n in names:
             full = os.path.join(root, n)
             rel = os.path.relpath(full, skill_dir)
@@ -113,22 +111,22 @@ def _read_supporting_files(skill_dir: str) -> dict[str, bytes]:
     return out
 
 
-def _slug_taken(slug: str) -> bool:
+def p_slug_taken(slug: str) -> bool:
     return (
-        slug in store._load_index()
+        slug in store.load_index()
         or os.path.isfile(os.path.join(store.SKILLS_DIR, f"{slug}.md"))
         or os.path.isdir(os.path.join(store.SKILLS_DIR, slug))
     )
 
 
-def _free_slug(base: str) -> str:
+def p_free_slug(base: str) -> str:
     base = base or "skill"
-    if not _slug_taken(base):
+    if not p_slug_taken(base):
         return base
     cand = f"{base}-imported"
-    if not _slug_taken(cand):
+    if not p_slug_taken(cand):
         return cand
     i = 2
-    while _slug_taken(f"{base}-imported-{i}"):
+    while p_slug_taken(f"{base}-imported-{i}"):
         i += 1
     return f"{base}-imported-{i}"

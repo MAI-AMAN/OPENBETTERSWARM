@@ -4,6 +4,8 @@ import AgentCard from '../cards/AgentCard';
 import DashboardViewCard from '../cards/DashboardViewCard';
 import BrowserCard from '../cards/BrowserCard';
 import NoteCard from '../cards/NoteCard';
+import WorkflowsAppCard from '@/app/pages/Workflows/app/WorkflowsAppCard';
+import RunMonitor from '@/app/pages/Workflows/app/RunMonitor';
 import {
   EXPANDED_CARD_MIN_H,
   DEFAULT_CARD_W,
@@ -12,7 +14,11 @@ import {
   type ViewCardPosition,
   type BrowserCardPosition,
   type NotePosition,
+  type WorkflowCardPosition,
+  type WorkflowsHubPosition,
 } from '@/shared/state/dashboardLayoutSlice';
+import { useAppSelector, useAppDispatch } from '@/shared/hooks';
+import { closeWorkflowMonitor } from '@/shared/state/dashboardLayoutSlice';
 import type { Output } from '@/shared/state/outputsSlice';
 import type { CardType, useDashboardSelection } from '../hooks/state/useDashboardSelection';
 
@@ -22,10 +28,13 @@ type GlowingAgentCard = { sourceId: string; fading: boolean; sourceYRatio?: numb
 type Direction = 'left' | 'right' | 'up' | 'down';
 
 interface DashboardCardLayerProps {
+  dashboardId: string;
   cards: Record<string, CardPosition>;
   viewCards: Record<string, ViewCardPosition>;
   browserCards: Record<string, BrowserCardPosition>;
   notes: Record<string, NotePosition>;
+  workflowCards: Record<string, WorkflowCardPosition>;
+  workflowsHub: WorkflowsHubPosition | null;
   outputs: Record<string, Output>;
   glowingAgentCards: Record<string, GlowingAgentCard>;
   expandedSessionIds: string[];
@@ -55,10 +64,13 @@ interface DashboardCardLayerProps {
 }
 
 const DashboardCardLayer: React.FC<DashboardCardLayerProps> = ({
+  dashboardId,
   cards,
   viewCards,
   browserCards,
   notes,
+  workflowCards,
+  workflowsHub,
   outputs,
   glowingAgentCards,
   expandedSessionIds,
@@ -86,6 +98,14 @@ const DashboardCardLayer: React.FC<DashboardCardLayerProps> = ({
   onBranch,
   onMeasuredHeight,
 }) => {
+  const dispatch = useAppDispatch();
+  const monitorCard = useAppSelector((s) => s.dashboardLayout.workflowsMonitorCard);
+  const monitorWorkflowId = useAppSelector((s) => s.dashboardLayout.workflowsMonitorId);
+  const monitorWorkflow = useAppSelector((s) => (monitorWorkflowId ? s.workflows.items[monitorWorkflowId] : undefined));
+  // The monitor's workflow vanished (trashed/deleted) while open: tear the card + its tether down instead of leaving an orange line pointing at nothing.
+  React.useEffect(() => {
+    if (monitorCard && !monitorWorkflow) dispatch(closeWorkflowMonitor());
+  }, [monitorCard, monitorWorkflow, dispatch]);
   return (
     <>
       <AnimatePresence>
@@ -152,9 +172,7 @@ const DashboardCardLayer: React.FC<DashboardCardLayerProps> = ({
             exitTarget={exitTarget}
             isSelected={isSel}
             isHighlighted={highlightedCardId === sid}
-            // Only selected cards need the live drag delta; passing
-            // it to everyone broke memo equality for unselected
-            // cards on every mouse-move during multi-drag.
+            // Only selected cards need the live drag delta; passing it to everyone broke memo equality for unselected cards on every mouse-move during multi-drag.
             multiDragDelta={isSel ? multiDragDelta : null}
             onCardSelect={onCardSelect}
             onDragStart={onDragStart}
@@ -251,6 +269,42 @@ const DashboardCardLayer: React.FC<DashboardCardLayerProps> = ({
           onBringToFront={onBringToFront}
         />
       ))}
+      {workflowsHub && (
+        <WorkflowsAppCard
+          cardX={workflowsHub.x}
+          cardY={workflowsHub.y}
+          cardWidth={workflowsHub.width}
+          cardHeight={workflowsHub.height}
+          cardZOrder={workflowsHub.zOrder ?? 0}
+          zoom={zoom}
+          panX={panX}
+          panY={panY}
+          isSelected={selection.isSelected('workflows-hub')}
+          isHighlighted={highlightedCardId === 'workflows-hub'}
+          multiDragDelta={selection.isSelected('workflows-hub') ? multiDragDelta : null}
+          onCardSelect={onCardSelect}
+          onDragStart={onDragStart}
+          onDragMove={onDragMove}
+          onDragEnd={onDragEnd}
+          onBringToFront={onBringToFront}
+        />
+      )}
+      {monitorCard && monitorWorkflow && (
+        <RunMonitor
+          workflow={monitorWorkflow}
+          cardX={monitorCard.x}
+          cardY={monitorCard.y}
+          cardWidth={monitorCard.width}
+          cardHeight={monitorCard.height}
+          cardZOrder={monitorCard.zOrder ?? 0}
+          zoom={zoom}
+          panX={panX}
+          panY={panY}
+          onDragStart={onDragStart}
+          onDragMove={onDragMove}
+          onDragEnd={onDragEnd}
+        />
+      )}
       {/* Marquee selection rectangle */}
       {selection.marquee && (
         <div

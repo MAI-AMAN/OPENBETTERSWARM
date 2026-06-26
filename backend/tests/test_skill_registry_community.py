@@ -13,7 +13,7 @@ import os
 import pytest
 
 import backend.apps.skills.skills as skills_mod
-from backend.apps.skill_registry.skill_registry import _select_skill_paths, _is_script_path
+from backend.apps.skill_registry.skill_registry import select_skill_paths, is_script_path
 
 
 def test_selects_shortest_matching_skill_md_at_any_depth():
@@ -24,7 +24,7 @@ def test_selects_shortest_matching_skill_md_at_any_depth():
         {"type": "blob", "path": "plugins/x/skills/pdftk/templates/form.txt"},
         {"type": "blob", "path": "plugins/x/skills/other/SKILL.md"},
     ]
-    skill_md, members = _select_skill_paths(tree, "pdftk")
+    skill_md, members = select_skill_paths(tree, "pdftk")
     assert skill_md == "plugins/x/skills/pdftk/SKILL.md"
     assert set(members) == {
         "plugins/x/skills/pdftk/SKILL.md",
@@ -37,14 +37,14 @@ def test_selects_shortest_matching_skill_md_at_any_depth():
 
 def test_top_level_skill_md():
     tree = [{"type": "blob", "path": "pdftk/SKILL.md"}, {"type": "blob", "path": "pdftk/x.py"}]
-    skill_md, members = _select_skill_paths(tree, "pdftk")
+    skill_md, members = select_skill_paths(tree, "pdftk")
     assert skill_md == "pdftk/SKILL.md"
     assert "pdftk/x.py" in members
 
 
 def test_missing_skill_raises():
     with pytest.raises(ValueError):
-        _select_skill_paths([{"type": "blob", "path": "a/SKILL.md"}], "nonexistent")
+        select_skill_paths([{"type": "blob", "path": "a/SKILL.md"}], "nonexistent")
 
 
 def test_ambiguous_match_picks_deterministically():
@@ -54,29 +54,28 @@ def test_ambiguous_match_picks_deterministically():
         {"type": "blob", "path": "skills/pdf/SKILL.md"},
         {"type": "blob", "path": "pdf/SKILL.md"},
     ]
-    skill_md, _ = _select_skill_paths(tree, "pdf")
+    skill_md, _ = select_skill_paths(tree, "pdf")
     assert skill_md == "pdf/SKILL.md"
     # Without a top-level one, prefer skills/<id>/.
     tree2 = [
         {"type": "blob", "path": "plugins/z/pdf/SKILL.md"},
         {"type": "blob", "path": "skills/pdf/SKILL.md"},
     ]
-    skill_md2, _ = _select_skill_paths(tree2, "pdf")
+    skill_md2, _ = select_skill_paths(tree2, "pdf")
     assert skill_md2 == "skills/pdf/SKILL.md"
 
 
 def test_github_headers_adds_token_when_set(monkeypatch):
-    from backend.apps.skill_registry.skill_registry import _github_headers
+    from backend.apps.skill_registry.skill_registry import github_headers
     monkeypatch.delenv("OPENSWARM_GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    assert "Authorization" not in _github_headers()
+    assert "Authorization" not in github_headers()
     monkeypatch.setenv("OPENSWARM_GITHUB_TOKEN", "ghp_test")
-    assert _github_headers()["Authorization"] == "Bearer ghp_test"
+    assert github_headers()["Authorization"] == "Bearer ghp_test"
 
 
 def test_install_disclosure_flags_secret_shaped_files():
-    # The scan we wire into the install disclosure (reused from the .swarm importer)
-    # must flag a community skill shipping credentials, and leave clean files alone.
+    # The scan we wire into the install disclosure (reused from the .swarm importer) must flag a community skill shipping credentials, and leave clean files alone.
     from backend.apps.swarm.redact import find_secrets_in_files
     files = {
         "SKILL.md": b"Renders PDFs. No secrets.",
@@ -88,18 +87,16 @@ def test_install_disclosure_flags_secret_shaped_files():
 
 
 def test_script_classification():
-    assert _is_script_path("run.sh")
-    assert _is_script_path("helper.py")
-    assert _is_script_path("scripts/build.txt")  # under a scripts/ dir
-    assert _is_script_path("bin/tool")
-    assert not _is_script_path("SKILL.md")
-    assert not _is_script_path("templates/form.html")
-    assert not _is_script_path("data.json")
+    assert is_script_path("run.sh")
+    assert is_script_path("helper.py")
+    assert is_script_path("scripts/build.txt")  # under a scripts/ dir
+    assert is_script_path("bin/tool")
+    assert not is_script_path("SKILL.md")
+    assert not is_script_path("templates/form.html")
+    assert not is_script_path("data.json")
 
 
-# ---------------------------------------------------------------------------
-# Safe install (write_folder_skill).
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Safe install (write_folder_skill). ---------------------------------------------------------------------------
 
 @pytest.fixture
 def skills_dir(tmp_path, monkeypatch):
@@ -121,7 +118,7 @@ def test_write_folder_skill_lands_files_and_indexes(skills_dir):
     assert os.path.isfile(skills_dir / "pdf-tk" / "SKILL.md")
     assert os.path.isfile(skills_dir / "pdf-tk" / "scripts" / "run.sh")
     # Re-syncs and shows up in the list.
-    assert "pdf-tk" in {s.id for s in skills_mod._sync_skills()}
+    assert "pdf-tk" in {s.id for s in skills_mod.sync_skills()}
 
 
 def test_install_dedups_instead_of_clobbering_existing_skill(skills_dir):
@@ -135,24 +132,24 @@ def test_install_dedups_instead_of_clobbering_existing_skill(skills_dir):
         assert f.read() == "MINE", "registry install clobbered the user's existing skill"
     with open(skills_dir / "pdf-2" / "SKILL.md", encoding="utf-8") as f:
         assert f.read() == "THEIRS"
-    ids = {s.id for s in skills_mod._sync_skills()}
+    ids = {s.id for s in skills_mod.sync_skills()}
     assert {"pdf", "pdf-2"} <= ids
 
 
 def test_confirm_install_writes_folder_lists_and_injects(skills_dir, monkeypatch):
     """End-to-end install->usable: confirm=true through the real /install endpoint
     writes the folder skill, it shows up in /api/skills/list with supporting
-    files, and _resolve_attached_skills injects it with the folder path so an
+    files, and resolve_attached_skills injects it with the folder path so an
     agent can read its scripts. (resolve is mocked to skip the network; the live
     GitHub resolve is proven separately.)"""
-    import secrets as _secrets
+    import secrets as p_secrets
     from fastapi.testclient import TestClient
     from backend.main import app
-    from backend.apps.agents.manager.prompt.prompt_context import _resolve_attached_skills
+    from backend.apps.agents.manager.prompt.prompt_context import resolve_attached_skills
     import backend.auth as auth_mod
-    if not auth_mod._TOKEN:
-        auth_mod._TOKEN = _secrets.token_urlsafe(32)
-    client = TestClient(app, headers={"Authorization": f"Bearer {auth_mod._TOKEN}"})
+    if not auth_mod.TOKEN:
+        auth_mod.TOKEN = p_secrets.token_urlsafe(32)
+    client = TestClient(app, headers={"Authorization": f"Bearer {auth_mod.TOKEN}"})
 
     async def fake_resolve(source, skill_id):
         return {
@@ -175,7 +172,7 @@ def test_confirm_install_writes_folder_lists_and_injects(skills_dir, monkeypatch
     assert (skills_dir / slug / "SKILL.md").exists()
     assert (skills_dir / slug / "scripts" / "extract.py").exists()
     # Injectable: the agent gets the body AND a pointer to the folder for on-demand reads.
-    block = _resolve_attached_skills([{"id": slug, "name": "PDF Tools", "content": "# PDF Tools\nRun scripts/extract.py to pull text."}])
+    block = resolve_attached_skills([{"id": slug, "name": "PDF Tools", "content": "# PDF Tools\nRun scripts/extract.py to pull text."}])
     assert "[Using skill: PDF Tools]" in block
     assert str(skills_dir / slug) in block
 

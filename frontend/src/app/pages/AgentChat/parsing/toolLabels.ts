@@ -166,6 +166,16 @@ const VARIANTS: Record<string, ToolLabel[]> = {
     { present: 'Listing tools', past: 'Listed tools' },
     { present: 'Browsing the toolbox', past: 'Browsed the toolbox' },
   ],
+  settingsread: [
+    { present: 'Checking your settings', past: 'Checked your settings' },
+    { present: 'Reading your settings', past: 'Read your settings' },
+    { present: 'Looking at your settings', past: 'Looked at your settings' },
+  ],
+  settingswrite: [
+    { present: 'Updating your settings', past: 'Updated your settings' },
+    { present: 'Saving your settings', past: 'Saved your settings' },
+    { present: 'Adjusting your settings', past: 'Adjusted your settings' },
+  ],
   outputactivate: [
     { present: 'Loading the app', past: 'Loaded the app' },
     { present: 'Spinning up the app', past: 'Spun up the app' },
@@ -294,6 +304,8 @@ const MCP_SERVER_BRAND: Record<string, string> = {
   'openswarm-invoke-agent': 'helper',
   'openswarm-mcp-meta': 'tools',
   'openswarm-outputs-meta': 'views',
+  'openswarm-settings-meta': 'settings',
+  'openswarm-web': 'the web',
 };
 
 // Order matters: most specific verb pattern wins.
@@ -403,7 +415,11 @@ const ACTION_OBJECTS: Array<{ match: RegExp; noun: string }> = [
 ];
 
 function _humanizeName(name: string): string {
-  const spaced = name.replace(/[-_]+/g, ' ').toLowerCase();
+  const spaced = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')  // split camelCase: SettingsRead -> Settings Read
+    .replace(/[-_]+/g, ' ')
+    .toLowerCase()
+    .trim();
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
@@ -411,7 +427,8 @@ function _labelForMcpTool(toolName: string, seed?: string): ToolLabel | null {
   const parts = toolName.split('__');
   if (parts.length < 3 || parts[0] !== 'mcp') return null;
   const server = parts[1].toLowerCase();
-  const action = parts.slice(2).join('__').toLowerCase();
+  const actionRaw = parts.slice(2).join('__');  // original case, for the humanize fallback's camelCase split
+  const action = actionRaw.toLowerCase();
   const brand = MCP_SERVER_BRAND[server] || _humanizeName(server);
 
   // Internal meta-MCPs route through VARIANTS so we don't render "tools: Mcpsearch".
@@ -438,7 +455,15 @@ function _labelForMcpTool(toolName: string, seed?: string): ToolLabel | null {
     return { present: `${verb.present} via ${brand}`, past: `${verb.past} via ${brand}` };
   }
 
-  const human = _humanizeName(action.replace(/^_+|_+$/g, ''));
+  const human = _humanizeName(actionRaw.replace(/^_+|_+$/g, ''));
+  // Internal openswarm-* tools read as a plain action with no brand prefix ("Settings read", not "settings: Settings read"); external connectors keep the brand so the user knows which app it touched ("Gmail: Send email").
+  if (server.startsWith('openswarm-')) {
+    return { present: human, past: human };
+  }
+  // Avoid "Notion: Notion search" — if the action already names the brand, don't repeat it.
+  if (human.toLowerCase().startsWith(brand.toLowerCase())) {
+    return { present: human, past: human };
+  }
   return { present: `${brand}: ${human}`, past: `${brand}: ${human}` };
 }
 

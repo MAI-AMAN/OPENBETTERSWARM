@@ -18,18 +18,13 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Boot env: route data dirs into a tmp scratch root before importing
-# backend modules.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Boot env: route data dirs into a tmp scratch root before importing backend modules. ---------------------------------------------------------------------------
 
-_TMPROOT = tempfile.mkdtemp(prefix="openswarm-phase1-stress-")
-os.environ.setdefault("OPENSWARM_DATA_DIR", _TMPROOT)
+P_TMPROOT = tempfile.mkdtemp(prefix="openswarm-phase1-stress-")
+os.environ.setdefault("OPENSWARM_DATA_DIR", P_TMPROOT)
 
 
-# ---------------------------------------------------------------------------
-# Group 1, Message.client_message_id
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Group 1, Message.client_message_id ---------------------------------------------------------------------------
 
 
 def test_message_round_trips_client_id():
@@ -81,9 +76,7 @@ def test_client_message_id_collision_resistance():
     assert len(seen) >= 495  # collisions are statistically negligible
 
 
-# ---------------------------------------------------------------------------
-# Group 2, Mode migration: chat → ask
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Group 2, Mode migration: chat → ask ---------------------------------------------------------------------------
 
 
 def test_builtin_modes_no_chat():
@@ -116,7 +109,7 @@ def test_modes_lifespan_deletes_stale_chat():
                 "system_prompt": "old", "tools": ["AskUserQuestion"],
             }, f)
         with patch.object(modes_mod, "DATA_DIR", td):
-            asyncio.run(_run_lifespan(modes_mod))
+            asyncio.run(p_run_lifespan(modes_mod))
         assert not os.path.exists(chat_path), "stale built-in chat.json should be removed"
 
     # User-customized: leave alone
@@ -128,11 +121,11 @@ def test_modes_lifespan_deletes_stale_chat():
                 "system_prompt": "user wrote this",
             }, f)
         with patch.object(modes_mod, "DATA_DIR", td):
-            asyncio.run(_run_lifespan(modes_mod))
+            asyncio.run(p_run_lifespan(modes_mod))
         assert os.path.exists(chat_path), "user-customized chat.json must NOT be deleted"
 
 
-async def _run_lifespan(modes_mod):
+async def p_run_lifespan(modes_mod):
     async with modes_mod.modes_lifespan():
         pass
 
@@ -143,8 +136,7 @@ def test_session_reconcile_migrates_chat_to_ask():
     from backend.apps.agents import agent_manager as am_mod
 
     with tempfile.TemporaryDirectory() as td:
-        # Seed 50 sessions: 30 with mode='chat', 20 with mode='agent'.
-        # Some marked running so we also exercise the stale-status path.
+        # Seed 50 sessions: 30 with mode='chat', 20 with mode='agent'. Some marked running so we also exercise the stale-status path.
         for i in range(50):
             sid = f"sess-{i}"
             mode = "chat" if i < 30 else "agent"
@@ -194,10 +186,7 @@ def test_reconcile_idempotent():
         assert mtime_after_first == mtime_after_second, "reconcile must be idempotent"
 
 
-
-# ---------------------------------------------------------------------------
-# Group 6, Notes layout serialization
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Group 6, Notes layout serialization ---------------------------------------------------------------------------
 
 
 def test_dashboard_layout_notes_round_trip():
@@ -253,14 +242,7 @@ def test_notes_stress_many_round_trips():
         assert rehydrated.notes[nid].color == orig.color
 
 
-# ---------------------------------------------------------------------------
-# Group 7, Concurrent send_message dedupe stress
-#
-# Real-world scenario: user mashes Enter quickly. 50 concurrent sends
-# each with a unique client_message_id must produce 50 echoed messages
-# carrying the right ids. Pure pydantic / asyncio test, no real
-# agent loop.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Group 7, Concurrent send_message dedupe stress Real-world scenario: user mashes Enter quickly. 50 concurrent sends each with a unique client_message_id must produce 50 echoed messages carrying the right ids. Pure pydantic / asyncio test, no real agent loop. ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -281,9 +263,7 @@ async def test_concurrent_send_message_unique_client_ids():
     assert len(set(actual)) == 100, "all unique"
 
 
-# ---------------------------------------------------------------------------
-# Pytest config: register asyncio mode so we don't need the plugin.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- Pytest config: register asyncio mode so we don't need the plugin. ---------------------------------------------------------------------------
 
 
 def pytest_collection_modifyitems(config, items):

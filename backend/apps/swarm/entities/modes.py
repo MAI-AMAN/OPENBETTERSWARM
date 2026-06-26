@@ -6,11 +6,11 @@ reuses an existing same-slug mode rather than clobbering it (keeps the session's
 `mode` pointer valid without rewriting it)."""
 from __future__ import annotations
 
-from ..exportable import DepRef, ExportContext, RemapTable
-from ..models import EntityType, Requirement
+from backend.apps.swarm.exportable import DepRef, ExportContext, RemapTable
+from backend.apps.swarm.models import EntityType, Requirement
 
 # Machine-relative or install-owned fields that must not ride along.
-_DROP = {"is_builtin", "default_folder"}
+P_DROP = {"is_builtin", "default_folder"}
 
 
 class ModeExportable:
@@ -19,11 +19,11 @@ class ModeExportable:
     def __init__(self, mode_id: str, name: str, data: dict):
         self.local_id = mode_id
         self.name = name
-        self._data = data
+        self.p_data = data
 
     @classmethod
     def load(cls, local_id: str) -> "ModeExportable | None":
-        store = _store()
+        store = p_store()
         if store is None:
             return None
         m = store.load_mode(local_id)
@@ -33,7 +33,7 @@ class ModeExportable:
         return cls(local_id, d.get("name") or local_id, d)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return {k: v for k, v in self._data.items() if k not in _DROP}
+        return {k: v for k, v in self.p_data.items() if k not in P_DROP}
 
     def files(self) -> dict[str, bytes]:
         return {}
@@ -46,14 +46,13 @@ class ModeExportable:
 
     @classmethod
     def import_(cls, payload: dict, files: dict[str, bytes], remap: RemapTable) -> str:
-        store = _store()
-        model = _model()
+        store = p_store()
+        model = p_model()
         if store is None or model is None:
-            from ..ziputil import BundleError
+            from backend.apps.swarm.ziputil import BundleError
             raise BundleError("can't import this mode on this build")
         mid = payload.get("id") or (payload.get("name") or "mode").lower().replace(" ", "-")
-        # Reuse a same-slug mode (incl. built-ins) instead of overwriting it;
-        # sessions point at modes by this slug.
+        # Reuse a same-slug mode (incl. built-ins) instead of overwriting it; sessions point at modes by this slug.
         if store.load_mode(mid) is not None:
             return mid
         data = {k: v for k, v in payload.items() if k != "is_builtin"}
@@ -63,7 +62,7 @@ class ModeExportable:
         return mid
 
 
-def _store():
+def p_store():
     try:
         from backend.apps.modes import modes
         return modes
@@ -71,7 +70,7 @@ def _store():
         return None
 
 
-def _model():
+def p_model():
     try:
         from backend.apps.modes.models import Mode
         return Mode

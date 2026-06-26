@@ -31,75 +31,39 @@ NINE_ROUTER_URL = f"http://localhost:{NINE_ROUTER_PORT}"
 NINE_ROUTER_API = f"{NINE_ROUTER_URL}/api"
 NINE_ROUTER_V1 = f"{NINE_ROUTER_URL}/v1"
 
-# Pinned 9router npm package version. Prod default stays 0.3.60; set
-# OPENSWARM_ROUTER_VERSION to stage a bump in dev (keys the dev cache by
-# version, so the override pulls a clean install) without shipping it.
-#
-# 0.4.x gates its internal /api/* routes behind auth (the old bump blocker):
-# bare `POST /api/providers` / `/api/oauth/<prov>/device-code` now 401 instead
-# of working. That auth is now PORTED here: see cli_auth_token() / cli_auth_headers()
-# below, which compute the `x-9r-cli-token` 9Router checks and which every
-# /api/* call in this package attaches. The header is empty on 0.3.60 (no
-# machine-id file), so the old auth-free path is untouched.
-#
-# What the bump buys: cc/claude-opus-4-8 and cx/gpt-5.5 on the sub routes
-# (gpt-5.5 404s on 0.3.60), a reworked WebSearch behind /api/v1/search, and
-# 3 months of cross-provider translator robustness.
-#
-# REMAINING gate before flipping the prod default to 0.4.x: re-qualify
-# cross-provider WebSearch. The original 0.3.60 pin reason was that 0.3.60-0.3.96
-# regressed it (a Codex/Gemini primary delegating WebSearch saw
-# "claude-haiku-4-5-20251001 unavailable" or hallucinated output); 0.4.x reworked
-# it but that's unverified here. Also confirmed on 0.4.80: it STILL emits
-# `max_tokens` (not max_completion_tokens) on Anthropic->OpenAI, so our
-# /api/openai-passthrough rename (core/openai_passthrough.py + sync_openai_api_key,
-# routed via an `openai-compatible` node that honors `baseUrl`) STAYS necessary.
+# Pinned 9router npm package version. Prod default stays 0.3.60; set OPENSWARM_ROUTER_VERSION to stage a bump in dev (keys the dev cache by version, so the override pulls a clean install) without shipping it. 0.4.x gates its internal /api/* routes behind auth (the old bump blocker): bare `POST /api/providers` / `/api/oauth/<prov>/device-code` now 401 instead of working. That auth is now PORTED here: see cli_auth_token() / cli_auth_headers() below, which compute the `x-9r-cli-token` 9Router checks and which every /api/* call in this package attaches. The header is empty on 0.3.60 (no machine-id file), so the old auth-free path is untouched. What the bump buys: cc/claude-opus-4-8 and cx/gpt-5.5 on the sub routes (gpt-5.5 404s on 0.3.60), a reworked WebSearch behind /api/v1/search, and 3 months of cross-provider translator robustness. REMAINING gate before flipping the prod default to 0.4.x: re-qualify cross-provider WebSearch. The original 0.3.60 pin reason was that 0.3.60-0.3.96 regressed it (a Codex/Gemini primary delegating WebSearch saw "claude-haiku-4-5-20251001 unavailable" or hallucinated output); 0.4.x reworked it but that's unverified here. Also confirmed on 0.4.80: it STILL emits `max_tokens` (not max_completion_tokens) on Anthropic->OpenAI, so our /api/openai-passthrough rename (core/openai_passthrough.py + sync_openai_api_key, routed via an `openai-compatible` node that honors `baseUrl`) STAYS necessary.
 NINE_ROUTER_NPM_VERSION = os.environ.get("OPENSWARM_ROUTER_VERSION", "0.3.60")
 
-# 9Router (our pinned 0.3.60) appends every request to ~/.9router/request-details.json and
-# reloads the WHOLE file on each write; once it reaches tens of MB the router's node process
-# OOM-aborts and takes the app down, even while idle (verified from crash dumps). Two cheap,
-# pin-safe guards until the real fix (a 9Router bump past 0.4.66, which moved off this file):
-#   1. rotate that log before we spawn 9Router when it gets large, so growth can't run away;
-#   2. give node an explicit, generous heap ceiling for legitimate large multimodal bodies.
-# Neither touches routing, so WebSearch/WebFetch translation and the 0.3.60 pin are unaffected.
-_REQUEST_LOG_PATH = os.path.expanduser("~/.9router/request-details.json")
-_REQUEST_LOG_MAX_BYTES = 5 * 1024 * 1024
-_NODE_HEAP_MB = 4096
+# 9Router (our pinned 0.3.60) appends every request to ~/.9router/request-details.json and reloads the WHOLE file on each write; once it reaches tens of MB the router's node process OOM-aborts and takes the app down, even while idle (verified from crash dumps). Two cheap, pin-safe guards until the real fix (a 9Router bump past 0.4.66, which moved off this file): 1. rotate that log before we spawn 9Router when it gets large, so growth can't run away; 2. give node an explicit, generous heap ceiling for legitimate large multimodal bodies. Neither touches routing, so WebSearch/WebFetch translation and the 0.3.60 pin are unaffected.
+P_REQUEST_LOG_PATH = os.path.expanduser("~/.9router/request-details.json")
+P_REQUEST_LOG_MAX_BYTES = 5 * 1024 * 1024
+P_NODE_HEAP_MB = 4096
 
 
-def _rotate_request_log() -> None:
+def p_rotate_request_log() -> None:
     """Rotate ~/.9router/request-details.json to a single .0 backup when it grows past the cap,
     BEFORE 9Router is spawned (never racing a live writer). 9Router recreates a fresh file, exactly
     like a clean install. The only consumer is the 'most recent 5' reasoning-token lookup, which
     already tolerates an empty/missing file, so no feature loses data it depends on."""
     try:
-        if os.path.exists(_REQUEST_LOG_PATH) and os.path.getsize(_REQUEST_LOG_PATH) > _REQUEST_LOG_MAX_BYTES:
-            os.replace(_REQUEST_LOG_PATH, _REQUEST_LOG_PATH + ".0")
+        if os.path.exists(P_REQUEST_LOG_PATH) and os.path.getsize(P_REQUEST_LOG_PATH) > P_REQUEST_LOG_MAX_BYTES:
+            os.replace(P_REQUEST_LOG_PATH, P_REQUEST_LOG_PATH + ".0")
             logger.info(
                 "9Router request log rotated (exceeded %d MB) to avoid the router OOM",
-                _REQUEST_LOG_MAX_BYTES // (1024 * 1024),
+                P_REQUEST_LOG_MAX_BYTES // (1024 * 1024),
             )
     except Exception as e:
         logger.debug("9Router request-log rotation skipped: %s", e)
 
 
-_process: subprocess.Popen | None = None
+p_process: subprocess.Popen | None = None
 
-# Serializes ensure_running() so a background auto-start and a concurrent
-# dispatch-time ensure can't both spawn 9Router (double-bind on :20128). Lazily
-# created so module import doesn't require a running event loop.
-_start_lock: "asyncio.Lock | None" = None
+# Serializes ensure_running() so a background auto-start and a concurrent dispatch-time ensure can't both spawn 9Router (double-bind on :20128). Lazily created so module import doesn't require a running event loop.
+p_start_lock: "asyncio.Lock | None" = None
 
-# Short TTL cache for positive is_running() results. The probe is a sync
-# httpx.get that blocks the event loop, and under load (9Router busy
-# streaming inference) it can exceed its 2s timeout and return False even
-# though 9Router is fine. Caching a recent True result avoids those false
-# negatives without masking a real crash for more than _IS_RUNNING_TTL seconds.
-# Negative results are NOT cached so startup detection in ensure_running()
-# remains correct.
-_IS_RUNNING_TTL = 10.0
-_is_running_last_ok: float = 0.0
+# Short TTL cache for positive is_running() results. The probe is a sync httpx.get that blocks the event loop, and under load (9Router busy streaming inference) it can exceed its 2s timeout and return False even though 9Router is fine. Caching a recent True result avoids those false negatives without masking a real crash for more than P_IS_RUNNING_TTL seconds. Negative results are NOT cached so startup detection in ensure_running() remains correct.
+P_IS_RUNNING_TTL = 10.0
+p_is_running_last_ok: float = 0.0
 
 
 def is_running() -> bool:
@@ -115,9 +79,9 @@ def is_running() -> bool:
     first; a down 9Router is detected in <~0.3s instead of ~7s. Only when the
     port is open do we do the HTTP confirm. 9Router binds 0.0.0.0 (the warm app
     reaches it via 127.0.0.1 today), so this changes timing, not reachability."""
-    global _is_running_last_ok
+    global p_is_running_last_ok
     now = time.monotonic()
-    if now - _is_running_last_ok < _IS_RUNNING_TTL:
+    if now - p_is_running_last_ok < P_IS_RUNNING_TTL:
         return True
     try:
         with socket.create_connection(("127.0.0.1", NINE_ROUTER_PORT), timeout=0.3):
@@ -127,14 +91,14 @@ def is_running() -> bool:
     try:
         r = httpx.get(f"http://127.0.0.1:{NINE_ROUTER_PORT}/v1/models", timeout=2.0)
         if r.status_code == 200:
-            _is_running_last_ok = now
+            p_is_running_last_ok = now
             return True
         return False
     except Exception:
         return False
 
 
-def _nine_router_data_dir() -> str:
+def p_nine_router_data_dir() -> str:
     """Where 9Router persists machine-id + auth/cli-secret, the two files we
     hash into the /api/* auth token on 0.4.x. Mirrors 9Router's own default
     (DATA_DIR env, else ~/.9router on unix, %APPDATA%/9router on win) so we read
@@ -151,7 +115,7 @@ def _nine_router_data_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".9router")
 
 
-_cli_token_cache: str | None = None
+p_cli_token_cache: str | None = None
 
 
 def cli_auth_token() -> str | None:
@@ -162,13 +126,13 @@ def cli_auth_token() -> str | None:
     when missing so connect/sync can auth before that self-call. Returns None on
     0.3.60 (no machine-id) or when 9Router isn't up, so the caller sends no
     header and the old auth-free path is untouched. Never raises."""
-    global _cli_token_cache
-    if _cli_token_cache:
-        return _cli_token_cache
+    global p_cli_token_cache
+    if p_cli_token_cache:
+        return p_cli_token_cache
     if not is_running():
         return None
     try:
-        data_dir = _nine_router_data_dir()
+        data_dir = p_nine_router_data_dir()
         try:
             with open(os.path.join(data_dir, "machine-id"), encoding="utf-8") as f:
                 machine_id = f.read().strip()
@@ -198,7 +162,7 @@ def cli_auth_token() -> str | None:
         tok = hashlib.sha256(
             (machine_id + "9r-cli-auth" + cli_secret).encode("utf-8")
         ).hexdigest()[:16]
-        _cli_token_cache = tok
+        p_cli_token_cache = tok
         return tok
     except Exception:
         return None
@@ -211,27 +175,27 @@ def cli_auth_headers() -> dict[str, str]:
     return {"x-9r-cli-token": tok} if tok else {}
 
 
-def _find_9router_dir() -> str | None:
+def p_find_9router_dir() -> str | None:
     """Locate the bundled 9Router directory (works in both dev and packaged mode)."""
-    _is_packaged = os.environ.get("OPENSWARM_PACKAGED") == "1"
+    p_is_packaged = os.environ.get("OPENSWARM_PACKAGED") == "1"
 
-    if _is_packaged:
+    if p_is_packaged:
         import sys
-        _resources = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        _candidate = os.path.join(_resources, "router")
-        if os.path.isdir(_candidate):
-            return _candidate
+        p_resources = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        p_candidate = os.path.join(p_resources, "router")
+        if os.path.isdir(p_candidate):
+            return p_candidate
     else:
-        _backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        _project_root = os.path.dirname(_backend_dir)
-        _candidate = os.path.join(_project_root, "router")
-        if os.path.isdir(_candidate):
-            return _candidate
+        p_backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        p_project_root = os.path.dirname(p_backend_dir)
+        p_candidate = os.path.join(p_project_root, "router")
+        if os.path.isdir(p_candidate):
+            return p_candidate
 
     return None
 
 
-def _gpt5_patch_path() -> str | None:
+def p_gpt5_patch_path() -> str | None:
     """Absolute path to backend/apps/agents/9router_gpt5_patch.js, used as
     `node --require <path>` when spawning 9router.
 
@@ -254,7 +218,7 @@ def _gpt5_patch_path() -> str | None:
     return candidate if os.path.exists(candidate) else None
 
 
-def _find_node() -> str | None:
+def p_find_node() -> str | None:
     """Find a Node.js binary (works in both dev and packaged mode).
 
     Priority order:
@@ -284,7 +248,7 @@ def _find_node() -> str | None:
     return None
 
 
-def _dev_router_cache_dir() -> str:
+def p_dev_router_cache_dir() -> str:
     """Cache dir for the npm 9router package used in dev mode.
 
     Pinned per version so bumping NINE_ROUTER_NPM_VERSION triggers a fresh
@@ -296,7 +260,7 @@ def _dev_router_cache_dir() -> str:
     return os.path.join(base, "openswarm-router", NINE_ROUTER_NPM_VERSION)
 
 
-def _ensure_router_cached() -> str | None:
+def p_ensure_router_cached() -> str | None:
     """Ensure the npm 9router package is installed in the dev cache.
 
     Returns the absolute path to `app/server.js` on success, or None if
@@ -308,7 +272,7 @@ def _ensure_router_cached() -> str | None:
     no update-check spinner, and no accidental-quit foot-gun when a
     non-developer right-clicks the "9" tray icon and picks Quit.
     """
-    cache_dir = _dev_router_cache_dir()
+    cache_dir = p_dev_router_cache_dir()
     server_js = os.path.join(cache_dir, "node_modules", "9router", "app", "server.js")
     if os.path.exists(server_js):
         return server_js
@@ -329,9 +293,7 @@ def _ensure_router_cached() -> str | None:
             "Installing 9router@%s into %s (one-time, ~30s)...",
             NINE_ROUTER_NPM_VERSION, cache_dir,
         )
-        # Note: we do NOT pass --ignore-scripts. The package's postinstall
-        # rebuilds better-sqlite3 for the host platform; skipping it leaves
-        # the server unable to load its native addon.
+        # Note: we do NOT pass --ignore-scripts. The package's postinstall rebuilds better-sqlite3 for the host platform; skipping it leaves the server unable to load its native addon.
         subprocess.run(
             [npm, "install", f"9router@{NINE_ROUTER_NPM_VERSION}",
              "--no-save", "--no-audit", "--no-fund", "--silent"],
@@ -348,7 +310,7 @@ def _ensure_router_cached() -> str | None:
     return server_js if os.path.exists(server_js) else None
 
 
-def _read_capture_tail(path: str, limit: int = 6000) -> str:
+def p_read_capture_tail(path: str, limit: int = 6000) -> str:
     """Tail of the 9Router start-capture file, where the real spawn error lands.
     Best-effort; empty string on any hiccup so telemetry never breaks boot."""
     try:
@@ -361,7 +323,7 @@ def _read_capture_tail(path: str, limit: int = 6000) -> str:
         return ""
 
 
-def _report_start_failure(reason: str, *, detail: str = "", **fields: Any) -> None:
+def p_report_start_failure(reason: str, *, detail: str = "", **fields: Any) -> None:
     """9Router didn't come up. Log it and ship a scrubbed diagnostic so a user's
     'every model exits 1' is finally explained from our side instead of a silent
     warning. The stderr tail can echo an own_key, so it rides the same scrub as
@@ -386,31 +348,30 @@ def _report_start_failure(reason: str, *, detail: str = "", **fields: Any) -> No
 async def ensure_running():
     """Start 9Router if not already running. Serialized so concurrent callers
     (the background auto-start + a dispatch-time ensure) can't double-spawn."""
-    global _start_lock
-    if _start_lock is None:
-        _start_lock = asyncio.Lock()
-    async with _start_lock:
-        await _ensure_running_impl()
+    global p_start_lock
+    if p_start_lock is None:
+        p_start_lock = asyncio.Lock()
+    async with p_start_lock:
+        await p_ensure_running_impl()
 
 
-async def _ensure_running_impl():
+async def p_ensure_running_impl():
     """Start 9Router if not already running."""
-    global _process
-    _is_packaged = os.environ.get("OPENSWARM_PACKAGED") == "1"
+    global p_process
+    p_is_packaged = os.environ.get("OPENSWARM_PACKAGED") == "1"
 
     if is_running():
-        # In dev mode, kill stale standalone servers (from previous builds)
-        # so we can start `next dev` which always uses latest source code
-        if not _is_packaged:
-            import subprocess as _sp
+        # In dev mode, kill stale standalone servers (from previous builds) so we can start `next dev` which always uses latest source code
+        if not p_is_packaged:
+            import subprocess as p_sp
             try:
-                result = _sp.run(
+                result = p_sp.run(
                     ["pgrep", "-f", "next-server"],
                     capture_output=True, text=True, timeout=3,
                 )
                 if result.stdout.strip():
                     logger.info("Dev mode: killing stale standalone 9Router to use next dev instead")
-                    _sp.run(["pkill", "-f", "next-server"], timeout=5)
+                    p_sp.run(["pkill", "-f", "next-server"], timeout=5)
                     await asyncio.sleep(2)
                 else:
                     logger.info("9Router already running on port %d", NINE_ROUTER_PORT)
@@ -421,42 +382,37 @@ async def _ensure_running_impl():
         else:
             logger.info("9Router already running on port %d", NINE_ROUTER_PORT)
             return
-    _rotate_request_log()
-    _9router_dir = _find_9router_dir()
-    _patch = _gpt5_patch_path()
+    p_rotate_request_log()
+    p_9router_dir = p_find_9router_dir()
+    p_patch = p_gpt5_patch_path()
 
-    if _is_packaged:
-        # Packaged: run the pre-built standalone server staged at
-        # <resources>/router/server.js by fetch-router at build time. We do NOT
-        # fall back to the dev npm path here, a user machine has no npm, so that
-        # only ever fails silently; every miss is reported instead.
-        if not _9router_dir:
-            _report_start_failure("router_not_bundled")
+    if p_is_packaged:
+        # Packaged: run the pre-built standalone server staged at <resources>/router/server.js by fetch-router at build time. We do NOT fall back to the dev npm path here, a user machine has no npm, so that only ever fails silently; every miss is reported instead.
+        if not p_9router_dir:
+            p_report_start_failure("router_not_bundled")
             return
-        standalone_server = os.path.join(_9router_dir, "server.js")
+        standalone_server = os.path.join(p_9router_dir, "server.js")
         if not os.path.exists(standalone_server):
-            standalone_server = os.path.join(_9router_dir, ".next", "standalone", "server.js")
+            standalone_server = os.path.join(p_9router_dir, ".next", "standalone", "server.js")
         if not os.path.exists(standalone_server):
-            _report_start_failure("server_missing", router_dir_found=True)
+            p_report_start_failure("server_missing", router_dir_found=True)
             return
-        node = _find_node()
+        node = p_find_node()
         if not node:
-            _report_start_failure("node_not_found", router_dir_found=True, server_found=True)
+            p_report_start_failure("node_not_found", router_dir_found=True, server_found=True)
             return
         logger.info("Starting 9Router (production) on port %d...", NINE_ROUTER_PORT)
-        cmd = [node, f"--max-old-space-size={_NODE_HEAP_MB}"] + (["--require", _patch] if _patch else []) + [standalone_server]
+        cmd = [node, f"--max-old-space-size={P_NODE_HEAP_MB}"] + (["--require", p_patch] if p_patch else []) + [standalone_server]
         cwd = os.path.dirname(standalone_server)
         env = {**os.environ, "PORT": str(NINE_ROUTER_PORT), "NODE_ENV": "production"}
         if node == os.environ.get("OPENSWARM_ELECTRON_PATH"):
             env["ELECTRON_RUN_AS_NODE"] = "1"
     else:
-        # Dev: install the pinned npm package into a local cache once, then spawn
-        # `node app/server.js` directly (bypasses the package cli.js tray icon
-        # users confusingly quit, its update-check spinner, and the TUI).
-        cached_server = _ensure_router_cached()
+        # Dev: install the pinned npm package into a local cache once, then spawn `node app/server.js` directly (bypasses the package cli.js tray icon users confusingly quit, its update-check spinner, and the TUI).
+        cached_server = p_ensure_router_cached()
         if not cached_server:
             return
-        node = _find_node()
+        node = p_find_node()
         if not node:
             logger.warning("Node.js not found; cannot start 9Router in dev mode.")
             return
@@ -464,77 +420,72 @@ async def _ensure_running_impl():
             "Starting 9Router (dev cache, 9router@%s) on port %d...",
             NINE_ROUTER_NPM_VERSION, NINE_ROUTER_PORT,
         )
-        cmd = [node, f"--max-old-space-size={_NODE_HEAP_MB}"] + (["--require", _patch] if _patch else []) + [cached_server]
+        cmd = [node, f"--max-old-space-size={P_NODE_HEAP_MB}"] + (["--require", p_patch] if p_patch else []) + [cached_server]
         cwd = os.path.dirname(cached_server)
         env = {**os.environ, "PORT": str(NINE_ROUTER_PORT), "NODE_ENV": "production"}
 
-    # Capture stdout+stderr so a failed start can tell us WHY (the old DEVNULL
-    # default made every "router never came up" a silent mystery, which is the
-    # whole reason #90 was un-diagnosable). Packaged prod (NODE_ENV=production
-    # standalone) is quiet, so one fixed temp file, truncated each start attempt,
-    # won't grow; dev keeps its chatty-Next.js DEVNULL unless debug is set.
-    _cap_path = os.path.join(tempfile.gettempdir(), "openswarm-9router-start.log")
-    _cap_file = None
-    if _is_packaged:
+    # Capture stdout+stderr so a failed start can tell us WHY (the old DEVNULL default made every "router never came up" a silent mystery, which is the whole reason #90 was un-diagnosable). Packaged prod (NODE_ENV=production standalone) is quiet, so one fixed temp file, truncated each start attempt, won't grow; dev keeps its chatty-Next.js DEVNULL unless debug is set.
+    p_cap_path = os.path.join(tempfile.gettempdir(), "openswarm-9router-start.log")
+    p_cap_file = None
+    if p_is_packaged:
         try:
-            _cap_file = open(_cap_path, "wb")
-            _stdout, _stderr = _cap_file, subprocess.STDOUT
+            p_cap_file = open(p_cap_path, "wb")
+            p_stdout, p_stderr = p_cap_file, subprocess.STDOUT
         except OSError:
-            _stdout, _stderr = subprocess.DEVNULL, subprocess.DEVNULL
+            p_stdout, p_stderr = subprocess.DEVNULL, subprocess.DEVNULL
     elif os.environ.get("OPENSWARM_DEBUG_9ROUTER"):
-        _log_path = os.path.join(
+        p_log_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data", "9router.log",
         )
-        os.makedirs(os.path.dirname(_log_path), exist_ok=True)
-        _stdout, _stderr = open(_log_path, "a", buffering=1), subprocess.STDOUT
-        logger.info(f"9Router debug logging enabled → {_log_path}")
+        os.makedirs(os.path.dirname(p_log_path), exist_ok=True)
+        p_stdout, p_stderr = open(p_log_path, "a", buffering=1), subprocess.STDOUT
+        logger.info(f"9Router debug logging enabled → {p_log_path}")
     else:
-        _stdout, _stderr = subprocess.DEVNULL, subprocess.DEVNULL
+        p_stdout, p_stderr = subprocess.DEVNULL, subprocess.DEVNULL
 
     try:
-        _process = subprocess.Popen(cmd, cwd=cwd, stdout=_stdout, stderr=_stderr, env=env)
-        if _cap_file is not None:
-            _cap_file.close()  # the child holds its own fd; the parent copy isn't needed
-        timeout = 20 if _is_packaged else 30
+        p_process = subprocess.Popen(cmd, cwd=cwd, stdout=p_stdout, stderr=p_stderr, env=env)
+        if p_cap_file is not None:
+            p_cap_file.close()  # the child holds its own fd; the parent copy isn't needed
+        timeout = 20 if p_is_packaged else 30
         for _ in range(timeout * 2):
             await asyncio.sleep(0.5)
             if is_running():
                 logger.info("9Router started successfully")
                 return
-        # Verify-at-boot: it never answered. Report with the captured tail + the
-        # exit code (non-None = it crashed; None = wedged or just slow).
-        _report_start_failure(
+        # Verify-at-boot: it never answered. Report with the captured tail + the exit code (non-None = it crashed; None = wedged or just slow).
+        p_report_start_failure(
             "not_ready_in_time",
-            detail=_read_capture_tail(_cap_path) if _is_packaged else "",
-            returncode=_process.poll(),
+            detail=p_read_capture_tail(p_cap_path) if p_is_packaged else "",
+            returncode=p_process.poll(),
             timeout_s=timeout,
         )
     except Exception as e:
-        if _cap_file is not None and not _cap_file.closed:
+        if p_cap_file is not None and not p_cap_file.closed:
             try:
-                _cap_file.close()
+                p_cap_file.close()
             except OSError:
                 pass
-        _report_start_failure(
+        p_report_start_failure(
             "spawn_exception",
-            detail=f"{e}\n{_read_capture_tail(_cap_path) if _is_packaged else ''}",
+            detail=f"{e}\n{p_read_capture_tail(p_cap_path) if p_is_packaged else ''}",
         )
 
 
 def stop():
     """Stop the 9Router subprocess."""
-    global _process
-    if _process:
+    global p_process
+    if p_process:
         try:
-            _process.terminate()
-            _process.wait(timeout=5)
+            p_process.terminate()
+            p_process.wait(timeout=5)
         except Exception:
             try:
-                _process.kill()
+                p_process.kill()
             except Exception:
                 pass
-        _process = None
+        p_process = None
         logger.info("9Router stopped")
 
 

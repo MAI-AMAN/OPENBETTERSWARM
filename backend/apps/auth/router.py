@@ -40,14 +40,14 @@ async def auth_lifespan():
 auth = SubApp("auth", auth_lifespan)
 
 
-def _proxy_url() -> str:
+def p_proxy_url() -> str:
     settings_obj = load_settings()
     url = (getattr(settings_obj, "openswarm_proxy_url", None)
            or OPENSWARM_DEFAULT_PROXY_URL)
     return url.rstrip("/")
 
 
-async def _sync_pro_routing(settings_obj) -> None:
+async def p_sync_pro_routing(settings_obj) -> None:
     """Mirror connection state into 9Router's Claude lane; sign-in can flip a
     paying user into pro mode and sign-out must tear the lane down so a
     revoked bearer doesn't linger in the router."""
@@ -58,11 +58,11 @@ async def _sync_pro_routing(settings_obj) -> None:
         logger.debug("pro routing sync skipped: %s", e)
 
 
-def _sync_identity_to_service(settings_obj) -> None:
+def p_sync_identity_to_service(settings_obj) -> None:
     """Push user_id + email + signin_method into the service-sync identify
     pipeline so every event from this user has the right Person properties."""
     try:
-        from backend.apps.service.client import identify as _identify
+        from backend.apps.service.client import identify as p_identify
     except Exception:
         return
     props = {
@@ -73,14 +73,18 @@ def _sync_identity_to_service(settings_obj) -> None:
     if email:
         props["email"] = email
     try:
-        _identify(props)
+        p_identify(props)
     except Exception as e:
         logger.debug("identify sync failed: %s", e)
+    if email:
+        try:
+            from backend.apps.service.analytics.client import track_link_email
+            track_link_email(email)
+        except Exception as e:
+            logger.debug("analytics link_email sync failed: %s", e)
 
 
-# ---------------------------------------------------------------------------
-# POST /api/auth/signin-activate
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- POST /api/auth/signin-activate ---------------------------------------------------------------------------
 
 class SigninActivateRequest(BaseModel):
     token: str
@@ -101,7 +105,7 @@ async def signin_activate(body: SigninActivateRequest):
     if not body.token or len(body.token) < 16:
         raise HTTPException(status_code=400, detail="Invalid token")
 
-    proxy = _proxy_url()
+    proxy = p_proxy_url()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
@@ -137,10 +141,7 @@ async def signin_activate(body: SigninActivateRequest):
     settings_obj.user_id = user_id
     settings_obj.user_email = email
     settings_obj.signin_method = method
-    # If the user happens to be a paying customer too (Stripe + sign-in
-    # share a user row by email), surface plan/expires so the chat picker
-    # exposes Pro models. Free-tier signups land here with plan="free"
-    # and expires=null; connection_mode stays own_key.
+    # If the user happens to be a paying customer too (Stripe + sign-in share a user row by email), surface plan/expires so the chat picker exposes Pro models. Free-tier signups land here with plan="free" and expires=null; connection_mode stays own_key.
     if isinstance(plan, str) and plan != "free":
         settings_obj.connection_mode = "openswarm-pro"
         settings_obj.openswarm_bearer_token = body.token
@@ -149,16 +150,13 @@ async def signin_activate(body: SigninActivateRequest):
         if isinstance(expires, str):
             settings_obj.openswarm_subscription_expires = expires
     else:
-        # Free-tier: still store the bearer so future API calls can identify
-        # the user (used by /api/me/profile, /api/auth/signout). Do NOT flip
-        # connection_mode; that's reserved for paid plans only so chat
-        # routing keeps using own_key/BYO.
+        # Free-tier: still store the bearer so future API calls can identify the user (used by /api/me/profile, /api/auth/signout). Do NOT flip connection_mode; that's reserved for paid plans only so chat routing keeps using own_key/BYO.
         settings_obj.openswarm_bearer_token = body.token
         settings_obj.openswarm_proxy_url = proxy
 
     await save_settings_async(settings_obj)
-    _sync_identity_to_service(settings_obj)
-    await _sync_pro_routing(settings_obj)
+    p_sync_identity_to_service(settings_obj)
+    await p_sync_pro_routing(settings_obj)
 
     return {
         "ok": True,
@@ -169,9 +167,7 @@ async def signin_activate(body: SigninActivateRequest):
     }
 
 
-# ---------------------------------------------------------------------------
-# POST /api/auth/signout
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- POST /api/auth/signout ---------------------------------------------------------------------------
 
 @auth.router.post("/signout")
 async def signout():
@@ -185,7 +181,7 @@ async def signout():
     """
     settings_obj = load_settings()
     bearer = getattr(settings_obj, "openswarm_bearer_token", None)
-    proxy = _proxy_url()
+    proxy = p_proxy_url()
     if bearer:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -194,24 +190,13 @@ async def signout():
                     headers={"Authorization": f"Bearer {bearer}"},
                 )
         except httpx.HTTPError as e:
-            # Network failure shouldn't strand the user signed-in locally;
-            # the cloud token is invalidated lazily on next use anyway.
+            # Network failure shouldn't strand the user signed-in locally; the cloud token is invalidated lazily on next use anyway.
             logger.warning("cloud signout failed (clearing local anyway): %s", e)
 
-    # Stop every running agent session AND drop their cached SDK resume
-    # state BEFORE clearing local settings. Two failure modes this prevents:
-    #   1. A 9Router subprocess captured the now-revoked bearer at spawn
-    #      time and would 401 on the next /v1/messages call.
-    #   2. A session has an `sdk_session_id` from a conversation served by
-    #      the previous identity's Claude account; resuming against the new
-    #      bearer would 404 or 401 because the new account has no record
-    #      of that thread. Wiping it forces the SDK to start a fresh thread
-    #      on next send (transcript replay still works; only the SDK's
-    #      server-side resume cache is reset).
-    # Best-effort: failures here shouldn't block the sign-out itself.
+    # Stop every running agent session AND drop their cached SDK resume state BEFORE clearing local settings. Two failure modes this prevents: 1. A 9Router subprocess captured the now-revoked bearer at spawn time and would 401 on the next /v1/messages call. 2. A session has an `sdk_session_id` from a conversation served by the previous identity's Claude account; resuming against the new bearer would 404 or 401 because the new account has no record of that thread. Wiping it forces the SDK to start a fresh thread on next send (transcript replay still works; only the SDK's server-side resume cache is reset). Best-effort: failures here shouldn't block the sign-out itself.
     try:
         from backend.apps.agents.agent_manager import agent_manager
-        from backend.apps.agents.agent_manager import _save_session
+        from backend.apps.agents.manager.session.session_store import save_session
 
         running = list(agent_manager.tasks.keys())
         for session_id in running:
@@ -220,14 +205,12 @@ async def signout():
             except Exception as e:
                 logger.warning("signout: stop_agent(%s) failed: %s", session_id, e)
 
-        # Walk every loaded session (running, stopped, persisted-but-resumed)
-        # and clear the SDK resume id so the next send starts a fresh thread
-        # under whichever identity the user re-signs-in with.
+        # Walk every loaded session (running, stopped, persisted-but-resumed) and clear the SDK resume id so the next send starts a fresh thread under whichever identity the user re-signs-in with.
         for sess in list(agent_manager.sessions.values()):
             if sess.sdk_session_id:
                 sess.sdk_session_id = None
                 try:
-                    _save_session(sess.id, sess.model_dump(mode="json"))
+                    save_session(sess.id, sess.model_dump(mode="json"))
                 except Exception as e:
                     logger.warning("signout: save_session(%s) failed: %s", sess.id, e)
 
@@ -245,6 +228,6 @@ async def signout():
     settings_obj.openswarm_subscription_expires = None
     settings_obj.openswarm_usage_cached = None
     await save_settings_async(settings_obj)
-    _sync_identity_to_service(settings_obj)
-    await _sync_pro_routing(settings_obj)
+    p_sync_identity_to_service(settings_obj)
+    await p_sync_pro_routing(settings_obj)
     return {"ok": True}

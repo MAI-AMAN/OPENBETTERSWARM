@@ -1,6 +1,6 @@
 # Refusal/meta tells from aux label calls; any hit means "show the fallback, not this".
-_REJECT_STARTS = ("i ", "i'm", "i'll", "i've", "as an", "sorry", "unfortunately", "please", "here")
-_REJECT_ANYWHERE = ("cannot", "can't", "unable", "no information", "not enough", "need more", "provide more")
+P_REJECT_STARTS = ("i ", "i'm", "i'll", "i've", "as an", "sorry", "unfortunately", "please", "here")
+P_REJECT_ANYWHERE = ("cannot", "can't", "unable", "no information", "not enough", "need more", "provide more")
 
 
 def clean_short_label(raw: str, max_words: int = 4, max_chars: int = 36) -> str:
@@ -11,7 +11,7 @@ def clean_short_label(raw: str, max_words: int = 4, max_chars: int = 36) -> str:
     line = line.strip("\"'` ").lstrip("#*->• ").replace("**", "").replace("`", "")
     line = line.rstrip(" .,:;!").strip()
     low = line.lower()
-    if not line or low.startswith(_REJECT_STARTS) or any(t in low for t in _REJECT_ANYWHERE):
+    if not line or low.startswith(P_REJECT_STARTS) or any(t in low for t in P_REJECT_ANYWHERE):
         return ""
     label = " ".join(line.split()[:max_words])
     if len(label) > max_chars:
@@ -26,7 +26,7 @@ def aux_max_tokens_for(model: str | None, base: int = 100) -> int:
     return base
 
 
-def _safe_resp_text(resp) -> str:
+def safe_resp_text(resp) -> str:
     """Extract text from an Anthropic-shape response, tolerating Gemini/OpenAI
     edge cases. Gemini through 9Router occasionally returns `content=[]` (e.g.
     safety stop, function-call-only turn) which makes `resp.content[0].text`

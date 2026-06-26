@@ -11,13 +11,8 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 30
 
-# Modules backend code is allowed to import. Trade-off: a determined attacker
-# can find ways around this (e.g. string-encoded imports via tricks the AST
-# validator can't see), but the allowlist kills the easy paths cheaply and
-# pairs with cwd=tempdir + minimal env so the blast radius is small even if
-# a payload slips past. Keep this list to "data shaping" libraries; no I/O,
-# no networking, no subprocess.
-_ALLOWED_MODULES = frozenset({
+# Modules backend code is allowed to import. Trade-off: a determined attacker can find ways around this (e.g. string-encoded imports via tricks the AST validator can't see), but the allowlist kills the easy paths cheaply and pairs with cwd=tempdir + minimal env so the blast radius is small even if a payload slips past. Keep this list to "data shaping" libraries; no I/O, no networking, no subprocess.
+P_ALLOWED_MODULES = frozenset({
     "json", "math", "re", "datetime", "collections", "itertools",
     "functools", "statistics", "decimal", "fractions", "random",
     "string", "textwrap", "unicodedata", "csv", "copy", "enum",
@@ -25,11 +20,8 @@ _ALLOWED_MODULES = frozenset({
     "base64", "binascii", "operator", "heapq", "bisect", "array",
 })
 
-# Builtin functions that punch holes through the allowlist or do I/O. Direct
-# calls (e.g. `eval(...)`) are caught here. Attribute-style calls
-# (`__builtins__.eval(...)`) are blocked by the preamble's `delattr` loop in
-# the subprocess.
-_BLOCKED_BUILTINS = frozenset({
+# Builtin functions that punch holes through the allowlist or do I/O. Direct calls (e.g. `eval(...)`) are caught here. Attribute-style calls (`__builtins__.eval(...)`) are blocked by the preamble's `delattr` loop in the subprocess.
+P_BLOCKED_BUILTINS = frozenset({
     "exec", "eval", "compile", "__import__", "open", "input",
     "breakpoint", "exit", "quit",
 })
@@ -62,7 +54,7 @@ def get_code_warnings(code: str) -> list[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 root = alias.name.split(".")[0]
-                if root not in _ALLOWED_MODULES:
+                if root not in P_ALLOWED_MODULES:
                     msg = f"Imports '{alias.name}' (outside the safe-data-shaping allowlist)"
                     if msg not in seen:
                         seen.add(msg)
@@ -70,13 +62,13 @@ def get_code_warnings(code: str) -> list[str]:
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 root = node.module.split(".")[0]
-                if root not in _ALLOWED_MODULES:
+                if root not in P_ALLOWED_MODULES:
                     msg = f"Imports from '{node.module}' (outside the safe-data-shaping allowlist)"
                     if msg not in seen:
                         seen.add(msg)
                         warnings.append(msg)
         elif isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id in _BLOCKED_BUILTINS:
+            if isinstance(node.func, ast.Name) and node.func.id in P_BLOCKED_BUILTINS:
                 msg = f"Calls builtin '{node.func.id}()' which can escape the sandbox"
                 if msg not in seen:
                     seen.add(msg)
@@ -84,7 +76,7 @@ def get_code_warnings(code: str) -> list[str]:
     return warnings
 
 
-def _validate_code_safety(code: str) -> None:
+def p_validate_code_safety(code: str) -> None:
     """Raise UnsafeCodeError on the first AST-visible risk. Thin wrapper
     around get_code_warnings for callers that want the strict-reject
     behavior (the default `execute_backend_code` path). Callers that want
@@ -96,10 +88,8 @@ def _validate_code_safety(code: str) -> None:
         raise UnsafeCodeError(warnings[0])
 
 
-# Env vars we always scrub from the subprocess, regardless of strict-vs-force.
-# These are the keys an attacker would actually want; install token, provider
-# API keys, cloud credentials. Everything else is local-machine convenience.
-_SCRUBBED_ENV_KEYS = frozenset({
+# Env vars we always scrub from the subprocess, regardless of strict-vs-force. These are the keys an attacker would actually want; install token, provider API keys, cloud credentials. Everything else is local-machine convenience.
+P_SCRUBBED_ENV_KEYS = frozenset({
     "OPENSWARM_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -116,7 +106,7 @@ _SCRUBBED_ENV_KEYS = frozenset({
 })
 
 
-def _minimal_env(force: bool = False) -> dict:
+def p_minimal_env(force: bool = False) -> dict:
     """Build the env for the executor subprocess.
 
     Strict mode (force=False): only language essentials. AST-validated code
@@ -130,16 +120,13 @@ def _minimal_env(force: bool = False) -> dict:
     minus credentials, so an `open(os.path.expanduser("~/data.csv"))`
     actually works instead of silently misbehaving.
 
-    Both modes scrub _SCRUBBED_ENV_KEYS so even force-mode code never
+    Both modes scrub P_SCRUBBED_ENV_KEYS so even force-mode code never
     sees the install token or provider API keys.
     """
     if force:
-        env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV_KEYS}
+        env = {k: v for k, v in os.environ.items() if k not in P_SCRUBBED_ENV_KEYS}
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        # Force UTF-8 even if the parent somehow lacked it (dev mode where
-        # Electron didn't inject PYTHONUTF8). Without this, a child reading
-        # non-ASCII stdin/files on a cp1252 Windows machine raises
-        # UnicodeDecodeError, the "works on my laptop, not theirs" failure.
+        # Force UTF-8 even if the parent somehow lacked it (dev mode where Electron didn't inject PYTHONUTF8). Without this, a child reading non-ASCII stdin/files on a cp1252 Windows machine raises UnicodeDecodeError, the "works on my laptop, not theirs" failure.
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         return env
@@ -148,10 +135,7 @@ def _minimal_env(force: bool = False) -> dict:
         "PYTHONDONTWRITEBYTECODE": "1",
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
-        # LANG/LC_ALL are POSIX-only; on Windows the active code page (cp1252)
-        # decides default encoding instead. PYTHONUTF8 + PYTHONIOENCODING force
-        # UTF-8 for this from-scratch env so json.loads(sys.stdin.read()) of
-        # non-ASCII input_data doesn't blow up on stock Windows machines.
+        # LANG/LC_ALL are POSIX-only; on Windows the active code page (cp1252) decides default encoding instead. PYTHONUTF8 + PYTHONIOENCODING force UTF-8 for this from-scratch env so json.loads(sys.stdin.read()) of non-ASCII input_data doesn't blow up on stock Windows machines.
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
     }
@@ -181,7 +165,7 @@ async def execute_backend_code(
     Security boundaries (defense in depth; none alone is sufficient):
       1. AST allowlist on imports + blocked-builtin call list.
       2. Subprocess cwd = fresh temp dir (not the OpenSwarm process cwd).
-      3. Subprocess env strips PATH, all *_TOKEN / *_API_KEY inheritance.
+      3. Subprocess env strips PATH, all *TOKEN / *_API_KEY inheritance.
       4. Preamble scrubs dangerous attrs off `builtins` inside the subprocess
          to catch AST-bypass tricks (e.g. metaclass shenanigans).
       5. 30s wall-clock timeout, killed on overrun.
@@ -192,20 +176,11 @@ async def execute_backend_code(
     """
 
     if not skip_validation:
-        _validate_code_safety(code)
+        p_validate_code_safety(code)
 
     preamble = (
         "import json, sys, io, builtins\n"
-        # Defense-in-depth: scrub dangerous attrs off `builtins` so
-        # attribute-style accesses (metaclass.__subclasses__ chains) can't
-        # reach them. NOTE: __import__ is deliberately NOT scrubbed , 
-        # Python's `import` statement bytecode reads `__import__` from
-        # builtins, so removing it makes EVERY import (including allowlisted
-        # ones like `import math`) fail with "ImportError: __import__ not
-        # found". The AST allowlist on the host is what blocks `import
-        # subprocess`; the per-subprocess scrub just plugs the named-builtin
-        # attack vectors that the AST can't see (eval/exec via attribute
-        # access on objects, etc.).
+        # Defense-in-depth: scrub dangerous attrs off `builtins` so attribute-style accesses (metaclass.__subclasses__ chains) can't reach them. NOTE: __import__ is deliberately NOT scrubbed, Python's `import` statement bytecode reads `__import__` from builtins, so removing it makes EVERY import (including allowlisted ones like `import math`) fail with "ImportError: __import__ not found". The AST allowlist on the host is what blocks `import subprocess`; the per-subprocess scrub just plugs the named-builtin attack vectors that the AST can't see (eval/exec via attribute access on objects, etc.).
         "for _b in ('exec','eval','compile','open','input',\n"
         "           'breakpoint','exit','quit'):\n"
         "    try: delattr(builtins, _b)\n"
@@ -229,7 +204,7 @@ async def execute_backend_code(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workdir,
-            env=_minimal_env(force=skip_validation),
+            env=p_minimal_env(force=skip_validation),
         )
 
         try:

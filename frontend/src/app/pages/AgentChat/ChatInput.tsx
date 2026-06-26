@@ -19,6 +19,7 @@ import { ChatInputView } from './ChatInput/view/ChatInputView';
 import { PastePreviewDialog } from './ChatInput/view/PastePreviewDialog';
 import { ICON_MAP, FALLBACK_MODE_BASE } from './ChatInput/modeConfig';
 import { AttachedImage, ForcedToolGroup, ChatInputHandle } from './ChatInput/types';
+import type { WorkflowsRunContext } from '@/shared/state/dashboardLayoutSlice';
 
 export type { AttachedImage, ForcedToolGroup, ChatInputHandle };
 export type { AttachedSkill } from '@/app/components/editor/richEditorUtils';
@@ -43,12 +44,16 @@ interface Props {
   thinkingLevel?: 'off' | 'low' | 'medium' | 'high' | 'auto';
   onThinkingLevelChange?: (level: 'off' | 'low' | 'medium' | 'high' | 'auto') => void;
   onActivityLabelChange?: (label: string | null) => void;
-  // Seed the composer with this text (unsent), so a starter-prompt click opens
-  // the chat with the message already typed, ready for the user to hit send.
+  // Seed the composer with this text (unsent), so a starter-prompt click opens the chat with the message already typed, ready for the user to hit send.
   prefillPrompt?: string;
+  // Replaces the default "Agent, @ for context..." placeholder (e.g. "Ask about this run...").
+  placeholderOverride?: string;
+  // A workflow run shown as a small removable chip inside the composer.
+  runContext?: WorkflowsRunContext;
+  onClearRunContext?: () => void;
 }
 
-const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, onModeChange, model, onModelChange, provider, onProviderChange, isRunning, onStop, autoRunMode, contextEstimate, embedded, autoFocus, sessionId, queueLength = 0, thinkingLevel = 'auto', onThinkingLevelChange, onActivityLabelChange, prefillPrompt }, ref) => {
+const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, onModeChange, model, onModelChange, provider, onProviderChange, isRunning, onStop, autoRunMode, contextEstimate, embedded, autoFocus, sessionId, queueLength = 0, thinkingLevel = 'auto', onThinkingLevelChange, onActivityLabelChange, prefillPrompt, placeholderOverride, runContext, onClearRunContext }, ref) => {
   const c = useClaudeTokens();
   const editorRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -63,9 +68,7 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
     if (autoFocus) editorRef.current?.focus();
   }, [autoFocus]);
 
-  // Drop the seeded prompt into the editor when it arrives (starter-prompt click).
-  // It renders translucent, reading as a pending suggestion, and solidifies the
-  // moment the user takes it (a keypress, including Enter-to-send, or any edit).
+  // Drop the seeded prompt into the editor when it arrives (starter-prompt click). It renders translucent, reading as a pending suggestion, and solidifies the moment the user takes it (a keypress, including Enter-to-send, or any edit).
   const prefilledRef = useRef<string | null>(null);
   useEffect(() => {
     if (!prefillPrompt || prefilledRef.current === prefillPrompt) return;
@@ -77,8 +80,7 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
       ta.setSelectionRange(prefillPrompt.length, prefillPrompt.length);
     } else {
       editor.textContent = prefillPrompt;
-      // Park the caret AFTER the seeded text, not at position 0 (the default for a
-      // freshly-set textContent), so the user types/sends from the end.
+      // Park the caret AFTER the seeded text, not at position 0 (the default for a freshly-set textContent), so the user types/sends from the end.
       const sel = window.getSelection();
       if (sel) {
         const range = document.createRange();
@@ -181,9 +183,7 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
     const editor = editorRef.current;
     if (!editor || disabled) return;
     if (summarizingPath || summarizingAll) return;
-    // If files are flagged too big, popup will appear above the input. Capture
-    // the user's intent to send so once they pick Shrink all / Remove all and
-    // the queue drains, the send fires automatically (zero extra clicks).
+    // If files are flagged too big, popup will appear above the input. Capture the user's intent to send so once they pick Shrink all / Remove all and the queue drains, the send fires automatically (zero extra clicks).
     if (oversizeQueue.length > 0) {
       pendingSendRef.current = () => { handleSend(); };
       return;
@@ -202,16 +202,12 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
     });
     if (block) {
       if (block.kind === 'too_long') {
-        // This one message is too big to send even with zero history, so
-        // compaction can't save it. Hard-block and tell the user plainly; they
-        // shorten it and the block clears on the next send attempt. Don't fire
-        // /compact (pointless) and don't queue a retry (it'd just re-block).
+        // This one message is too big to send even with zero history, so compaction can't save it. Hard-block and tell the user plainly; they shorten it and the block clears on the next send attempt. Don't fire /compact (pointless) and don't queue a retry (it'd just re-block).
         pendingSendRef.current = null;
         setSendBlock(block);
         return;
       }
-      // kind === 'compacting': history is the overflow source, which we CAN
-      // shrink. Auto-compact invisibly, then continue this same send.
+      // kind === 'compacting': history is the overflow source, which we CAN shrink. Auto-compact invisibly, then continue this same send.
       if (!sessionId || compactionInFlightRef.current) return;
       compactionInFlightRef.current = true;
       setSendBlock(null);
@@ -353,6 +349,9 @@ const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, mode, 
       isRunning={isRunning}
       queueLength={queueLength}
       modeConf={modeConf}
+      placeholderOverride={placeholderOverride}
+      runContext={runContext}
+      onClearRunContext={onClearRunContext}
       handleInput={handleInput}
       handleEditorClick={handleEditorClick}
       handleKeyDown={handleKeyDown}

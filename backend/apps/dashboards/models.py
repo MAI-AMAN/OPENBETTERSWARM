@@ -36,13 +36,9 @@ class BrowserCardPosition(BaseModel):
     y: float = 0
     width: float = 1280
     height: float = 800
-    # Agent session id that spawned this browser, or None for user-created.
-    # Used by the frontend to auto-remove the browser when its owner agent
-    # reaches a terminal completed/error state.
+    # Agent session id that spawned this browser, or None for user-created. Used by the frontend to auto-remove the browser when its owner agent reaches a terminal completed/error state.
     spawned_by: Optional[str] = None
-    # When the agent leaves the deliverable on the page (a video playing, a page
-    # to read), it sets this so the frontend's auto-close on parent finish skips
-    # the card and the browser stays put.
+    # When the agent leaves the deliverable on the page (a video playing, a page to read), it sets this so the frontend's auto-close on parent finish skips the card and the browser stays put.
     keep_open: bool = False
 
 
@@ -57,12 +53,12 @@ class NotePosition(BaseModel):
 
 
 class DashboardLayout(BaseModel):
-    # extra="allow" so any keys the FE sends (or legacy on-disk layouts
-    # carry) round-trip without Pydantic stripping them.
     model_config = ConfigDict(extra="allow")
     cards: dict[str, CardPosition] = Field(default_factory=dict)
     view_cards: dict[str, ViewCardPosition] = Field(default_factory=dict)
     browser_cards: dict[str, BrowserCardPosition] = Field(default_factory=dict)
+    workflow_cards: dict = Field(default_factory=dict)
+    workflows_hub: Optional[dict] = None
     notes: dict[str, NotePosition] = Field(default_factory=dict)
     expanded_session_ids: list[str] = Field(default_factory=list)
 

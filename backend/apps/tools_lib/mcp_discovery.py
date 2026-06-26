@@ -8,12 +8,12 @@ import shutil
 import httpx
 from fastapi import HTTPException
 
-from backend.apps.tools_lib.mcp_config import _augmented_path, _resolve_command
+from backend.apps.tools_lib.mcp_config import augmented_path, resolve_command
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_sse_json(text: str) -> dict | None:
+def p_parse_sse_json(text: str) -> dict | None:
     """Extract JSON from an SSE response body (handles `data: {...}` lines)."""
     for line in text.splitlines():
         stripped = line.strip()
@@ -30,7 +30,7 @@ def _parse_sse_json(text: str) -> dict | None:
         return None
 
 
-async def _discover_mcp_tools_http(url: str, headers: dict | None = None) -> list[dict]:
+async def discover_mcp_tools_http(url: str, headers: dict | None = None) -> list[dict]:
     """Connect to a Streamable HTTP MCP server and call tools/list via JSON-RPC POST."""
     h = {
         "Content-Type": "application/json",
@@ -62,7 +62,7 @@ async def _discover_mcp_tools_http(url: str, headers: dict | None = None) -> lis
 
         ct = list_resp.headers.get("content-type", "")
         if "text/event-stream" in ct:
-            data = _parse_sse_json(list_resp.text)
+            data = p_parse_sse_json(list_resp.text)
         else:
             data = list_resp.json()
 
@@ -73,7 +73,7 @@ async def _discover_mcp_tools_http(url: str, headers: dict | None = None) -> lis
         return [{"name": t.get("name", ""), "description": t.get("description", ""), "inputSchema": t.get("inputSchema")} for t in tools_list]
 
 
-async def _discover_mcp_tools_sse(url: str, headers: dict | None = None) -> list[dict]:
+async def discover_mcp_tools_sse(url: str, headers: dict | None = None) -> list[dict]:
     """Connect to a legacy SSE MCP server (GET event-stream + POST messages) and call tools/list."""
     from mcp.client.sse import sse_client
     from mcp import ClientSession
@@ -99,10 +99,10 @@ async def _discover_mcp_tools_sse(url: str, headers: dict | None = None) -> list
         raise HTTPException(status_code=502, detail=f"SSE discovery failed: {first}") from first
 
 
-_NPX_CACHE_RE = re.compile(r"_npx[/\\]([0-9a-f]{8,})[/\\]")
+P_NPX_CACHE_RE = re.compile(r"_npx[/\\]([0-9a-f]{8,})[/\\]")
 
 
-def _try_heal_npx_cache(stderr: str) -> str | None:
+def p_try_heal_npx_cache(stderr: str) -> str | None:
     """On `ERR_MODULE_NOT_FOUND` pointing into `~/.npm/_npx/<hash>/`, wipe that one dir.
 
     Why: interrupted npx installs leave a `package-lock.json` in the cache dir so
@@ -112,7 +112,7 @@ def _try_heal_npx_cache(stderr: str) -> str | None:
     """
     if "ERR_MODULE_NOT_FOUND" not in stderr:
         return None
-    m = _NPX_CACHE_RE.search(stderr)
+    m = P_NPX_CACHE_RE.search(stderr)
     if not m:
         return None
     hash_ = m.group(1)
@@ -124,18 +124,18 @@ def _try_heal_npx_cache(stderr: str) -> str | None:
     return hash_
 
 
-async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None, env: dict | None = None, _attempt: int = 0) -> list[dict]:
+async def discover_mcp_tools_stdio(command: str, args: list[str] | None = None, env: dict | None = None, p_attempt: int = 0) -> list[dict]:
     """Spawn a stdio MCP server process and call tools/list via JSON-RPC over stdin/stdout.
 
     On the first attempt, a failure that looks like corrupted npx cache
     (`ERR_MODULE_NOT_FOUND` pointing into `~/.npm/_npx/<hash>/`) triggers one
     auto-heal + retry. No heal on `_attempt >= 1`.
     """
-    cmd_path = _resolve_command(command)
+    cmd_path = resolve_command(command)
     if not cmd_path:
         raise HTTPException(status_code=400, detail=f"Command '{command}' not found on PATH or common install locations")
 
-    proc_env = {**os.environ, **(env or {}), "PATH": _augmented_path()}
+    proc_env = {**os.environ, **(env or {}), "PATH": augmented_path()}
     proc_env.pop("PYTHONPATH", None)
 
     proc = await asyncio.create_subprocess_exec(
@@ -147,15 +147,10 @@ async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None,
         limit=10 * 1024 * 1024,  # 10 MB buffer for large tool lists
     )
 
-    # Drain stderr in the background. Two reasons: (1) the OS pipe buffer is
-    # ~64 KB; if npx prints more than that during a cold-cache install
-    # (which happens when AV scanning slows npm), the child blocks on
-    # write and we'd see what looks like a hang. (2) the rolling tail lets
-    # us include npx's own diagnostic in any error we surface, instead of
-    # the opaque "discovery failed" we used to show.
+    # Drain stderr in the background. Two reasons: (1) the OS pipe buffer is ~64 KB; if npx prints more than that during a cold-cache install (which happens when AV scanning slows npm), the child blocks on write and we'd see what looks like a hang. (2) the rolling tail lets us include npx's own diagnostic in any error we surface, instead of the opaque "discovery failed" we used to show.
     stderr_tail: list[str] = []
 
-    async def _drain_stderr() -> None:
+    async def p_drain_stderr() -> None:
         try:
             while True:
                 chunk = await proc.stderr.readline()
@@ -169,21 +164,19 @@ async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None,
         except Exception:
             return
 
-    stderr_task = asyncio.create_task(_drain_stderr())
+    stderr_task = asyncio.create_task(p_drain_stderr())
 
-    async def _send(msg: dict) -> None:
+    async def p_send(msg: dict) -> None:
         line = json.dumps(msg) + "\n"
         proc.stdin.write(line.encode())
         await proc.stdin.drain()
 
-    async def _recv(timeout_s: float = 30.0) -> dict:
+    async def p_recv(timeout_s: float = 30.0) -> dict:
         """Read JSON-RPC responses, skipping notification lines (no 'id' field)."""
         while True:
             line = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout_s)
             if not line:
-                # stdout EOF = child exited. Wait briefly for the stderr
-                # drain to catch up so we capture the real failure reason
-                # (which often arrives a few ms after stdout closes).
+                # stdout EOF = child exited. Wait briefly for the stderr drain to catch up so we capture the real failure reason (which often arrives a few ms after stdout closes).
                 try:
                     await asyncio.wait_for(asyncio.shield(stderr_task), timeout=1.0)
                 except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
@@ -204,7 +197,7 @@ async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None,
                 return data
 
     try:
-        await _send({
+        await p_send({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {
                 "protocolVersion": "2025-03-26",
@@ -212,33 +205,24 @@ async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None,
                 "clientInfo": {"name": "self-swarm", "version": "0.1.0"},
             },
         })
-        # First response is the slow one. On Windows with a cold npx cache,
-        # `npx -y <pkg>` has to download the package + transitive deps and
-        # AV-scan every file npm writes; total install time often exceeds
-        # 60 s and occasionally pushes past 90 s. Subsequent reads run
-        # against an already-running server and stay at the default 30 s.
-        await _recv(timeout_s=120.0)
+        # First response is the slow one. On Windows with a cold npx cache, `npx -y <pkg>` has to download the package + transitive deps and AV-scan every file npm writes; total install time often exceeds 60 s and occasionally pushes past 90 s. Subsequent reads run against an already-running server and stay at the default 30 s.
+        await p_recv(timeout_s=120.0)
 
-        await _send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        await p_send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-        await _send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        data = await _recv()
+        await p_send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        data = await p_recv()
 
         tools_list = data.get("result", {}).get("tools", [])
         return [{"name": t.get("name", ""), "description": t.get("description", ""), "inputSchema": t.get("inputSchema")} for t in tools_list]
 
     except HTTPException as e:
-        # Heal-on-corrupt-npx-cache still triggers from the EOF branch,
-        # which now includes the full stderr tail in `e.detail`; so the
-        # ERR_MODULE_NOT_FOUND signature is still discoverable here.
-        if _attempt == 0 and _try_heal_npx_cache(str(e.detail) if e.detail is not None else ""):
-            return await _discover_mcp_tools_stdio(command, args, env, _attempt=1)
+        # Heal-on-corrupt-npx-cache still triggers from the EOF branch, which now includes the full stderr tail in `e.detail`; so the ERR_MODULE_NOT_FOUND signature is still discoverable here.
+        if p_attempt == 0 and p_try_heal_npx_cache(str(e.detail) if e.detail is not None else ""):
+            return await discover_mcp_tools_stdio(command, args, env, p_attempt=1)
         raise
     except asyncio.TimeoutError:
-        # Most common cause: cold npx cache on Windows. The npm install
-        # persists across attempts, so a retry usually finishes against a
-        # warm cache. Surface npx's own progress line if we have one; it
-        # makes the cause obvious ("downloading X...") instead of opaque.
+        # Most common cause: cold npx cache on Windows. The npm install persists across attempts, so a retry usually finishes against a warm cache. Surface npx's own progress line if we have one; it makes the cause obvious ("downloading X...") instead of opaque.
         tail_text = "".join(stderr_tail[-5:]).strip()
         detail = "MCP discovery timed out; the server may still be downloading on first run"
         if tail_text:

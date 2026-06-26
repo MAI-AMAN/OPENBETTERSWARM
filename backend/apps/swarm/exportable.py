@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar, Protocol, runtime_checkable
 
-from .models import EntityType, Requirement
+from backend.apps.swarm.models import EntityType, Requirement
 
 
 @dataclass
@@ -27,13 +27,13 @@ class RemapTable:
     """bundle_id -> fresh local id, filled as import walks entities leaves-first."""
 
     def __init__(self) -> None:
-        self._m: dict[str, str] = {}
+        self.p_m: dict[str, str] = {}
 
     def assign(self, bundle_id: str, local_id: str) -> None:
-        self._m[bundle_id] = local_id
+        self.p_m[bundle_id] = local_id
 
     def local(self, bundle_id: str) -> str | None:
-        return self._m.get(bundle_id)
+        return self.p_m.get(bundle_id)
 
 
 @runtime_checkable

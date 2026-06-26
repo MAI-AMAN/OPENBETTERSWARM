@@ -1,7 +1,7 @@
 """Formal proof (Z3 / SMT) of the MCP dispatch-gate security invariant.
 
 The product rule "MCP tools are reachable only after MCPActivate" is enforced at
-dispatch in agent_manager._build_mcp_servers: for a gated session a server is
+dispatch in agent_manager.build_mcp_servers: for a gated session a server is
 forwarded to the model only if its sanitized name is in session.active_mcps.
 
 tests/test_v2_invariants.py::test_mcp_gate_only_forwards_activated_servers
@@ -65,8 +65,7 @@ def main() -> None:
     # C. The permission gate still binds: a denied server is never forwarded.
     ok &= prove("denied(t)  =>  !forwarded(t)", Implies(denied, Not(fwd)))
 
-    # Teeth: the buggy gate (activation check dropped) MUST be refutable, else
-    # the proof above would be vacuous.
+    # Teeth: the buggy gate (activation check dropped) MUST be refutable, else the proof above would be vacuous.
     print("Sanity-checking the proof has teeth (a buggy gate must be refuted):")
     bug = buggy_forwarded(installed, allowed, denied, active_is_none, active_t)
     s = Solver()

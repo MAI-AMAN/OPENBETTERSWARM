@@ -24,7 +24,7 @@ from google.oauth2.credentials import Credentials
 
 
 @functools.lru_cache(maxsize=1)
-def _patched_get_credentials():
+def p_patched_get_credentials():
     refresh_token = os.environ.get("GOOGLE_WORKSPACE_REFRESH_TOKEN")
     if not refresh_token:
         raise ValueError("GOOGLE_WORKSPACE_REFRESH_TOKEN env var is required")
@@ -40,18 +40,13 @@ def _patched_get_credentials():
     )
 
 
-gauth.get_credentials = _patched_get_credentials
+gauth.get_credentials = p_patched_get_credentials
 
 
-from google_workspace_mcp import __main__ as _gw_main  # noqa: E402,F401
+from google_workspace_mcp import __main__ as p_gw_main  # noqa: E402,F401
 from google_workspace_mcp.app import mcp  # noqa: E402
 
 
 if __name__ == "__main__":
-    # Upstream google_workspace_mcp.__main__.main() wraps a synchronous
-    # mcp.run() in asyncio.run() which throws "a coroutine was expected,
-    # got None" against current FastMCP. Skip it and invoke FastMCP's
-    # stdio loop directly. The `_gw_main` import above is what actually
-    # registers every tool/prompt/resource module against the shared
-    # `mcp` instance via its top-level imports.
+    # Upstream google_workspace_mcp.__main__.main() wraps a synchronous mcp.run() in asyncio.run() which throws "a coroutine was expected, got None" against current FastMCP. Skip it and invoke FastMCP's stdio loop directly. The `_gw_main` import above is what actually registers every tool/prompt/resource module against the shared `mcp` instance via its top-level imports.
     mcp.run("stdio")

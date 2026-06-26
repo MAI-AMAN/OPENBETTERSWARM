@@ -148,9 +148,7 @@ export const fetchSettings = createAsyncThunk('settings/fetch', async () => {
   return (await res.json()) as AppSettings;
 });
 
-// Save ONLY the fields the user changed, merged server-side onto fresh state.
-// Every renderer save uses this so a stale full object can never clobber a field
-// the user didn't touch (e.g. one an agent just changed).
+// Save ONLY the fields the user changed, merged server-side onto fresh state. Every renderer save uses this so a stale full object can never clobber a field the user didn't touch (e.g. one an agent just changed).
 export const updateSettingsPatch = createAsyncThunk(
   'settings/patch',
   async (changes: Partial<AppSettings>) => {
@@ -168,6 +166,19 @@ export const resetSystemPrompt = createAsyncThunk(
   'settings/resetSystemPrompt',
   async () => {
     const res = await fetch(`${SETTINGS_API}/reset-system-prompt`, { method: 'POST' });
+    const data = await res.json();
+    return data.settings as AppSettings;
+  }
+);
+
+export const dismissMcpSuggestion = createAsyncThunk(
+  'settings/dismissMcpSuggestion',
+  async (ids: string[]) => {
+    const res = await fetch(`${SETTINGS_API}/dismiss-mcp-suggestion`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
     const data = await res.json();
     return data.settings as AppSettings;
   }
@@ -276,8 +287,7 @@ const settingsSlice = createSlice({
       .addCase(fetchSettings.fulfilled, (state, action) => {
         state.loading = false;
         state.loaded = true;
-        // Drop a stale response: on boot three fetches race (initial, sub-sync, free-trial
-        // mint); if the pre-mint one resolves last it would wipe the armed trial. Newest wins.
+        // Drop a stale response: on boot three fetches race (initial, sub-sync, free-trial mint); if the pre-mint one resolves last it would wipe the armed trial. Newest wins.
         if (state.latestWriteId && action.meta.requestId !== state.latestWriteId) return;
         // Skip ref-assignment when byte-identical; keeps background refetch polls from re-firing every effect.
         const next = JSON.stringify(action.payload);
@@ -291,8 +301,7 @@ const settingsSlice = createSlice({
         state.loaded = true;
       })
       .addCase(updateSettingsPatch.fulfilled, (state, action) => {
-        // A user save is authoritative; claim newest so an in-flight GET can't
-        // overwrite it, and consume the draft so reopening shows the saved state.
+        // A user save is authoritative; claim newest so an in-flight GET can't overwrite it, and consume the draft so reopening shows the saved state.
         state.latestWriteId = action.meta.requestId;
         state.data = action.payload;
         state.draft = null;
@@ -303,6 +312,10 @@ const settingsSlice = createSlice({
         state.data = action.payload;
         state.draft = null;
         state.draftTab = null;
+      })
+      .addCase(dismissMcpSuggestion.fulfilled, (state, action) => {
+        state.latestWriteId = action.meta.requestId;
+        state.data = action.payload;
       });
   },
 });

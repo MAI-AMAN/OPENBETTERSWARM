@@ -19,28 +19,24 @@ def client():
     """Returns a TestClient pre-loaded with the local backend's auth token
     so the LocalAuthMiddleware doesn't reject our requests with 401."""
     import backend.auth as auth_mod
-    if not auth_mod._TOKEN:
-        # Tests sometimes run without backend.main's startup hook firing.
-        # Generate a token directly so request_matches_token has something
-        # to compare against.
+    if not auth_mod.TOKEN:
+        # Tests sometimes run without backend.main's startup hook firing. Generate a token directly so request_matches_token has something to compare against.
         import secrets
-        auth_mod._TOKEN = secrets.token_urlsafe(32)
-    return TestClient(app, headers={"Authorization": f"Bearer {auth_mod._TOKEN}"})
+        auth_mod.TOKEN = secrets.token_urlsafe(32)
+    return TestClient(app, headers={"Authorization": f"Bearer {auth_mod.TOKEN}"})
 
 
 @pytest.fixture
 def reset_settings():
     """Snapshot + restore settings around each test so writes don't leak."""
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
 
     original = load_settings().model_copy(deep=True)
     yield
-    _save_settings(original)
+    save_settings(original)
 
 
-# ---------------------------------------------------------------------------
-# /api/auth/signin-activate
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- /api/auth/signin-activate ---------------------------------------------------------------------------
 
 def test_signin_activate_persists_user_id(client, reset_settings):
     fake_response = AsyncMock()
@@ -135,19 +131,17 @@ def test_signin_activate_short_token_rejected_locally(client, reset_settings):
     assert r.status_code == 400
 
 
-# ---------------------------------------------------------------------------
-# /api/auth/signout
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- /api/auth/signout ---------------------------------------------------------------------------
 
 def test_signout_clears_local_identity(client, reset_settings):
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     s = load_settings()
     s.user_id = "u-bye"
     s.user_email = "bye@example.com"
     s.signin_method = "google"
     s.openswarm_bearer_token = "bearer-to-revoke-xxxxxxxx"
     s.connection_mode = "openswarm-pro"
-    _save_settings(s)
+    save_settings(s)
 
     fake_response = AsyncMock()
     fake_response.status_code = 200
@@ -168,16 +162,16 @@ def test_signout_clears_local_identity(client, reset_settings):
 
 def test_signout_succeeds_even_when_cloud_unreachable(client, reset_settings):
     """A flaky network shouldn't strand the user signed-in locally."""
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     s = load_settings()
     s.user_id = "u-flaky"
     s.openswarm_bearer_token = "bearer-flaky-network-xxxx"
-    _save_settings(s)
+    save_settings(s)
 
     with patch("httpx.AsyncClient") as MockClient:
         instance = MockClient.return_value.__aenter__.return_value
-        import httpx as _httpx
-        instance.post = AsyncMock(side_effect=_httpx.HTTPError("network down"))
+        import httpx as p_httpx
+        instance.post = AsyncMock(side_effect=p_httpx.HTTPError("network down"))
 
         r = client.post("/api/auth/signout")
     assert r.status_code == 200
@@ -186,9 +180,7 @@ def test_signout_succeeds_even_when_cloud_unreachable(client, reset_settings):
     assert s2.openswarm_bearer_token is None
 
 
-# ---------------------------------------------------------------------------
-# The dev-token handoff must be dev-only so it can't widen prod surface (#49).
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- The dev-token handoff must be dev-only so it can't widen prod surface (#49). ---------------------------------------------------------------------------
 
 def test_dev_token_is_dev_only():
     """/api/dev/token hands the install token to the split-port dev frontend
@@ -200,7 +192,7 @@ def test_dev_token_is_dev_only():
     os.environ.pop("OPENSWARM_PACKAGED", None)
     r = noauth.get("/api/dev/token")
     assert r.status_code == 200
-    assert r.json()["token"] == auth_mod._TOKEN
+    assert r.json()["token"] == auth_mod.TOKEN
 
     os.environ["OPENSWARM_PACKAGED"] = "1"
     try:

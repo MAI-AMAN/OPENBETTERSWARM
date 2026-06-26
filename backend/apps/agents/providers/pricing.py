@@ -3,30 +3,7 @@
 from __future__ import annotations
 
 
-# ---------------------------------------------------------------------------
-# Curated model tiers; Intelligence, Speed, Cost on a 1-5 scale
-# ---------------------------------------------------------------------------
-#
-# Hand-tuned from public benchmarks + per-token pricing (knowledge cutoff
-# Jan 2026). The tier numbers serve the picker hover card so users can
-# pick a model that fits the task without reading a leaderboard.
-#
-#   Intelligence:  5 = frontier reasoner, 1 = nano / specialised tiny
-#   Speed:         5 = sub-second TTFT + 250 tok/s, 1 = slow + thinking
-#   Cost:          5 = $25+/M output, 1 = under $0.50/M output (or free)
-#
-# Lookup order (compute_tiers below):
-#   1. Bare model_id direct
-#   2. ":free" stripped (so anthropic/claude-opus-4.7:free shares scoring
-#      with anthropic/claude-opus-4.7)
-#   3. Vendor-prefixed and bare-after-slash variants for cross-format
-#      coverage (so "claude-opus-4-7" matches "anthropic/claude-opus-4.7")
-#   4. Last-path-component normalised (dashes ↔ dots)
-#
-# Models not in this map fall through to a heuristic that uses cost
-# bucket + reasoning flag + name-keyword adjustments.
-# (intelligence, speed, cost) on a 1-5 scale. Tiers: 5 frontier, 4 top
-# open / strong sub, 3 solid mid, 2 small specialised, 1 nano.
+# --------------------------------------------------------------------------- Curated model tiers; Intelligence, Speed, Cost on a 1-5 scale --------------------------------------------------------------------------- Hand-tuned from public benchmarks + per-token pricing (knowledge cutoff Jan 2026). The tier numbers serve the picker hover card so users can pick a model that fits the task without reading a leaderboard. Intelligence:  5 = frontier reasoner, 1 = nano / specialised tiny Speed:         5 = sub-second TTFT + 250 tok/s, 1 = slow + thinking Cost:          5 = $25+/M output, 1 = under $0.50/M output (or free) Lookup order (compute_tiers below): 1. Bare model_id direct 2. ":free" stripped (so anthropic/claude-opus-4.7:free shares scoring with anthropic/claude-opus-4.7) 3. Vendor-prefixed and bare-after-slash variants for cross-format coverage (so "claude-opus-4-7" matches "anthropic/claude-opus-4.7") 4. Last-path-component normalised (dashes ↔ dots) Models not in this map fall through to a heuristic that uses cost bucket + reasoning flag + name-keyword adjustments. (intelligence, speed, cost) on a 1-5 scale. Tiers: 5 frontier, 4 top open / strong sub, 3 solid mid, 2 small specialised, 1 nano.
 MODEL_TIERS: dict[str, tuple[int, int, int]] = {
     # Anthropic
     "claude-fable-5":               (5, 2, 5),
@@ -185,7 +162,7 @@ MODEL_TIERS: dict[str, tuple[int, int, int]] = {
 }
 
 
-def _heuristic_tiers(label: str, output_cost_per_1m: float, reasoning: bool) -> tuple[int, int, int]:
+def heuristic_tiers(label: str, output_cost_per_1m: float, reasoning: bool) -> tuple[int, int, int]:
     """Fallback tier scoring for models not in MODEL_TIERS. Tries to
     extract a parameter count from the label (8B/70B/235B/etc.) and
     use that as a stronger size signal than cost alone, since open-
@@ -204,7 +181,7 @@ def _heuristic_tiers(label: str, output_cost_per_1m: float, reasoning: bool) -> 
         - inverse of size, with name keywords as ±1 nudges.
       Cost: pure cost bucket.
     """
-    import re as _re
+    import re as p_re
     out = output_cost_per_1m or 0.0
 
     # Cost bucket; same 5-tier cost ladder as before.
@@ -219,13 +196,10 @@ def _heuristic_tiers(label: str, output_cost_per_1m: float, reasoning: bool) -> 
     else:
         cb = 5
 
-    # Try to parse a parameter count. Label often carries something
-    # like "Llama 3.3 70B" or "Qwen3 235B". 235B → 5, 70B → 4, 30B
-    # → 3, 14B → 2, 7B → 1. We only trust the param count when it's
-    # clearly above 1B (so we don't pick up version numbers).
+    # Try to parse a parameter count. Label often carries something like "Llama 3.3 70B" or "Qwen3 235B". 235B → 5, 70B → 4, 30B → 3, 14B → 2, 7B → 1. We only trust the param count when it's clearly above 1B (so we don't pick up version numbers).
     lower = (label or "").lower()
     param_b = 0.0
-    for m in _re.finditer(r"\b(\d{1,4}(?:\.\d+)?)\s*b\b", lower):
+    for m in p_re.finditer(r"\b(\d{1,4}(?:\.\d+)?)\s*b\b", lower):
         try:
             v = float(m.group(1))
             if v >= 1 and v > param_b:
@@ -246,26 +220,20 @@ def _heuristic_tiers(label: str, output_cost_per_1m: float, reasoning: bool) -> 
     else:
         size_tier = 0  # unknown; fall back to cost
 
-    # Intelligence is the max of cost bucket and parsed size tier.
-    # Cost is high-confidence for closed-source frontier; size is
-    # high-confidence for open-source ladders. Whichever is higher
-    # is closer to the truth.
+    # Intelligence is the max of cost bucket and parsed size tier. Cost is high-confidence for closed-source frontier; size is high-confidence for open-source ladders. Whichever is higher is closer to the truth.
     intel = max(cb, size_tier)
     if reasoning and intel < 4:
-        # Reasoning is a strong intelligence signal but only for
-        # genuinely smaller models; frontier closed-source already
-        # caps at 5, so don't double-count there.
+        # Reasoning is a strong intelligence signal but only for genuinely smaller models; frontier closed-source already caps at 5, so don't double-count there.
         intel += 1
 
     # Speed inverse of intel.
     speed = 6 - intel
-    if _re.search(r"\b(mini|lite|flash|haiku|nano|small|fast|turbo|micro|tiny)\b", lower):
+    if p_re.search(r"\b(mini|lite|flash|haiku|nano|small|fast|turbo|micro|tiny)\b", lower):
         speed += 1
-    if _re.search(r"\b(opus|ultra|max|xlarge|titan|huge)\b", lower):
+    if p_re.search(r"\b(opus|ultra|max|xlarge|titan|huge)\b", lower):
         speed -= 1
     if reasoning and intel >= 4:
-        # Frontier reasoning models burn lots of tokens on hidden
-        # thoughts; user-perceived speed drops.
+        # Frontier reasoning models burn lots of tokens on hidden thoughts; user-perceived speed drops.
         speed -= 1
 
     return (
@@ -310,7 +278,7 @@ def compute_tiers(
         if c in MODEL_TIERS:
             return MODEL_TIERS[c]
 
-    return _heuristic_tiers(label, output_cost_per_1m, reasoning)
+    return heuristic_tiers(label, output_cost_per_1m, reasoning)
 
 
 def compute_billing_kind(

@@ -13,8 +13,8 @@ import zipfile
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from .exportable import RemapTable
-from .models import (
+from backend.apps.swarm.exportable import RemapTable
+from backend.apps.swarm.models import (
     FORMAT_VERSION,
     BundlePreview,
     BundleSummary,
@@ -26,30 +26,30 @@ from .models import (
     Requirement,
     RequirementView,
 )
-from .redact import scrub_payload
-from .registry import IMPORT_ORDER, get_exportable
-from .ziputil import MANIFEST_NAME, BundleError, has_member, is_zip, pack, read_manifest, unpack, verify_checksum
+from backend.apps.swarm.redact import scrub_payload
+from backend.apps.swarm.registry import IMPORT_ORDER, get_exportable
+from backend.apps.swarm.ziputil import MANIFEST_NAME, BundleError, has_member, is_zip, pack, read_manifest, unpack, verify_checksum
 
 
-def _now() -> str:
+def p_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _created_with() -> str:
+def p_created_with() -> str:
     return os.environ.get("OPENSWARM_VERSION") or "OpenSwarm"
 
 
-class _Ctx:
+class p_Ctx:
     def __init__(self, local_to_bundle: dict[tuple, str]):
-        self._m = local_to_bundle
+        self.p_m = local_to_bundle
 
     def bundle_id_for(self, etype: EntityType, local_id: str) -> str | None:
-        return self._m.get((etype, local_id))
+        return self.p_m.get((etype, local_id))
 
 
 # ---------- export ----------
 
-def _assemble(root_type: EntityType, root_id: str):
+def p_assemble(root_type: EntityType, root_id: str):
     root_cls = get_exportable(root_type)
     if root_cls is None:
         raise BundleError(f"can't share a {root_type.value} yet")
@@ -79,7 +79,7 @@ def _assemble(root_type: EntityType, root_id: str):
                 queue.append((dep.type, dep.local_id, dinst))
 
     local_to_bundle = {key: uuid4().hex for key in order}
-    ctx = _Ctx(local_to_bundle)
+    ctx = p_Ctx(local_to_bundle)
     payloads: dict[str, dict] = {}
     files: dict[str, bytes] = {}
     entities: list[EntityRef] = []
@@ -88,7 +88,7 @@ def _assemble(root_type: EntityType, root_id: str):
     counts: dict[str, int] = {}
 
     for key in order:
-        etype, _lid = key
+        etype, p_lid = key
         inst = nodes[key]
         bid = local_to_bundle[key]
         payloads[bid] = scrub_payload(inst.serialize(ctx))
@@ -102,11 +102,11 @@ def _assemble(root_type: EntityType, root_id: str):
                 edges.append(DependencyEdge(from_=bid, to=local_to_bundle[dkey], relation=dep.relation))
         requirements.extend(inst.requirements())
 
-    requirements = _dedupe_requirements(requirements)
+    requirements = p_dedupe_requirements(requirements)
     root_bid = local_to_bundle[(root_type, root_id)]
     manifest = Manifest(
-        created_with=_created_with(),
-        created_at=_now(),
+        created_with=p_created_with(),
+        created_at=p_now(),
         bundle_id=uuid4().hex,
         root=EntityRef(type=root_type, bundle_id=root_bid, name=root.name, path=f"entities/{root_bid}"),
         entities=entities,
@@ -123,16 +123,16 @@ def _assemble(root_type: EntityType, root_id: str):
 
 
 def build_manifest(root_type: EntityType, root_id: str) -> Manifest:
-    return _assemble(root_type, root_id)[0]
+    return p_assemble(root_type, root_id)[0]
 
 
 def build_bundle(root_type: EntityType, root_id: str) -> tuple[bytes, str]:
-    manifest, payloads, files = _assemble(root_type, root_id)
+    manifest, payloads, files = p_assemble(root_type, root_id)
     raw = pack(manifest.model_dump(by_alias=True, mode="json"), payloads, files)
     return raw, manifest.root.name
 
 
-def _dedupe_requirements(reqs: list[Requirement]) -> list[Requirement]:
+def p_dedupe_requirements(reqs: list[Requirement]) -> list[Requirement]:
     out: dict[tuple, Requirement] = {}
     for r in reqs:
         k = (r.kind, r.key)
@@ -210,24 +210,24 @@ def stage_upload(raw: bytes, filename: str) -> tuple[str, Manifest, list[str]]:
                 shutil.rmtree(sandbox, ignore_errors=True)
                 raise BundleError("this .swarm was made by a newer OpenSwarm; please update")
             return sandbox, manifest, warnings
-        return _stage_skill_from_zip(raw, filename, warnings)
-    return _stage_skill_from_markdown(raw, filename, warnings)
+        return stage_skill_from_zip(raw, filename, warnings)
+    return p_stage_skill_from_markdown(raw, filename, warnings)
 
 
-def _name_from_filename(filename: str) -> str:
+def p_name_from_filename(filename: str) -> str:
     base = os.path.splitext(os.path.basename(filename or "skill"))[0]
     return base.replace("-", " ").replace("_", " ").strip().title() or "Imported Skill"
 
 
-def _stage_skill_from_markdown(raw: bytes, filename: str, warnings: list[str]):
+def p_stage_skill_from_markdown(raw: bytes, filename: str, warnings: list[str]):
     try:
         content = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise BundleError("unrecognized file; expected a .swarm or a .md skill")
-    return _synth_single_skill(content, _name_from_filename(filename), warnings)
+    return p_synth_single_skill(content, p_name_from_filename(filename), warnings)
 
 
-def _stage_skill_from_zip(raw: bytes, filename: str, warnings: list[str]):
+def stage_skill_from_zip(raw: bytes, filename: str, warnings: list[str]):
     with zipfile.ZipFile(io.BytesIO(raw)) as zf:
         mds = [n for n in zf.namelist() if n.lower().endswith(".md") and not n.endswith("/")]
         target = next((n for n in mds if os.path.basename(n).lower() == "skill.md"), None)
@@ -236,10 +236,7 @@ def _stage_skill_from_zip(raw: bytes, filename: str, warnings: list[str]):
         if target is None:
             raise BundleError("zip has no SKILL.md")
         content = zf.read(target).decode("utf-8", errors="replace")
-        # Carry supporting files (scripts, templates) through as a folder skill,
-        # keyed relative to the SKILL.md's directory so a nested layout flattens
-        # onto the skill folder. Cap count + per-file size so a hostile zip can't
-        # balloon the install.
+        # Carry supporting files (scripts, templates) through as a folder skill, keyed relative to the SKILL.md's directory so a nested layout flattens onto the skill folder. Cap count + per-file size so a hostile zip can't balloon the install.
         base_dir = target.rsplit("/", 1)[0] + "/" if "/" in target else ""
         extra_files: dict[str, bytes] = {}
         for n in zf.namelist():
@@ -253,10 +250,10 @@ def _stage_skill_from_zip(raw: bytes, filename: str, warnings: list[str]):
                 warnings.append("some oversized/extra supporting files were skipped")
                 continue
             extra_files[rel] = zf.read(n)
-    return _synth_single_skill(content, _name_from_filename(filename), warnings, extra_files)
+    return p_synth_single_skill(content, p_name_from_filename(filename), warnings, extra_files)
 
 
-def _synth_single_skill(content: str, name: str, warnings: list[str], extra_files: dict[str, bytes] | None = None):
+def p_synth_single_skill(content: str, name: str, warnings: list[str], extra_files: dict[str, bytes] | None = None):
     bid = uuid4().hex
     sandbox = tempfile.mkdtemp(prefix="swarm-import-")
     edir = os.path.join(sandbox, "entities", bid)
@@ -265,11 +262,9 @@ def _synth_single_skill(content: str, name: str, warnings: list[str], extra_file
     payload = {"slug": slug, "name": name, "description": "", "command": slug, "content": content, "builtin": False}
     with open(os.path.join(edir, "payload.json"), "w", encoding="utf-8") as f:
         json.dump(payload, f)
-    # Supporting files ride the same entities/<bid>/files/<rel> channel the
-    # commit reader (_read_files) feeds into import_, so a zip-of-SKILL.md
-    # round-trips as a folder skill instead of getting flattened.
+    # Supporting files ride the same entities/<bid>/files/<rel> channel the commit reader (p_read_files) feeds into import_, so a zip-of-SKILL.md round-trips as a folder skill instead of getting flattened.
     for rel, data in (extra_files or {}).items():
-        dest = _safe_join(edir, os.path.join("files", rel))
+        dest = p_safe_join(edir, os.path.join("files", rel))
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "wb") as f:
             f.write(data)
@@ -285,7 +280,7 @@ def _synth_single_skill(content: str, name: str, warnings: list[str], extra_file
 
 # ---------- import: commit ----------
 
-def _safe_join(sandbox: str, rel: str) -> str:
+def p_safe_join(sandbox: str, rel: str) -> str:
     dest = os.path.realpath(os.path.join(sandbox, rel))
     root = os.path.realpath(sandbox)
     if dest != root and not dest.startswith(root + os.sep):
@@ -293,18 +288,18 @@ def _safe_join(sandbox: str, rel: str) -> str:
     return dest
 
 
-def _read_payload(sandbox: str, ref: EntityRef) -> dict:
-    path = _safe_join(sandbox, os.path.join(ref.path, "payload.json"))
+def p_read_payload(sandbox: str, ref: EntityRef) -> dict:
+    path = p_safe_join(sandbox, os.path.join(ref.path, "payload.json"))
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
-def _read_files(sandbox: str, ref: EntityRef) -> dict[str, bytes]:
-    base = _safe_join(sandbox, os.path.join(ref.path, "files"))
+def p_read_files(sandbox: str, ref: EntityRef) -> dict[str, bytes]:
+    base = p_safe_join(sandbox, os.path.join(ref.path, "files"))
     out: dict[str, bytes] = {}
     if not os.path.isdir(base):
         return out
-    for root, _dirs, fnames in os.walk(base):
+    for root, p_dirs, fnames in os.walk(base):
         for fn in fnames:
             full = os.path.join(root, fn)
             with open(full, "rb") as f:
@@ -315,8 +310,8 @@ def _read_files(sandbox: str, ref: EntityRef) -> dict[str, bytes]:
 def review_bundle(sandbox: str, manifest: Manifest):
     """Safety read of any app code in the staged bundle. Returns None when the
     bundle contains no apps (nothing to review)."""
-    from .models import ReviewSummary
-    from .review import scan_app_files
+    from backend.apps.swarm.models import ReviewSummary
+    from backend.apps.swarm.scan_app_files import scan_app_files
 
     findings: list[str] = []
     scanned: list[str] = []
@@ -326,7 +321,7 @@ def review_bundle(sandbox: str, manifest: Manifest):
         if e.type != EntityType.app:
             continue
         any_app = True
-        r = scan_app_files(_read_files(sandbox, e))
+        r = scan_app_files(p_read_files(sandbox, e))
         findings.extend(r.findings)
         scanned.extend(r.scanned_files)
         if r.verdict != "clean":
@@ -341,13 +336,13 @@ def detect_conflicts(sandbox: str, manifest: Manifest) -> list[IncludeItem]:
         check = getattr(cls, "conflict", None) if cls else None
         if not check:
             continue
-        msg = check(_read_payload(sandbox, e))
+        msg = check(p_read_payload(sandbox, e))
         if msg:
             out.append(IncludeItem(type=e.type, name=e.name, detail=msg))
     return out
 
 
-def _topo_order(manifest: Manifest) -> list[EntityRef]:
+def p_topo_order(manifest: Manifest) -> list[EntityRef]:
     entities = {e.bundle_id: e for e in manifest.entities}
     deps: dict[str, set[str]] = {bid: set() for bid in entities}
     for edge in manifest.edges:
@@ -372,17 +367,16 @@ def commit(sandbox: str, manifest: Manifest, accept_requirements: list[str]):
     created: dict[str, list[str]] = {}
     trail: list[tuple] = []  # (impl_cls, new_local_id) for rollback, newest last
     try:
-        for e in _topo_order(manifest):
+        for e in p_topo_order(manifest):
             cls = get_exportable(e.type)
             if cls is None:
                 raise BundleError(f"can't import a {e.type.value} yet")
-            new_id = cls.import_(_read_payload(sandbox, e), _read_files(sandbox, e), remap)
+            new_id = cls.import_(p_read_payload(sandbox, e), p_read_files(sandbox, e), remap)
             remap.assign(e.bundle_id, new_id)
             created.setdefault(e.type.value, []).append(new_id)
             trail.append((cls, new_id))
     except Exception as ex:
-        # All-or-nothing: undo whatever already landed so a failed import never
-        # leaves half a dashboard behind.
+        # All-or-nothing: undo whatever already landed so a failed import never leaves half a dashboard behind.
         for cls, nid in reversed(trail):
             rb = getattr(cls, "rollback", None)
             if rb:

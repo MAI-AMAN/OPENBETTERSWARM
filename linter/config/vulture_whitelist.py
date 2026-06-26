@@ -58,3 +58,9 @@ get_provider_credentials
 # model_dump() serialization to the frontend (drives preview sort order), so vulture
 # can't see the read.
 preview_updated_at
+
+# prompt/prompt_context.py: called unconditionally from build_prompt_content
+# (prompt/attachments.py), the per-turn prompt builder; vulture misses the
+# cross-module call. resolve_attached_skills next to it isn't flagged only
+# because tests also call it directly.
+resolve_forced_tools

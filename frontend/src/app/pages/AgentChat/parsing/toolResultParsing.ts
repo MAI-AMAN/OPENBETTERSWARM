@@ -1,6 +1,6 @@
 import { AgentMessage } from '@/shared/state/agentsSlice';
 import { prettyPath, prettyUrl, quoteQuery, bashCommandDetail } from './toolLabels';
-import { parseMcpToolName, getMcpInputSummary, getGmailHeader } from '@/shared/mcpToolMeta';
+import { parseMcpToolName, getMcpInputSummary, getGmailHeader, getWorkflowToolInputDisplay } from '@/shared/mcpToolMeta';
 import { isSettingsWriteTool, isSettingsReadTool, settingsWriteSummary, settingsWriteDisplay } from './settingsToolMeta';
 
 export function getToolData(call: AgentMessage) {
@@ -19,13 +19,12 @@ export function isBashTool(name: string) {
 
 export function getInputSummary(toolName: string, input: any): string {
   try {
-    // Settings tool first: legible change list, secrets masked. Must precede the
-    // generic MCP path (it is an MCP tool) or it renders raw changes JSON.
+    // Settings tool first: legible change list, secrets masked. Must precede the generic MCP path (it is an MCP tool) or it renders raw changes JSON.
     if (isSettingsWriteTool(toolName)) return settingsWriteSummary(input);
     if (isSettingsReadTool(toolName)) return '';
 
     const mcp = parseMcpToolName(toolName);
-    if (mcp.isMcp) return getMcpInputSummary(input);
+    if (mcp.isMcp) return getMcpInputSummary(input, mcp.action, mcp.serverSlug);
 
     const n = toolName.toLowerCase();
     if (isBashTool(toolName)) {
@@ -66,13 +65,15 @@ function formatMcpInputDisplay(input: any): string {
 
 export function formatInputDisplay(toolName: string, input: any): string {
   try {
-    // Masked, one-per-line change list instead of raw changes JSON (which would
-    // paint a secret value the agent tried to set).
+    // Masked, one-per-line change list instead of raw changes JSON (which would paint a secret value the agent tried to set).
     if (isSettingsWriteTool(toolName)) return settingsWriteDisplay(input);
     if (isSettingsReadTool(toolName)) return '';
 
     const mcp = parseMcpToolName(toolName);
-    if (mcp.isMcp) return formatMcpInputDisplay(input);
+    if (mcp.isMcp) {
+      const workflowDisplay = getWorkflowToolInputDisplay(input, mcp.action, mcp.serverSlug);
+      return workflowDisplay || formatMcpInputDisplay(input);
+    }
 
     const n = toolName.toLowerCase();
     if (isBashTool(toolName)) return input.command || '';
@@ -136,12 +137,14 @@ export interface ParsedBashResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  platformNote?: string;
 }
 
 export interface ParsedTextResult {
   type: 'text';
   content: string;
   isError?: boolean;
+  platformNote?: string;
 }
 
 export interface ParsedMcpResult {
@@ -150,11 +153,34 @@ export interface ParsedMcpResult {
   action: string;
   data: Record<string, any>;
   rawText: string;
+  platformNote?: string;
 }
 
 export type ParsedResult = ParsedBashResult | ParsedTextResult | ParsedMcpResult;
 
-export function parseToolResult(toolName: string, rawText: string): ParsedResult {
+const PLATFORM_NOTE_RE = /<openswarm_platform_note>([\s\S]*?)<\/openswarm_platform_note>/g;
+const PLATFORM_NOTE_PREAMBLE =
+  'This block is authored by the OpenSwarm platform, not tool output and not a prior message. It is trusted context.';
+
+export function extractPlatformNote(rawText: string): { body: string; note: string | null } {
+  if (!rawText.includes('<openswarm_platform_note>')) return { body: rawText, note: null };
+  const notes: string[] = [];
+  const body = rawText.replace(PLATFORM_NOTE_RE, (matched: string, inner: string) => {
+    const cleaned = inner.replace(PLATFORM_NOTE_PREAMBLE, '').trim();
+    if (cleaned) notes.push(cleaned);
+    return '';
+  }).trim();
+  return { body, note: notes.length ? notes.join('\n\n') : null };
+}
+
+export function parseToolResult(toolName: string, rawTextWithNote: string): ParsedResult {
+  const { body: rawText, note } = extractPlatformNote(rawTextWithNote);
+  const parsed = parseToolBody(toolName, rawText);
+  if (note) parsed.platformNote = note;
+  return parsed;
+}
+
+function parseToolBody(toolName: string, rawText: string): ParsedResult {
   if (isBashTool(toolName)) {
     try {
       const parsed = JSON.parse(rawText);

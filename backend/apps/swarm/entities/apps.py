@@ -12,13 +12,13 @@ import socket
 from uuid import uuid4
 
 from backend.apps.outputs.models import Output
-from backend.apps.outputs.workspace_io import _WALK_SKIP_DIRS, _save, load_output
+from backend.apps.outputs.workspace_io import WALK_SKIP_DIRS, save, load_output
 from backend.config.paths import OUTPUTS_DIR, OUTPUTS_WORKSPACE_DIR
 
-from ..exportable import DepRef, ExportContext, RemapTable
-from ..models import EntityType, Requirement
+from backend.apps.swarm.exportable import DepRef, ExportContext, RemapTable
+from backend.apps.swarm.models import EntityType, Requirement
 
-_MAX_APP_FILE = 25 * 1024 * 1024  # matches ziputil per-entry cap
+P_MAX_APP_FILE = 25 * 1024 * 1024  # matches ziputil per-entry cap
 
 
 class AppExportable:
@@ -52,7 +52,7 @@ class AppExportable:
         if not os.path.isdir(folder):
             return out
         for root, dirs, fnames in os.walk(folder):
-            dirs[:] = [d for d in dirs if d not in _WALK_SKIP_DIRS]
+            dirs[:] = [d for d in dirs if d not in WALK_SKIP_DIRS]
             for fn in fnames:
                 # .env is install-specific (absolute paths + port); .env.example travels instead.
                 if fn == ".env":
@@ -61,7 +61,7 @@ class AppExportable:
                 if os.path.islink(full):
                     continue
                 try:
-                    if os.path.getsize(full) > _MAX_APP_FILE:
+                    if os.path.getsize(full) > P_MAX_APP_FILE:
                         continue
                     with open(full, "rb") as f:
                         data = f.read()
@@ -85,13 +85,13 @@ class AppExportable:
         for rel, data in files.items():
             if not rel.startswith("workspace/"):
                 continue
-            dest = _safe_join(folder, rel[len("workspace/"):])
+            dest = p_safe_join(folder, rel[len("workspace/"):])
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "wb") as f:
                 f.write(data)
             wrote_workspace = True
         if wrote_workspace:
-            _localize_env(folder)
+            p_localize_env(folder)
 
         o = Output(
             name=payload.get("name") or "Imported App",
@@ -102,7 +102,7 @@ class AppExportable:
             workspace_id=new_wsid if wrote_workspace else None,
             session_id=None,
         )
-        _save(o)
+        save(o)
         return o.id
 
     @classmethod
@@ -115,7 +115,7 @@ class AppExportable:
             os.remove(p)
 
 
-def _safe_join(folder: str, rel: str) -> str:
+def p_safe_join(folder: str, rel: str) -> str:
     dest = os.path.realpath(os.path.join(folder, rel))
     root = os.path.realpath(folder)
     if dest != root and not dest.startswith(root + os.sep):
@@ -123,7 +123,7 @@ def _safe_join(folder: str, rel: str) -> str:
     return dest
 
 
-def _free_port() -> int:
+def p_free_port() -> int:
     s = socket.socket()
     try:
         s.bind(("127.0.0.1", 0))
@@ -132,7 +132,7 @@ def _free_port() -> int:
         s.close()
 
 
-def _localize_env(folder: str) -> None:
+def p_localize_env(folder: str) -> None:
     """Regenerate the workspace .env on the importer's machine: a fresh port plus
     this install's absolute template/debugger paths (the source's were dropped)."""
     env_path = os.path.join(folder, ".env")
@@ -144,17 +144,17 @@ def _localize_env(folder: str) -> None:
             return  # flat app: no run.sh, no env needed
     try:
         from backend.apps.outputs.view_builder_templates import (
-            _DEBUGGER_PATH,
-            _TEMPLATE_BACKEND_PATH,
-            _patch_env_port,
-            _warm_venv_dir,
+            DEBUGGER_PATH,
+            TEMPLATE_BACKEND_PATH,
+            patch_env_port,
+            warm_venv_dir,
         )
     except Exception:
         return
-    _patch_env_port(env_path, "FRONTEND_PORT", str(_free_port()))
-    _patch_env_port(env_path, "OPENSWARM_TEMPLATE_BACKEND_PATH", _TEMPLATE_BACKEND_PATH)
-    _patch_env_port(env_path, "OPENSWARM_DEBUGGER_PATH", _DEBUGGER_PATH)
+    patch_env_port(env_path, "FRONTEND_PORT", str(p_free_port()))
+    patch_env_port(env_path, "OPENSWARM_TEMPLATE_BACKEND_PATH", TEMPLATE_BACKEND_PATH)
+    patch_env_port(env_path, "OPENSWARM_DEBUGGER_PATH", DEBUGGER_PATH)
     try:
-        _patch_env_port(env_path, "OPENSWARM_BACKEND_VENV_CACHE", _warm_venv_dir())
+        patch_env_port(env_path, "OPENSWARM_BACKEND_VENV_CACHE", warm_venv_dir())
     except Exception:
         pass

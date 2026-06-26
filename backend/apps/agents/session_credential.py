@@ -24,20 +24,18 @@ from dataclasses import dataclass
 from typing import Any, Literal, TYPE_CHECKING
 
 from backend.apps.agents.providers.registry import (
-    _CUSTOM_VALUE_PREFIX,
-    _custom_provider_slug_for_lookup,
-    _find_builtin_model,
-    _find_custom_provider_for_value,
+    CUSTOM_VALUE_PREFIX,
+    custom_provider_slug_for_lookup,
+    find_builtin_model,
+    find_custom_provider_for_value,
     get_api_type,
 )
 
 if TYPE_CHECKING:
     from backend.apps.settings.models import AppSettings
 
-# AppSettings fields holding a user-writable API key, keyed by provider api-type.
-# Blanking whichever of these powers the current run is the one suicide the guard
-# stops. Anything not here (subscription tokens, bearers) is not settings-writable.
-_API_KEY_FIELD_BY_API: dict[str, str] = {
+# AppSettings fields holding a user-writable API key, keyed by provider api-type. Blanking whichever of these powers the current run is the one suicide the guard stops. Anything not here (subscription tokens, bearers) is not settings-writable.
+P_API_KEY_FIELD_BY_API: dict[str, str] = {
     "anthropic": "anthropic_api_key",
     "openai": "openai_api_key",
     "codex": "openai_api_key",
@@ -45,9 +43,8 @@ _API_KEY_FIELD_BY_API: dict[str, str] = {
     "openrouter": "openrouter_api_key",
 }
 
-# Every settings field that can hold an API key (the full guarded set). Custom
-# providers keep their keys inside the custom_providers list, guarded separately.
-ALL_API_KEY_FIELDS: frozenset[str] = frozenset(_API_KEY_FIELD_BY_API.values())
+# Every settings field that can hold an API key (the full guarded set). Custom providers keep their keys inside the custom_providers list, guarded separately.
+ALL_API_KEY_FIELDS: frozenset[str] = frozenset(P_API_KEY_FIELD_BY_API.values())
 
 CredentialKind = Literal["api_key", "subscription", "unknown"]
 
@@ -72,13 +69,13 @@ class PoweringCredential:
     label: str = ""
 
 
-def _custom_slug_for_model(model_value: str, settings: AppSettings) -> str | None:
-    cp = _find_custom_provider_for_value(settings, model_value)
+def p_custom_slug_for_model(model_value: str, settings: AppSettings) -> str | None:
+    cp = find_custom_provider_for_value(settings, model_value)
     if cp is not None:
-        return _custom_provider_slug_for_lookup(getattr(cp, "name", ""))
+        return custom_provider_slug_for_lookup(getattr(cp, "name", ""))
     # Fall back to the slug encoded in the picker value itself.
-    if isinstance(model_value, str) and model_value.startswith(_CUSTOM_VALUE_PREFIX):
-        slug = model_value[len(_CUSTOM_VALUE_PREFIX):].partition("/")[0]
+    if isinstance(model_value, str) and model_value.startswith(CUSTOM_VALUE_PREFIX):
+        slug = model_value[len(CUSTOM_VALUE_PREFIX):].partition("/")[0]
         return slug or None
     return None
 
@@ -89,16 +86,14 @@ def resolve_powering_credential(model_value: str, settings: AppSettings) -> Powe
     `model_value` is the session's short model name (e.g. "opus-4-8", "sonnet-api",
     "custom/lmstudio/llama"), exactly what AgentSession.model holds.
     """
-    entry = _find_builtin_model(model_value)
+    entry = find_builtin_model(model_value)
     api = (entry or {}).get("api") or get_api_type(model_value)
     route = (entry or {}).get("route")
     mode = getattr(settings, "connection_mode", "own_key")
 
-    # Custom provider (LM Studio, Ollama, Together, ...). Local servers use a
-    # placeholder key, so suicide is removing the provider ENTRY, not blanking
-    # its key; the guard keys off the slug.
+    # Custom provider (LM Studio, Ollama, Together, ...). Local servers use a placeholder key, so suicide is removing the provider ENTRY, not blanking its key; the guard keys off the slug.
     if api == "custom":
-        slug = _custom_slug_for_model(model_value, settings)
+        slug = p_custom_slug_for_model(model_value, settings)
         return PoweringCredential(
             kind="api_key", provider="custom",
             protected_custom_slug=slug,
@@ -107,21 +102,19 @@ def resolve_powering_credential(model_value: str, settings: AppSettings) -> Powe
 
     # Explicit API-key route: the matching *_api_key field is the live one.
     if route == "api":
-        field = _API_KEY_FIELD_BY_API.get(api)
+        field = P_API_KEY_FIELD_BY_API.get(api)
         if field:
             return PoweringCredential(kind="api_key", provider=api, protected_field=field,
                                       label=f"{field} (powers this run)")
         return PoweringCredential(kind="unknown", provider=api,
                                   label=f"{api} api route (unclassified)")
 
-    # Subscription-only routes (cx/ Codex, gc/ Gemini CLI) and pinned cc/ Claude:
-    # these lanes live in 9router, never in settings.
+    # Subscription-only routes (cx/ Codex, gc/ Gemini CLI) and pinned cc/ Claude: these lanes live in 9router, never in settings.
     if route == "cc" or (entry or {}).get("subscription_only"):
         return PoweringCredential(kind="subscription", provider=api,
                                   label=f"{api} subscription")
 
-    # OpenRouter (its own `openrouter` route, plus xai/meta/deepseek/etc routed
-    # through it): always an API key, never a subscription.
+    # OpenRouter (its own `openrouter` route, plus xai/meta/deepseek/etc routed through it): always an API key, never a subscription.
     if api == "openrouter":
         return PoweringCredential(kind="api_key", provider="openrouter",
                                   protected_field="openrouter_api_key",
@@ -140,8 +133,7 @@ def resolve_powering_credential(model_value: str, settings: AppSettings) -> Powe
         return PoweringCredential(kind="subscription", provider="anthropic",
                                   label="Claude subscription")
 
-    # Default Gemini rows (api gemini-cli, route None): the AG/gc OAuth lane is a
-    # subscription. A bare AI Studio key only powers the explicit -api rows above.
+    # Default Gemini rows (api gemini-cli, route None): the AG/gc OAuth lane is a subscription. A bare AI Studio key only powers the explicit -api rows above.
     if api in ("gemini", "gemini-cli"):
         return PoweringCredential(kind="subscription", provider="gemini",
                                   label="Gemini subscription")
@@ -151,7 +143,7 @@ def resolve_powering_credential(model_value: str, settings: AppSettings) -> Powe
                               label=f"{api or 'unknown'} provider (unclassified)")
 
 
-def _is_blank(value: Any) -> bool:
+def p_is_blank(value: Any) -> bool:
     """A credential write that removes the credential: None, "", or whitespace."""
     if value is None:
         return True
@@ -160,13 +152,13 @@ def _is_blank(value: Any) -> bool:
     return False
 
 
-def _powering_custom_slug_present(new_providers: Any, slug: str) -> bool:
+def p_powering_custom_slug_present(new_providers: Any, slug: str) -> bool:
     """True if the powering custom provider's entry still exists after the write."""
     if not isinstance(new_providers, list):
         return False
     for cp in new_providers:
         name = cp.get("name") if isinstance(cp, dict) else getattr(cp, "name", None)
-        if name and _custom_provider_slug_for_lookup(name) == slug:
+        if name and custom_provider_slug_for_lookup(name) == slug:
             return True
     return False
 
@@ -179,17 +171,15 @@ def write_would_suicide(field: str, new_value: Any, powering: PoweringCredential
     credential counts; SETTING a fresh key is a (re)connect, never suicide.
     """
     if field == "custom_providers":
-        # Removing the entry that powers a custom-provider run is suicide; a
-        # local provider's placeholder key being blanked is not. When the run is
-        # unknown, any custom run could be the live one, so refuse a vanish.
+        # Removing the entry that powers a custom-provider run is suicide; a local provider's placeholder key being blanked is not. When the run is unknown, any custom run could be the live one, so refuse a vanish.
         if powering.kind == "api_key" and powering.provider == "custom" and powering.protected_custom_slug:
-            return not _powering_custom_slug_present(new_value, powering.protected_custom_slug)
+            return not p_powering_custom_slug_present(new_value, powering.protected_custom_slug)
         if powering.kind == "unknown":
-            return not _powering_custom_slug_present(new_value, powering.protected_custom_slug or "")
+            return not p_powering_custom_slug_present(new_value, powering.protected_custom_slug or "")
         return False
 
     if field in ALL_API_KEY_FIELDS:
-        if not _is_blank(new_value):
+        if not p_is_blank(new_value):
             return False
         if powering.kind == "unknown":
             return True

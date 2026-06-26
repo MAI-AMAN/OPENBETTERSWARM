@@ -13,6 +13,8 @@ class AgentConfig(BaseModel):
     max_turns: Optional[int] = None
     target_directory: Optional[str] = None
     dashboard_id: Optional[str] = None
+    # App cards the user picked to edit. When exactly one resolves, launch binds the chat's cwd to that app instead of seeding a new "Untitled App".
+    selected_app_output_ids: Optional[list[str]] = None
 
 class ApprovalRequest(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
@@ -20,14 +22,7 @@ class ApprovalRequest(BaseModel):
     tool_name: str
     tool_input: dict[str, Any]
     created_at: datetime = Field(default_factory=datetime.now)
-    # Set when this approval was triggered by the sensitive-path override
-    # rather than the user's normal "ask" policy. Three correlated fields:
-    #   - sensitive_pattern: the fnmatch pattern (canonical id; what we
-    #     persist into the trusted allowlist if the user opts in).
-    #   - sensitive_label: short human label (e.g. "SSH folder (~/.ssh)").
-    #   - sensitive_why: plain-English risk explanation; lets the modal
-    #     justify itself to a non-developer.
-    # All three None for ordinary "ask" approvals.
+    # Set when this approval was triggered by the sensitive-path override rather than the user's normal "ask" policy. Three correlated fields: - sensitive_pattern: the fnmatch pattern (canonical id; what we persist into the trusted allowlist if the user opts in). - sensitive_label: short human label (e.g. "SSH folder (~/.ssh)"). - sensitive_why: plain-English risk explanation; lets the modal justify itself to a non-developer. All three None for ordinary "ask" approvals.
     sensitive_pattern: Optional[str] = None
     sensitive_label: Optional[str] = None
     sensitive_why: Optional[str] = None
@@ -37,14 +32,9 @@ class ApprovalResponse(BaseModel):
     behavior: Literal["allow", "deny"]
     message: Optional[str] = None
     updated_input: Optional[dict[str, Any]] = None
-    # When the user checked "Always allow files like this" on a sensitive-
-    # path approval, the backend persists the matched fnmatch pattern
-    # (from ApprovalRequest.sensitive_pattern) to disk so future writes
-    # against the same pattern skip the modal.
+    # When the user checked "Always allow files like this" on a sensitive- path approval, the backend persists the matched fnmatch pattern (from ApprovalRequest.sensitive_pattern) to disk so future writes against the same pattern skip the modal.
     trust_pattern: bool = False
-    # "Always approve" button: persist this tool's policy to always_allow so
-    # the same tool stops prompting (the catastrophic/sensitive guards still
-    # fire, so this can't blanket-approve an rm -rf or a sensitive-path write).
+    # "Always approve" button: persist this tool's policy to always_allow so the same tool stops prompting (the catastrophic/sensitive guards still fire, so this can't blanket-approve an rm -rf or a sensitive-path write).
     set_always_allow: bool = False
 
 class Message(BaseModel):
@@ -120,8 +110,8 @@ class AgentSession(BaseModel):
     dashboard_id: Optional[str] = None
     browser_id: Optional[str] = None
     parent_session_id: Optional[str] = None
-    # Browser memory signals, drive the subtle "remembered/learned" card chip so
-    # the user feels the agent getting smarter without lifting a finger.
+    workflow_test_state: Optional[Literal["running", "complete", "error"]] = None
+    # Browser memory signals, drive the subtle "remembered/learned" card chip so the user feels the agent getting smarter without lifting a finger.
     memory_recalled: bool = False
     memory_learned: bool = False
     needs_fork: bool = False
@@ -139,7 +129,7 @@ class AgentSession(BaseModel):
     compacted_through_msg_id: Optional[str] = None
     # Hard pre-send guard at 0.90; past compaction we LRU-trim active_mcps, then surface the overflow card.
     context_soft_cap_pct: float = 0.90
-    # Conservative default. Always overwritten at session creation, restore, and model-switch via _apply_context_window in agent_manager so the real model cap is used instead. Don't bump this without re-checking the trim/guard logic.
+    # Conservative default. Always overwritten at session creation, restore, and model-switch via apply_context_window in agent_manager so the real model cap is used instead. Don't bump this without re-checking the trim/guard logic.
     context_window: int = 200_000
     # Provider-agnostic thinking level (off/low/medium/high/auto), translated per-API in agent_manager; only affects reasoning-flagged models.
     thinking_level: Literal["off", "low", "medium", "high", "auto"] = "auto"

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAppSelector } from '@/shared/hooks';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { useElementSelection } from '@/app/components/editor/ElementSelectionContext';
 import { useCanvasControls } from '../interaction/useCanvasControls';
@@ -22,27 +23,35 @@ import { useAgentSpawn } from '../lifecycle/useAgentSpawn';
 import { useDashboardCardActions } from '../lifecycle/useDashboardCardActions';
 import { useDashboardInteractions } from '../interaction/useDashboardInteractions';
 
-// Composition root for the dashboard. Wires every dashboard hook together
-// and returns exactly the prop bag DashboardCanvas renders. Kept out of
-// Dashboard.tsx so the component file stays a thin shell.
+// Composition root for the dashboard. Wires every dashboard hook together and returns exactly the prop bag DashboardCanvas renders. Kept out of Dashboard.tsx so the component file stays a thin shell.
 export function useDashboardController(dashboardId: string, isActive: boolean) {
   const c = useClaudeTokens();
   const elementSelectionCtx = useElementSelection();
   const isElementSelectMode = elementSelectionCtx?.selectMode ?? false;
   const {
     dashboardName, sessions, expandedSessionIds, cards, viewCards, browserCards,
+    workflowCards, workflowItems, workflowOpenCards, workflowsHub,
+    pendingFocusWorkflowId, pendingFocusWorkflowsHub,
     notes, pendingFocusNoteId, layoutInitialized, persistedExpandedSessionIds,
     zoomSensitivity, newAgentShortcut, browserHomepage, expandNewChats,
     autoRevealSubAgents, outputs, outputsLoaded, glowingAgentCards, glowingBrowserCards,
   } = useDashboardSelectors(dashboardId);
-  // sessions is the top-level dict; useMemo on its identity so sessionList
-  // is stable when sessions hasn't actually changed (RTK only swaps the dict
-  // ref when one of its values changes, so this is the right granularity).
+  // sessions is the top-level dict; useMemo on its identity so sessionList is stable when sessions hasn't actually changed (RTK only swaps the dict ref when one of its values changes, so this is the right granularity).
   const sessionList = useMemo(() => Object.values(sessions), [sessions]);
 
+  // Run Monitor card geometry + its tether label ("Watching" live, "Viewing" done). Only "active" while its workflow still exists; otherwise the card is gone and the tether must not dangle (e.g. the workflow was trashed while watching).
+  const workflowsMonitorIdRaw = useAppSelector((s) => s.dashboardLayout.workflowsMonitorId);
+  const monitorActive = !!workflowsMonitorIdRaw && !!workflowItems[workflowsMonitorIdRaw];
+  const workflowsMonitorId = monitorActive ? workflowsMonitorIdRaw : null;
+  const workflowsMonitorCard = useAppSelector((s) =>
+    (monitorActive ? s.dashboardLayout.workflowsMonitorCard : null));
+  const monitorIsLive = useAppSelector((s) =>
+    !!workflowsMonitorId && s.workflows.active.some((a) => a.workflow_id === workflowsMonitorId));
+  const workflowsMonitorLabel = monitorIsLive ? 'Watching' : 'Viewing';
+
   const contentBounds = useMemo(
-    () => computeContentBounds(cards, viewCards, browserCards),
-    [cards, viewCards, browserCards],
+    () => computeContentBounds(cards, viewCards, browserCards, workflowCards, workflowsHub),
+    [cards, viewCards, browserCards, workflowCards, workflowsHub],
   );
 
   const canvas = useCanvasControls(zoomSensitivity, contentBounds, isActive);
@@ -52,6 +61,8 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     viewCards,
     browserCards,
     notes,
+    workflowCards,
+    workflowsHub,
   );
   const {
     toolbarRef, toolbarOpen, setToolbarOpen, searchPaletteOpen, setSearchPaletteOpen,
@@ -71,7 +82,7 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
 
   const canvasStateRef = useRef({ panX: canvas.panX, panY: canvas.panY, zoom: canvas.zoom });
   canvasStateRef.current = { panX: canvas.panX, panY: canvas.panY, zoom: canvas.zoom };
-  // Stable getter , AgentCards read pan/zoom on demand during drag math.
+  // Stable getter, AgentCards read pan/zoom on demand during drag math.
   const getCanvasState = useCallback(() => canvasStateRef.current, []);
 
   const {
@@ -130,8 +141,7 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     restoredExpandedRef,
   });
 
-  // First-run: the onboarding cursor clicks New Agent -> handleNewAgent -> createWelcomeDraft,
-  // spawning the welcome chat. A manual New Agent click does the same when eligible.
+  // First-run: the onboarding cursor clicks New Agent -> handleNewAgent -> createWelcomeDraft, spawning the welcome chat. A manual New Agent click does the same when eligible.
   const { welcomeEligible, createWelcomeDraft } = useWelcomeDraft({
     dashboardId,
     canvasEmpty,
@@ -146,6 +156,7 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     isActive,
     sessions,
     cards,
+    workflowOpenCards,
     layoutInitialized,
     autoRevealSubAgents,
     expandedSessionIds,
@@ -158,6 +169,8 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     cards,
     viewCards,
     browserCards,
+    workflowCards,
+    workflowsHub,
     notes,
     expandedSessionIds,
     captureNow,
@@ -171,10 +184,7 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     setSearchPaletteOpen,
   });
 
-  // Starter-prompt click: opens the composer with the prompt typed in (translucent,
-  // unsent), so the user reviews and hits send. A Build starter also passes the
-  // App Builder mode ('view-builder') so it builds in-place on the dashboard, no
-  // context switch to the Apps page. Both cleared when the composer closes.
+  // Starter-prompt click: opens the composer with the prompt typed in (translucent, unsent), so the user reviews and hits send. A Build starter also passes the App Builder mode ('view-builder') so it builds in-place on the dashboard, no context switch to the Apps page. Both cleared when the composer closes.
   const [toolbarPrefill, setToolbarPrefill] = useState<string | undefined>(undefined);
   const [toolbarPrefillMode, setToolbarPrefillMode] = useState<string | undefined>(undefined);
   const handleStarter = useCallback((prompt: string, mode?: string) => {
@@ -206,6 +216,7 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     cards,
     viewCards,
     browserCards,
+    workflowCards,
     zoom: canvas.zoom,
     isActive,
     focusedCardId,
@@ -271,6 +282,9 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     glowingBrowserCards,
     cards,
     browserCards,
+    workflowCards,
+    workflowItems,
+    workflowOpenCards,
     viewCards,
     outputs,
     expandedSessionIds,
@@ -278,11 +292,15 @@ export function useDashboardController(dashboardId: string, isActive: boolean) {
     measuredHeightsRef,
     measuredHeightsTick,
     sessionList,
+    workflowsHub,
+    workflowsMonitorCard,
+    workflowsMonitorLabel,
   });
 
   return {
     c, dashboardId, dashboardName, canvas, selection, sessions, sessionList,
     cards, viewCards, browserCards, notes, outputs, glowingAgentCards,
+    workflowCards, workflowsHub,
     expandedSessionIds, tethers, highlightedCardId, autoFocusSessionId,
     focusedCardId, pendingFocusNoteId, multiDragDelta, shakeDirection,
     neighborDirections, toolbarOpen, searchPaletteOpen, newAgentBounce,

@@ -12,20 +12,19 @@ import types
 from backend.apps.agents.manager.prompt import prompt_context as pc
 
 
-def _fake_dashboard(monkeypatch):
-    # _build_browser_context loads the dashboard; give it a minimal one so it
-    # gets past the load and emits the static delegation guidance.
+def p_fake_dashboard(monkeypatch):
+    # build_browser_context loads the dashboard; give it a minimal one so it gets past the load and emits the static delegation guidance.
     import backend.apps.dashboards.dashboards as dash
 
-    class _D:
+    class P_D:
         def model_dump(self, mode="json"):
             return {"layout": {"browser_cards": {}}}
-    monkeypatch.setattr(dash, "_load", lambda did: _D(), raising=True)
+    monkeypatch.setattr(dash, "load", lambda did: P_D(), raising=True)
 
 
 def test_orchestrator_routes_same_flow_batches_to_one_agent(monkeypatch):
-    _fake_dashboard(monkeypatch)
-    ctx = pc._build_browser_context("dash-1", selected_browser_ids=[])
+    p_fake_dashboard(monkeypatch)
+    ctx = pc.build_browser_context("dash-1", selected_browser_ids=[])
     assert ctx is not None
     # the key guidance: one agent + the whole list, not one agent per item
     assert "Give ONE agent the whole list" in ctx
@@ -35,4 +34,4 @@ def test_orchestrator_routes_same_flow_batches_to_one_agent(monkeypatch):
 
 
 def test_browser_context_is_none_without_a_dashboard():
-    assert pc._build_browser_context(None) is None
+    assert pc.build_browser_context(None) is None

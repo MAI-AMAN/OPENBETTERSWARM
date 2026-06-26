@@ -9,8 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ..exportable import DepRef, ExportContext, RemapTable
-from ..models import EntityType, Requirement
+from backend.apps.swarm.exportable import DepRef, ExportContext, RemapTable
+from backend.apps.swarm.models import EntityType, Requirement
 
 
 class DashboardExportable:
@@ -19,17 +19,17 @@ class DashboardExportable:
     def __init__(self, did: str, name: str, data: dict):
         self.local_id = did
         self.name = name
-        self._data = data
+        self.p_data = data
 
     @classmethod
     def load(cls, local_id: str) -> "DashboardExportable | None":
-        data = _read(local_id)
+        data = p_read(local_id)
         if data is None:
             return None
         return cls(local_id, data.get("name") or "Dashboard", data)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        layout = dict(self._data.get("layout") or {})
+        layout = dict(self.p_data.get("layout") or {})
         cards = {}
         for sid, card in (layout.get("cards") or {}).items():
             bid = ctx.bundle_id_for(EntityType.session, sid)
@@ -39,8 +39,7 @@ class DashboardExportable:
         for oid, card in (layout.get("view_cards") or {}).items():
             bid = ctx.bundle_id_for(EntityType.app, oid)
             if bid:
-                # parent_session_id tethers the app card to the agent that built it;
-                # it's a session id, so it remaps like spawned_by on browser cards.
+                # parent_session_id tethers the app card to the agent that built it; it's a session id, so it remaps like spawned_by on browser cards.
                 parent = card.get("parent_session_id")
                 view_cards[bid] = {
                     **card, "output_id": bid,
@@ -53,7 +52,7 @@ class DashboardExportable:
             c["spawned_by"] = ctx.bundle_id_for(EntityType.session, spawn) if spawn else None
             browser_cards[bkey] = c
         expanded = [b for b in (ctx.bundle_id_for(EntityType.session, s) for s in (layout.get("expanded_session_ids") or [])) if b]
-        return {"name": self._data.get("name") or "Dashboard", "layout": {
+        return {"name": self.p_data.get("name") or "Dashboard", "layout": {
             **layout, "cards": cards, "view_cards": view_cards,
             "browser_cards": browser_cards, "notes": layout.get("notes") or {},
             "expanded_session_ids": expanded,
@@ -63,7 +62,7 @@ class DashboardExportable:
         return {}
 
     def dependencies(self) -> list[DepRef]:
-        layout = self._data.get("layout") or {}
+        layout = self.p_data.get("layout") or {}
         deps = [DepRef(EntityType.session, sid, "has_agent") for sid in (layout.get("cards") or {})]
         deps += [DepRef(EntityType.app, oid, "has_app") for oid in (layout.get("view_cards") or {})]
         return deps
@@ -90,7 +89,7 @@ class DashboardExportable:
                     "parent_session_id": remap.local(parent) if parent else None,
                 }
         browser_cards = {}
-        for _bkey, card in (layout.get("browser_cards") or {}).items():
+        for p_bkey, card in (layout.get("browser_cards") or {}).items():
             nbid = "browser-" + uuid4().hex[:10]
             c = dict(card)
             c["browser_id"] = nbid
@@ -111,21 +110,21 @@ class DashboardExportable:
                 "expanded_session_ids": expanded,
             },
         }
-        _write(new_did, doc)
-        _retag_sessions(cards.keys(), new_did)
+        p_write(new_did, doc)
+        p_retag_sessions(cards.keys(), new_did)
         return new_did
 
     @classmethod
     def rollback(cls, local_id: str) -> None:
         import os
-        d = _dash_dir()
+        d = p_dash_dir()
         if d:
             p = os.path.join(d, f"{local_id}.json")
             if os.path.exists(p):
                 os.remove(p)
 
 
-def _dash_dir() -> str | None:
+def p_dash_dir() -> str | None:
     try:
         from backend.config.paths import DASHBOARDS_DIR
         return DASHBOARDS_DIR
@@ -133,29 +132,29 @@ def _dash_dir() -> str | None:
         return None
 
 
-def _read(did: str) -> dict | None:
+def p_read(did: str) -> dict | None:
     import os
     from backend.config.json_store import read_json_or_none
-    d = _dash_dir()
+    d = p_dash_dir()
     return read_json_or_none(os.path.join(d, f"{did}.json")) if d else None
 
 
-def _write(did: str, doc: dict) -> None:
+def p_write(did: str, doc: dict) -> None:
     import os
     from backend.config.json_store import atomic_write_json
-    d = _dash_dir()
+    d = p_dash_dir()
     if d:
         atomic_write_json(os.path.join(d, f"{did}.json"), doc)
 
 
-def _retag_sessions(session_ids, dashboard_id: str) -> None:
+def p_retag_sessions(session_ids, dashboard_id: str) -> None:
     # Best-effort: a hiccup here must not orphan the just-written dashboard.
-    from backend.apps.agents.manager.session.session_store import _load_session_data, _save_session
+    from backend.apps.agents.manager.session.session_store import load_session_data, save_session
     for sid in session_ids:
         try:
-            d = _load_session_data(sid)
+            d = load_session_data(sid)
             if d is not None:
                 d["dashboard_id"] = dashboard_id
-                _save_session(sid, d)
+                save_session(sid, d)
         except Exception:
             pass

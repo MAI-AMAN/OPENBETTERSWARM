@@ -19,32 +19,32 @@ import pytest
 from backend.main import app
 
 
-def _auth_headers():
+def p_auth_headers():
     import backend.auth as auth_mod
-    if not auth_mod._TOKEN:
+    if not auth_mod.TOKEN:
         import secrets
-        auth_mod._TOKEN = secrets.token_urlsafe(32)
-    return {"Authorization": f"Bearer {auth_mod._TOKEN}"}
+        auth_mod.TOKEN = secrets.token_urlsafe(32)
+    return {"Authorization": f"Bearer {auth_mod.TOKEN}"}
 
 
 @pytest.fixture
 def reset_settings():
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
     original = load_settings().model_copy(deep=True)
     yield
-    _save_settings(original)
+    save_settings(original)
 
 
 @pytest.mark.asyncio
 async def test_concurrent_writes_to_different_fields_both_survive(reset_settings):
-    from backend.apps.settings.settings import load_settings, _save_settings
+    from backend.apps.settings.settings import load_settings, save_settings
 
     base = load_settings()
     base.theme = "dark"
     base.default_mode = "agent"
-    _save_settings(base)
+    save_settings(base)
 
-    headers = _auth_headers()
+    headers = p_auth_headers()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:
         r1, r2 = await asyncio.gather(

@@ -34,6 +34,14 @@ These rules apply to `.py`, `.ts`, `.tsx`, `.js`, and `.jsx` files.
 
 **TypeScript** — The `tsconfig.json` in `frontend/` has strict mode enabled. TypeScript errors show in the editor automatically.
 
+### Naming & access conventions
+
+**No leading underscores (`no-underscore-names`)** — Backend Python may not name anything with a leading `_` (functions, variables, arguments, attributes, import aliases). Dead-code tooling (Pylance, ruff, vulture) treats `_name` as "intentionally unused" and stops reporting it, so a leading underscore is a blind spot. Use the `p_` prefix to signal "private" instead. Dunders (`__init__`) and the bare `_` throwaway are exempt.
+
+**Private access boundaries (`p-private`)** — A `p_`-prefixed name is private to its owning file (module level) or class (attribute). The check flags any `p_` name read or imported from another file/class: if something is used across a boundary, it isn't private — drop the prefix and make it public. This makes `p_` a real access modifier, not just a naming style.
+
+Both are backend-only and grandfather pre-existing debt via the `no-underscore-names` / `p-private` exception lists; new code must be clean. (Ported from Haik's linter, which also adds Pyright + Ruff and should eventually supersede this subset.)
+
 ## How it runs
 
 ### Linter watch (automatic)
@@ -85,7 +93,9 @@ Or use the `knip:check` VS Code task (`Cmd+Shift+P` → "Run Task" → "knip:che
     "eslint": true,
     "knip": true,
     "endpoints": true,
-    "classes": true
+    "classes": true,
+    "no-underscore-names": true,
+    "p-private": true
   },
   "rules": {
     "max-file-lines": 250,        // files with >= this many lines trigger an error
@@ -136,6 +146,26 @@ If a file legitimately needs to exceed a limit, add a glob to the `exceptions` l
 ```
 
 Wildcards work: `"backend/tests/*"` exempts all files in the tests folder.
+
+## Code conventions
+
+The project's code conventions live here (a tracked file) rather than in `CLAUDE.md`, which is gitignored as personal AI working notes and so is never shared or enforced. Some conventions are mechanically enforced by the checks above; the rest are guidance the linter does not (yet) gate.
+
+### Enforced by the linter
+- **No leading `_`** — use `p_` for private. (`no-underscore-names`, backend)
+- **`p_` is a private access boundary** — a `p_` name used across files/classes must be public. (`p-private`, backend)
+- **No runtime import cycles.** (`import-cycles`)
+- **File and folder size caps.** (`max-file-lines`, `max-folder-items`)
+
+### Guidance (not gated — follow it anyway)
+- **No barrels.** Don't write an `__init__.py` (or `index.ts`) whose only job is to re-export. Import from the defining module directly.
+- **No relative imports (Python).** Always import from the package root: `from backend.apps.foo import bar`, never `from .foo import bar`.
+- **Single-purpose file naming.** If a file exports exactly one function or class, name the file after it.
+- **Type everything.** Annotate every function/variable. Backend Python uses typeguard's `@typechecked` and prefers `typing` generics (`List`, `Dict`, `Optional`) over the builtins; type-checking also runs under Pyright/Pylance strict.
+- **Classes are pydantic.** Backend classes subclass pydantic `BaseModel` with `model_config = ConfigDict(validate_assignment=True)`, wrapping unrecognized field types in `InstanceOf[...]`. Plain data classes and bare `dict`s are avoided in favour of models — except genuine dynamic-key maps (a registry keyed by a runtime id) and external protocol shapes (the Claude Agent SDK hook returns, `model_dump` output), where a `dict` is the correct type. This last pair is why the codebase still contains dicts and why there is no "no-dict" gate.
+
+### Frontend (TypeScript)
+The naming and structure rules apply to the frontend too — no leading `_`, no barrels, single-purpose file naming, and full typing (strict `tsconfig`). The `p_`/pydantic rules are Python-specific; the TS equivalent of "no dicts" is "model data with typed interfaces, not untyped objects." Note two current gaps: `no-underscore-names` / `p-private` are backend-only, and the frontend ESLint config still suggests a `_` prefix to silence unused-variable warnings — prefer removing the unused binding over prefixing it.
 
 ## `.lintignore` files
 

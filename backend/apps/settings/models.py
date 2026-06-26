@@ -65,19 +65,20 @@ class AppSettings(BaseModel):
     dismissed_mcp_suggestions: dict[str, str] = Field(default_factory=dict)
     analytics_opt_in: bool = True
     installation_id: Optional[str] = None
+    # Minted once by the analytics SDK's register() and reused forever; server-owned.
+    analytics_token: Optional[str] = None
+    # Renderer-reported browser Intl values, stamped on analytics submissions; server-owned.
+    timezone: Optional[str] = None
+    locale: Optional[str] = None
     first_opened_at: Optional[str] = None
     connection_mode: str = "own_key"
     openswarm_bearer_token: Optional[str] = None
     openswarm_proxy_url: Optional[str] = None
-    # Zero-config free trial: server-funded runs for a brand-new user with no
-    # key and no subscription. connection_mode flips to "free-trial" while armed;
-    # the token + remaining count are server-owned (minted by the cloud, sticky
-    # per machine). remaining is cached for the onboarding "runs low" nudge.
+    # Zero-config free trial: server-funded runs for a brand-new user with no key and no subscription. connection_mode flips to "free-trial" while armed; the token + remaining count are server-owned (minted by the cloud, sticky per machine). remaining is cached for the onboarding "runs low" nudge.
     free_trial_token: Optional[str] = None
     free_trial_remaining: Optional[int] = None
     free_trial_runs_limit: Optional[int] = None
-    # Epoch seconds when the rolling window refills to a fresh allotment; lets the spent-trial
-    # nudge say "fresh runs in ~3h" instead of a vague "for now". Server-owned.
+    # Epoch seconds when the rolling window refills to a fresh allotment; lets the spent-trial nudge say "fresh runs in ~3h" instead of a vague "for now". Server-owned.
     free_trial_resets_at: Optional[float] = None
     openswarm_subscription_plan: Optional[str] = None
     openswarm_subscription_expires: Optional[str] = None

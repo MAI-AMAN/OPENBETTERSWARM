@@ -2,18 +2,22 @@ from backend.config.Apps import SubApp
 from backend.apps.agents.agent_manager import agent_manager
 from backend.apps.agents.core.ws_manager import ws_manager
 from backend.apps.agents.core.models import AgentConfig, ApprovalResponse
-from backend.apps.agents.manager.session.history_compaction import _estimate_post_compact_input
+from backend.apps.agents.manager.session.history_compaction import estimate_post_compact_input
 from contextlib import asynccontextmanager
 from fastapi import WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import JSONResponse
 import asyncio
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
+MCP_SUGGEST_COOLDOWN_S = 300.0
+p_mcp_suggest_cooldown: dict[str, float] = {}
+
 # Dedup concurrent generate-group-meta calls; collapses the 429 thundering herd by sharing one upstream Future per (session, group).
-_group_meta_inflight: dict[tuple[str, str], asyncio.Future] = {}
+p_group_meta_inflight: dict[tuple[str, str], asyncio.Future] = {}
 
 @asynccontextmanager
 async def agents_lifespan():
@@ -75,23 +79,26 @@ async def send_message(session_id: str, body: dict):
 
     # Run MCP-suggestion classifier in parallel with the agent launch; fails open.
     try:
-        from backend.apps.agents.core.mcp_preflight import run_preflight
-        from backend.apps.agents.core.ws_manager import ws_manager as _ws
+        last_suggested = p_mcp_suggest_cooldown.get(session_id, 0.0)
+        if time.monotonic() - last_suggested >= MCP_SUGGEST_COOLDOWN_S:
+            from backend.apps.agents.core.mcp_preflight import run_preflight
+            from backend.apps.agents.core.ws_manager import ws_manager as p_ws
 
-        async def _emit_preflight():
-            try:
-                result = await run_preflight(prompt, task_id=session_id)
-                if result.get("suggestions") or result.get("is_vague"):
-                    await _ws.send_to_session(session_id, "agent:mcp_suggestions", {
-                        "session_id": session_id,
-                        "suggestions": result.get("suggestions", []),
-                        "is_vague": bool(result.get("is_vague")),
-                    })
-            except Exception:
-                pass
+            async def p_emit_preflight():
+                try:
+                    result = await run_preflight(prompt, task_id=session_id)
+                    if result.get("suggestions") or result.get("is_vague"):
+                        p_mcp_suggest_cooldown[session_id] = time.monotonic()
+                        await p_ws.send_to_session(session_id, "agent:mcp_suggestions", {
+                            "session_id": session_id,
+                            "suggestions": result.get("suggestions", []),
+                            "is_vague": bool(result.get("is_vague")),
+                        })
+                except Exception:
+                    pass
 
-        import asyncio as _asyncio
-        _asyncio.create_task(_emit_preflight())
+            import asyncio as p_asyncio
+            p_asyncio.create_task(p_emit_preflight())
     except Exception:
         pass
 
@@ -164,7 +171,7 @@ async def generate_group_meta(session_id: str, body: dict):
     is_refinement = body.get("is_refinement", False)
     key = (session_id, group_id)
     if not is_refinement:
-        existing = _group_meta_inflight.get(key)
+        existing = p_group_meta_inflight.get(key)
         if existing is not None and not existing.done():
             try:
                 return await existing
@@ -174,7 +181,7 @@ async def generate_group_meta(session_id: str, body: dict):
 
     future: asyncio.Future = asyncio.get_event_loop().create_future()
     if not is_refinement:
-        _group_meta_inflight[key] = future
+        p_group_meta_inflight[key] = future
     try:
         result = await agent_manager.generate_group_meta(
             session_id,
@@ -191,8 +198,8 @@ async def generate_group_meta(session_id: str, body: dict):
             future.set_exception(e)
         raise
     finally:
-        if not is_refinement and _group_meta_inflight.get(key) is future:
-            _group_meta_inflight.pop(key, None)
+        if not is_refinement and p_group_meta_inflight.get(key) is future:
+            p_group_meta_inflight.pop(key, None)
 
 @agents.router.patch("/sessions/{session_id}")
 async def update_session(session_id: str, body: dict):
@@ -306,7 +313,7 @@ async def compact_session(session_id: str):
     session = agent_manager.sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
-    fired = agent_manager._maybe_compact(session, force=True)
+    fired = agent_manager.maybe_compact(session, force=True)
     if fired:
         from backend.apps.agents.core.ws_manager import ws_manager
         try:
@@ -315,10 +322,10 @@ async def compact_session(session_id: str):
                 "reason": "compacted",
                 "compacted_through_msg_id": session.compacted_through_msg_id,
             })
-            await agent_manager._emit_context_update(
+            await agent_manager.emit_context_update(
                 session_id,
                 session,
-                input_tokens=_estimate_post_compact_input(session),
+                input_tokens=estimate_post_compact_input(session),
                 output_tokens=session.tokens.get("output", 0),
             )
         except Exception:
@@ -346,7 +353,7 @@ async def clear_session(session_id: str):
             "status": session.status,
             "session": session.model_dump(mode="json"),
         })
-        await agent_manager._emit_context_update(
+        await agent_manager.emit_context_update(
             session_id,
             session,
             input_tokens=0,
@@ -383,10 +390,10 @@ async def subscriptions_connect(body: dict):
             raise HTTPException(status_code=503, detail="9Router not available. Please install Node.js.")
 
     # Reconnecting gemini-cli must wipe antigravity; registry prefers AG and a stale AG token would 400 after gemini-cli refreshes.
-    cascade = _PROVIDER_CASCADE_REMOVES.get(provider, [])
+    cascade = P_PROVIDER_CASCADE_REMOVES.get(provider, [])
     if cascade:
         try:
-            await _delete_provider_connections(cascade)
+            await p_delete_provider_connections(cascade)
         except Exception:
             pass
 
@@ -394,8 +401,8 @@ async def subscriptions_connect(body: dict):
         result = await start_oauth(provider)
 
         if result.get("flow") == "authorization_code" and result.get("state"):
-            from backend.main import _pending_oauth
-            _pending_oauth[result["state"]] = {
+            from backend.main import p_pending_oauth
+            p_pending_oauth[result["state"]] = {
                 "provider": provider,
                 "code_verifier": result.get("code_verifier", ""),
                 "redirect_uri": result.get("redirect_uri", ""),
@@ -422,9 +429,9 @@ async def subscriptions_poll(body: dict):
             extra_data=body.get("extra_data"),
         )
         if result.get("success"):
-            from backend.apps.service.client import sync as _sync
+            from backend.apps.service.client import sync as p_sync
             from backend.apps.settings.settings import load_settings
-            _sync(load_settings().model_dump())
+            p_sync(load_settings().model_dump())
             from backend.apps.subscription.free_trial import clear_free_trial_on_connect
             await clear_free_trial_on_connect()
         return result
@@ -437,9 +444,9 @@ async def subscriptions_exchange(body: dict):
     """Exchange OAuth code for tokens via 9Router."""
     from backend.apps.nine_router import exchange_oauth
     from backend.apps.oauth_state import (
-        _pending_oauth as pending_oauth,
-        _completed_oauth as completed_oauth,
-        _mark_oauth_completed as mark_completed,
+        pending_oauth as pending_oauth,
+        completed_oauth as completed_oauth,
+        mark_oauth_completed as mark_completed,
     )
     provider = body.get("provider", "")
     code = body.get("code", "")
@@ -453,8 +460,7 @@ async def subscriptions_exchange(body: dict):
     try:
         result = await exchange_oauth(provider, code, redirect_uri, code_verifier, state)
         if result.get("success"):
-            # Claude races this path against /api/subscriptions/callback (popup + 9router patch
-            # 302 to backend); dedup so the loser sees the success page, not "Session expired".
+            # Claude races this path against /api/subscriptions/callback (popup + 9router patch 302 to backend); dedup so the loser sees the success page, not "Session expired".
             if state:
                 pending_oauth.pop(state, None)
                 mark_completed(state)
@@ -484,7 +490,7 @@ async def subscriptions_models():
 @agents.router.post("/probe-model")
 async def probe_model(body: dict):
     """1-token health probe; returns latency or skipped when the route is ambiguous (silent beats wrong)."""
-    import time as _time
+    import time as p_time
     short_name = (body or {}).get("model") or ""
     if not short_name:
         return {"ok": False, "error": "model required"}
@@ -492,15 +498,15 @@ async def probe_model(body: dict):
         from backend.apps.agents.providers.registry import (
             resolve_model_id_for_sdk,
             get_api_type,
-            _find_builtin_model,
-            _NINEROUTER_MODEL_PREFIXES,
+            find_builtin_model,
+            NINEROUTER_MODEL_PREFIXES,
         )
         from backend.apps.settings.settings import load_settings
-        from backend.apps.nine_router import is_running as _9r_running
+        from backend.apps.nine_router import is_running as p_9r_running
         settings = load_settings()
         api_type = get_api_type(short_name)
         resolved = resolve_model_id_for_sdk(short_name, settings)
-        entry = _find_builtin_model(short_name) or {}
+        entry = find_builtin_model(short_name) or {}
         route = entry.get("route")
         connection_mode = getattr(settings, "connection_mode", "own_key")
 
@@ -510,11 +516,11 @@ async def probe_model(body: dict):
         # Routing mirrors agent_manager: prefix takes precedence over Pro.
         resolved_is_9router = (
             isinstance(resolved, str)
-            and resolved.startswith(_NINEROUTER_MODEL_PREFIXES)
+            and resolved.startswith(NINEROUTER_MODEL_PREFIXES)
         )
 
         if resolved_is_9router:
-            if not _9r_running():
+            if not p_9r_running():
                 return {"ok": True, "skipped": True}
             client = anthropic.AsyncAnthropic(api_key="9router", base_url="http://localhost:20128")
         elif route == "api" and api_type == "anthropic" and getattr(settings, "anthropic_api_key", None):
@@ -528,18 +534,18 @@ async def probe_model(body: dict):
         elif api_type == "anthropic" and getattr(settings, "anthropic_api_key", None):
             client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         else:
-            if not _9r_running():
+            if not p_9r_running():
                 return {"ok": True, "skipped": True}
             client = anthropic.AsyncAnthropic(api_key="9router", base_url="http://localhost:20128")
 
-        t0 = _time.monotonic()
+        t0 = p_time.monotonic()
         await client.messages.create(
             model=resolved,
             max_tokens=1,
             messages=[{"role": "user", "content": "ping"}],
             timeout=10.0,
         )
-        return {"ok": True, "latency_ms": int((_time.monotonic() - t0) * 1000)}
+        return {"ok": True, "latency_ms": int((p_time.monotonic() - t0) * 1000)}
     except Exception as e:
         msg = str(e).splitlines()[0] if str(e) else type(e).__name__
         low = msg.lower()
@@ -561,29 +567,29 @@ async def probe_model(body: dict):
 async def list_models():
     """Picker model list, grouped by provider, intersected with available creds."""
     from backend.apps.agents.providers.registry import BUILTIN_MODELS
-    from backend.apps.nine_router import is_running as _9r_running, get_providers as _9r_providers
+    from backend.apps.nine_router import is_running as p_9r_running, get_providers as p_9r_providers
     from backend.apps.settings.settings import load_settings
 
     settings = load_settings()
-    nine_router_up = _9r_running()
+    nine_router_up = p_9r_running()
 
     connected: set[str] = set()
     if nine_router_up:
         try:
-            conns = await _9r_providers()
+            conns = await p_9r_providers()
             raw_providers = {c.get("provider", "") for c in conns if c.get("isActive") or c.get("testStatus") == "active"}
             # 9Router uses "claude"; our models use api="anthropic". Map across.
-            _9R_TO_API = {
+            p_9R_TO_API = {
                 "claude": "anthropic",
                 "codex": "codex",
                 "gemini-cli": "gemini-cli",
                 "antigravity": "gemini-cli",  # AG = same Gemini models, separate OAuth.
             }
-            connected = raw_providers | {_9R_TO_API.get(p, p) for p in raw_providers}
+            connected = raw_providers | {p_9R_TO_API.get(p, p) for p in raw_providers}
         except Exception as e:
             logger.debug(f"Failed to fetch 9Router providers: {e}")
 
-    def _serialize(models: list[dict]) -> list[dict]:
+    def p_serialize(models: list[dict]) -> list[dict]:
         # Tiers describe the model; billing_kind describes the wallet. Pricing shown only for paid.
         from backend.apps.agents.providers.registry import (
             COST_PER_1M_TOKENS,
@@ -593,8 +599,8 @@ async def list_models():
         out = []
         for m in models:
             input_cost = output_cost = 0.0
-            for (_p, _v), rates in COST_PER_1M_TOKENS.items():
-                if _v == m["value"]:
+            for (p_p, p_v), rates in COST_PER_1M_TOKENS.items():
+                if p_v == m["value"]:
                     input_cost, output_cost = rates
                     break
             api = m.get("api", "")
@@ -639,53 +645,47 @@ async def list_models():
     # Pro mode splits into Pro proxy + Anthropic alternates; own-key collapses to one adaptive group.
     notes: list[dict] = []
     if is_openswarm_pro:
-        result["OpenSwarm Pro"] = _serialize(adaptive)
+        result["OpenSwarm Pro"] = p_serialize(adaptive)
         anth_alternates: list[dict] = []
         if has_claude_sub:
             anth_alternates += cc_variants
         if has_api_key:
             anth_alternates += api_variants
         if anth_alternates:
-            result["Anthropic"] = _serialize(anth_alternates)
+            result["Anthropic"] = p_serialize(anth_alternates)
     elif has_api_key or has_claude_sub:
-        rows = _serialize(adaptive)
-        # When an Anthropic key is set, these adaptive rows run on it: own-key routing prefers the
-        # user's key over any sub (agent_manager + anthropic_proxy._pick_upstream), so it holds even
-        # with a Claude sub connected. Label + bucket as API key (not 9router-state dependent).
+        rows = p_serialize(adaptive)
+        # When an Anthropic key is set, these adaptive rows run on it: own-key routing prefers the user's key over any sub (agent_manager + anthropic_proxy._pick_upstream), so it holds even with a Claude sub connected. Label + bucket as API key (not 9router-state dependent).
         if has_api_key:
             for r in rows:
                 if not r["label"].endswith("(API key)"):
                     r["label"] += " (API key)"
                 r["billing_kind"] = "api_key"
                 r["is_free"] = False
-            # Models that only exist on the API-key route (Fable 5, whose sub route 404s
-            # on our pinned 9Router) have no adaptive twin to relabel, so add them or they vanish.
+            # Models that only exist on the API-key route (Fable 5, whose sub route 404s on our pinned 9Router) have no adaptive twin to relabel, so add them or they vanish.
             adaptive_ids = {m.get("model_id") for m in adaptive}
             api_only = [m for m in api_variants if m.get("model_id") not in adaptive_ids]
-            rows = _serialize(api_only) + rows
+            rows = p_serialize(api_only) + rows
         elif has_claude_sub:
-            # Only a sub: the adaptive rows route through 9router's cc/ lane, so they're covered
-            # by the subscription, not pay-per-use.
+            # Only a sub: the adaptive rows route through 9router's cc/ lane, so they're covered by the subscription, not pay-per-use.
             for r in rows:
                 r["billing_kind"] = "subscription"
             # Sub-only models with no adaptive twin (Fable 5) won't ride the relabeled rows, so add their cc/ entry.
             adaptive_ids = {m.get("model_id") for m in adaptive}
             cc_only = [m for m in cc_variants if m.get("model_id") not in adaptive_ids]
-            rows = _serialize(cc_only) + rows
-        # With BOTH a key and a sub the adaptive rows above run on the key, so also surface the
-        # subscription (cc) variants; they route via 9router's cc/ lane and stay selectable, the
-        # way OpenAI/Gemini show both a subscription row and an API-key row.
+            rows = p_serialize(cc_only) + rows
+        # With BOTH a key and a sub the adaptive rows above run on the key, so also surface the subscription (cc) variants; they route via 9router's cc/ lane and stay selectable, the way OpenAI/Gemini show both a subscription row and an API-key row.
         if has_api_key and has_claude_sub:
-            rows += _serialize(cc_variants)
+            rows += p_serialize(cc_variants)
         result["Anthropic"] = rows
 
     has_openai_key = bool(getattr(settings, "openai_api_key", None))
     has_google_key = bool(getattr(settings, "google_api_key", None))
     has_openrouter_key = bool(getattr(settings, "openrouter_api_key", None))
     from backend.apps.agents.providers.registry import (
-        COST_PER_1M_TOKENS as _CPM,
-        compute_tiers as _ct_native,
-        compute_billing_kind as _cbk_native,
+        COST_PER_1M_TOKENS as P_CPM,
+        compute_tiers as p_ct_native,
+        compute_billing_kind as p_cbk_native,
     )
     for provider_name, models in BUILTIN_MODELS.items():
         if provider_name == "Anthropic":
@@ -703,14 +703,14 @@ async def list_models():
                 if not nine_router_up or api not in connected:
                     continue
             in_cost = out_cost = 0.0
-            for (_p, _v), rates in _CPM.items():
-                if _v == m["value"]:
+            for (p_p, p_v), rates in P_CPM.items():
+                if p_v == m["value"]:
                     in_cost, out_cost = rates
                     break
-            billing_kind = _cbk_native(
+            billing_kind = p_cbk_native(
                 api=api, route=route, is_or_free=False, settings=settings,
             )
-            tiers = _ct_native(
+            tiers = p_ct_native(
                 m.get("model_id", m["value"]),
                 m["label"],
                 out_cost,
@@ -741,19 +741,19 @@ async def list_models():
         if or_models:
             by_vendor: dict[str, list[dict]] = {}
             from backend.apps.agents.providers.registry import (
-                compute_tiers as _ct,
-                compute_billing_kind as _cbk,
+                compute_tiers as p_ct,
+                compute_billing_kind as p_cbk,
             )
             for m in or_models:
                 v = m.get("vendor") or "Other"
                 in_cost = float(m.get("input_cost_per_1m", 0.0))
                 out_cost = float(m.get("output_cost_per_1m", 0.0))
                 is_free = bool(m.get("is_free", False))
-                billing_kind = _cbk(
+                billing_kind = p_cbk(
                     api="openrouter", route="openrouter", is_or_free=is_free,
                     settings=settings,
                 )
-                tiers = _ct(
+                tiers = p_ct(
                     m.get("model_id", m["value"]),
                     m["label"],
                     out_cost,
@@ -779,14 +779,14 @@ async def list_models():
                 result[f"OpenRouter · {pretty}"] = entries
 
     # Custom OpenAI-compatible providers (Ollama Cloud, Together, etc); addressed via custom/<slug>/<model_id>.
-    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
+    from backend.apps.agents.providers.registry import custom_provider_slug_for_lookup
     for cp in (getattr(settings, "custom_providers", None) or []):
         cp_name = (getattr(cp, "name", "") or "").strip()
         cp_base_url = (getattr(cp, "base_url", "") or "").strip()
         cp_models = getattr(cp, "models", None) or []
         if not cp_name or not cp_base_url or not cp_models:
             continue
-        slug = _custom_provider_slug_for_lookup(cp_name)
+        slug = custom_provider_slug_for_lookup(cp_name)
         entries: list[dict] = []
         for m in cp_models:
             bare = (m.get("value") or m.get("id") or "").strip()
@@ -814,12 +814,12 @@ async def list_models():
 
 
 # gemini-cli and antigravity are two Google OAuth lanes; registry prefers AG, so we cascade-wipe AG when reconnecting gemini-cli to avoid stale-AG 400s. One-directional: AG operations MUST NOT cascade back.
-_PROVIDER_CASCADE_REMOVES: dict[str, list[str]] = {
+P_PROVIDER_CASCADE_REMOVES: dict[str, list[str]] = {
     "gemini-cli": ["antigravity"],
 }
 
 
-async def _delete_provider_connections(providers: list[str]) -> int:
+async def p_delete_provider_connections(providers: list[str]) -> int:
     """Delete 9Router connections in `providers`; returns count removed, silent on 9Router unreachable."""
     import httpx
     from backend.apps.nine_router import NINE_ROUTER_API, get_providers
@@ -847,12 +847,12 @@ async def subscriptions_disconnect(body: dict):
         raise HTTPException(status_code=400, detail="provider required")
 
     try:
-        to_remove = [provider, *_PROVIDER_CASCADE_REMOVES.get(provider, [])]
-        removed = await _delete_provider_connections(to_remove)
+        to_remove = [provider, *P_PROVIDER_CASCADE_REMOVES.get(provider, [])]
+        removed = await p_delete_provider_connections(to_remove)
         if removed:
-            from backend.apps.service.client import sync as _sync
+            from backend.apps.service.client import sync as p_sync
             from backend.apps.settings.settings import load_settings
-            _sync(load_settings().model_dump())
+            p_sync(load_settings().model_dump())
             return {"ok": True}
         return {"ok": False, "error": "Connection not found"}
     except Exception as e:

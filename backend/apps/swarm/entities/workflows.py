@@ -10,21 +10,21 @@ sharer's phone numbers (text/call escalation) are stripped as PII, and run
 history / session + dashboard linkage are dropped."""
 from __future__ import annotations
 
-from ..exportable import DepRef, ExportContext, RemapTable
-from ..models import EntityType, Requirement, RequirementKind
+from backend.apps.swarm.exportable import DepRef, ExportContext, RemapTable
+from backend.apps.swarm.models import EntityType, Requirement, RequirementKind
 
-_BUILTIN_MODES = {"agent", "ask", "plan", "view-builder", "skill-builder"}
+P_BUILTIN_MODES = {"agent", "ask", "plan", "view-builder", "skill-builder"}
 
 # Run-state, machine-linkage, and identifiers that must not ride along.
-_DROP_FIELDS = {
+P_DROP_FIELDS = {
     "id", "source_session_id", "dashboard_id", "edit_agent_session_id",
     "last_run_at", "last_run_status", "last_run_id", "next_run_at",
     "created_at", "updated_at", "cost_cap_usd_monthly",
 }
 
 
-def _sanitize_workflow(data: dict) -> dict:
-    out = {k: v for k, v in data.items() if k not in _DROP_FIELDS}
+def sanitize_workflow(data: dict) -> dict:
+    out = {k: v for k, v in data.items() if k not in P_DROP_FIELDS}
     sched = dict(out.get("schedule") or {})
     if sched:
         sched["enabled"] = False
@@ -48,11 +48,11 @@ class WorkflowExportable:
     def __init__(self, local_id: str, name: str, data: dict):
         self.local_id = local_id
         self.name = name
-        self._data = data
+        self.p_data = data
 
     @classmethod
     def load(cls, local_id: str) -> "WorkflowExportable | None":
-        store = _store()
+        store = p_store()
         if store is None:
             return None
         wf = store.get_workflow(local_id)
@@ -62,7 +62,7 @@ class WorkflowExportable:
         return cls(local_id, data.get("title") or "Untitled workflow", data)
 
     def serialize(self, ctx: ExportContext) -> dict:
-        return _sanitize_workflow(self._data)
+        return sanitize_workflow(self.p_data)
 
     def files(self) -> dict[str, bytes]:
         return {}
@@ -72,18 +72,18 @@ class WorkflowExportable:
 
     def requirements(self) -> list[Requirement]:
         reqs: list[Requirement] = []
-        for name in (self._data.get("actions") or {}).get("configured_sets") or []:
+        for name in (self.p_data.get("actions") or {}).get("configured_sets") or []:
             reqs.append(Requirement(
                 kind=RequirementKind.mcp_action, key=name, label=name,
                 detail="This workflow uses this action.",
             ))
-        mode = self._data.get("mode") or "agent"
-        if mode in _BUILTIN_MODES and mode != "agent":
+        mode = self.p_data.get("mode") or "agent"
+        if mode in P_BUILTIN_MODES and mode != "agent":
             reqs.append(Requirement(
                 kind=RequirementKind.builtin_mode, key=mode, label=f"{mode} mode",
                 detail="A built-in mode this workflow runs in.",
             ))
-        provider = self._data.get("provider") or "anthropic"
+        provider = self.p_data.get("provider") or "anthropic"
         reqs.append(Requirement(
             kind=RequirementKind.api_key, key=provider, label=f"A {provider} model",
             detail="Set up this provider to run the workflow.",
@@ -92,12 +92,12 @@ class WorkflowExportable:
 
     @classmethod
     def import_(cls, payload: dict, files: dict[str, bytes], remap: RemapTable) -> str:
-        store = _store()
-        model = _model()
+        store = p_store()
+        model = p_model()
         if store is None or model is None:
-            from ..ziputil import BundleError
+            from backend.apps.swarm.ziputil import BundleError
             raise BundleError("this build doesn't support workflows yet; please update OpenSwarm")
-        clean = _sanitize_workflow(payload)
+        clean = sanitize_workflow(payload)
         clean.pop("id", None)  # fresh id via the model's default_factory
         wf = model(**clean)
         store.save_workflow(wf)
@@ -105,7 +105,7 @@ class WorkflowExportable:
 
     @classmethod
     def rollback(cls, local_id: str) -> None:
-        store = _store()
+        store = p_store()
         if store is not None:
             try:
                 store.delete_workflow(local_id)
@@ -113,7 +113,7 @@ class WorkflowExportable:
                 pass
 
 
-def _store():
+def p_store():
     try:
         from backend.apps.workflows import storage
         return storage
@@ -121,7 +121,7 @@ def _store():
         return None
 
 
-def _model():
+def p_model():
     try:
         from backend.apps.workflows.models import Workflow
         return Workflow

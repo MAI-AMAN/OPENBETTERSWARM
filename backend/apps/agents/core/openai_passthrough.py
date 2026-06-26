@@ -22,16 +22,16 @@ openai_passthrough = SubApp("openai-passthrough", openai_passthrough_lifespan)
 
 
 # Mirrors anthropic_proxy.py's GPT-5 matcher; duplicated to avoid the cross-module dep.
-_GPT5_PREFIXES = ("gpt-5",)
-_OPENAI_UPSTREAM = "https://api.openai.com/v1"
-_HOP_HEADERS = {
+P_GPT5_PREFIXES = ("gpt-5",)
+P_OPENAI_UPSTREAM = "https://api.openai.com/v1"
+P_HOP_HEADERS = {
     "host", "content-length", "connection", "keep-alive",
     "proxy-authenticate", "proxy-authorization", "te", "trailers",
     "transfer-encoding", "upgrade",
 }
 
 
-def _is_gpt5(model: str) -> bool:
+def p_is_gpt5(model: str) -> bool:
     m = (model or "").strip().lower()
     if not m:
         return False
@@ -39,33 +39,23 @@ def _is_gpt5(model: str) -> bool:
         if m.startswith(prefix):
             m = m[len(prefix):]
             break
-    return any(m.startswith(p) for p in _GPT5_PREFIXES)
+    return any(m.startswith(p) for p in P_GPT5_PREFIXES)
 
 
-# GPT-5 reasoning models reject sampling knobs: temperature must be the default
-# (only 1 is allowed), and top_p / penalties / logprobs are unsupported outright.
-# 9Router 0.3.60 is pinned and forwards whatever the user's picked model carried,
-# so we strip them at this last hop before OpenAI or the whole request 400s.
-_GPT5_UNSUPPORTED_PARAMS = (
+# GPT-5 reasoning models reject sampling knobs: temperature must be the default (only 1 is allowed), and top_p / penalties / logprobs are unsupported outright. 9Router 0.3.60 is pinned and forwards whatever the user's picked model carried, so we strip them at this last hop before OpenAI or the whole request 400s.
+P_GPT5_UNSUPPORTED_PARAMS = (
     "top_p", "top_k", "frequency_penalty", "presence_penalty",
     "logprobs", "top_logprobs", "logit_bias",
 )
 
-# Our OpenAI lane's 9Router node prefix. 0.3.60 intermittently forwards the model
-# WITH this prefix (`cp-openai/gpt-5.5`) instead of stripping it, and OpenAI 400s
-# "invalid model ID". We're the last hop to api.openai.com, so the model must be
-# the bare id regardless of what 9Router sent.
-_CP_OPENAI_PREFIX = "cp-openai/"
+# Our OpenAI lane's 9Router node prefix; 0.3.60 intermittently forwards the model WITH it (cp-openai/gpt-5.5) so OpenAI 400s "invalid model ID", and as the last hop we strip it to the bare id.
+P_CP_OPENAI_PREFIX = "cp-openai/"
 
-# GPT-5 burns 8-30K hidden reasoning tokens before any output; under that, OpenAI 400s
-# "max_tokens reached" instead of truncating. The CLI defaults to 4096. The 9router_gpt5
-# patch floors this, but it hooks 9Router's calls to api.openai.com and on our lane 9Router
-# calls THIS passthrough instead, so the patch never fires here. Floor it ourselves. Match
-# the patch's value. Only raise, never lower.
-_GPT5_MIN_COMPLETION_TOKENS = 32768
+# GPT-5 burns 8-30K hidden reasoning tokens before output and OpenAI 400s "max_tokens reached" under that; the 9router_gpt5 patch's floor never fires on our lane (9Router calls this passthrough, not api.openai.com), so floor it here, only raising.
+P_GPT5_MIN_COMPLETION_TOKENS = 32768
 
 
-def _scrub_gpt5_params(body: bytes) -> bytes:
+def scrub_gpt5_params(body: bytes) -> bytes:
     """Prep an OpenAI chat body: normalize the model id (drop a leaked `cp-openai/`
     routing prefix) and, for GPT-5, rename max_tokens→max_completion_tokens and drop the
     sampling params the reasoning models reject. Bytes in/out, never raises."""
@@ -79,11 +69,11 @@ def _scrub_gpt5_params(body: bytes) -> bytes:
         return body
     mutated = False
     model = str(parsed.get("model") or "")
-    if model.startswith(_CP_OPENAI_PREFIX):
-        model = model[len(_CP_OPENAI_PREFIX):]
+    if model.startswith(P_CP_OPENAI_PREFIX):
+        model = model[len(P_CP_OPENAI_PREFIX):]
         parsed["model"] = model
         mutated = True
-    if not _is_gpt5(model):
+    if not p_is_gpt5(model):
         return json.dumps(parsed).encode("utf-8") if mutated else body
     if "max_tokens" in parsed:
         if "max_completion_tokens" not in parsed:
@@ -92,13 +82,13 @@ def _scrub_gpt5_params(body: bytes) -> bytes:
             parsed.pop("max_tokens", None)
         mutated = True
     mct = parsed.get("max_completion_tokens")
-    if isinstance(mct, (int, float)) and not isinstance(mct, bool) and mct < _GPT5_MIN_COMPLETION_TOKENS:
-        parsed["max_completion_tokens"] = _GPT5_MIN_COMPLETION_TOKENS
+    if isinstance(mct, (int, float)) and not isinstance(mct, bool) and mct < P_GPT5_MIN_COMPLETION_TOKENS:
+        parsed["max_completion_tokens"] = P_GPT5_MIN_COMPLETION_TOKENS
         mutated = True
     if "temperature" in parsed and parsed["temperature"] != 1:
         parsed.pop("temperature", None)
         mutated = True
-    for k in _GPT5_UNSUPPORTED_PARAMS:
+    for k in P_GPT5_UNSUPPORTED_PARAMS:
         if parsed.pop(k, None) is not None:
             mutated = True
     return json.dumps(parsed).encode("utf-8") if mutated else body
@@ -110,15 +100,15 @@ def _scrub_gpt5_params(body: bytes) -> bytes:
 )
 async def passthrough(rest: str, request: Request):
     body = await request.body()
-    body = _scrub_gpt5_params(body)
+    body = scrub_gpt5_params(body)
 
     forward_headers: dict[str, str] = {}
     for k, v in request.headers.items():
-        if k.lower() in _HOP_HEADERS:
+        if k.lower() in P_HOP_HEADERS:
             continue
         forward_headers[k] = v
 
-    upstream_url = f"{_OPENAI_UPSTREAM}/{rest}"
+    upstream_url = f"{P_OPENAI_UPSTREAM}/{rest}"
     if request.url.query:
         upstream_url = f"{upstream_url}?{request.url.query}"
 
@@ -140,8 +130,7 @@ async def passthrough(rest: str, request: Request):
             status_code=502,
         )
 
-    # OpenAI sends 4xx/5xx as a small JSON error, not a stream. Surface its real
-    # complaint (we used to swallow it) and return it decoded so the caller sees why.
+    # OpenAI sends 4xx/5xx as a small JSON error (not a stream); surface its real complaint (we used to swallow it) and return it decoded so the caller sees why.
     if upstream_resp.status_code >= 400:
         raw = await upstream_resp.aread()
         await upstream_resp.aclose()
@@ -158,7 +147,7 @@ async def passthrough(rest: str, request: Request):
 
     response_headers: dict[str, str] = {}
     for k, v in upstream_resp.headers.items():
-        if k.lower() in _HOP_HEADERS:
+        if k.lower() in P_HOP_HEADERS:
             continue
         response_headers[k] = v
 

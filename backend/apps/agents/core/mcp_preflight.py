@@ -11,8 +11,8 @@ from typing import Any
 from backend.apps.agents.providers.registry import resolve_aux_model
 from backend.apps.settings.credentials import get_anthropic_client_for_model
 from backend.apps.settings.settings import load_settings
-from backend.apps.tools_lib.tools_lib import _load_all as load_all_tools
-from backend.apps.tools_lib.mcp_config import _sanitize_server_name
+from backend.apps.tools_lib.tools_lib import load_all_tools as load_all_tools
+from backend.apps.tools_lib.mcp_config import sanitize_server_name
 
 logger = logging.getLogger(__name__)
 
@@ -75,18 +75,18 @@ CURATED_SHORTLIST: list[CuratedEntry] = [
 
 
 # Short-circuit for obviously-local prompts where no MCP helps. Saves ~200ms + ~$0.0001 per launch.
-_PATH_LIKE = re.compile(r"^[./~]|/[\w\-]+/|\.[a-zA-Z]{1,5}\b")
-_SHELL_PREFIX = re.compile(r"^\s*[\$!/]")
+P_PATH_LIKE = re.compile(r"^[./~]|/[\w\-]+/|\.[a-zA-Z]{1,5}\b")
+P_SHELL_PREFIX = re.compile(r"^\s*[\$!/]")
 
 
-def _is_obviously_local(prompt: str) -> bool:
+def p_is_obviously_local(prompt: str) -> bool:
     """True for prompts that obviously can't benefit from MCP (very short, shell-ish, single path)."""
     s = prompt.strip()
     if len(s) < 8:
         return True
-    if _SHELL_PREFIX.match(s):
+    if P_SHELL_PREFIX.match(s):
         return True
-    if " " not in s and _PATH_LIKE.search(s):
+    if " " not in s and P_PATH_LIKE.search(s):
         return True
     return False
 
@@ -100,21 +100,21 @@ async def run_preflight(prompt: str, timeout_s: float = 8.0, task_id: str | None
     if not prompt or not prompt.strip():
         return default
 
-    if _is_obviously_local(prompt):
+    if p_is_obviously_local(prompt):
         return default
 
     try:
         settings = load_settings()
-        available = _build_available_shortlist(settings)
+        available = p_build_available_shortlist(settings)
 
         result = await asyncio.wait_for(
-            _call_classifier(settings, prompt, available, task_id),
+            p_call_classifier(settings, prompt, available, task_id),
             timeout=timeout_s,
         )
         # Re-validate ids against the curated shortlist so hallucinations can't reach the frontend.
         valid_ids = {e["id"] for e in CURATED_SHORTLIST}
         result["suggestions"] = [
-            _decorate(s, available) for s in result.get("suggestions", [])
+            p_decorate(s, available) for s in result.get("suggestions", [])
             if isinstance(s, dict) and s.get("id") in valid_ids
         ]
         result["suggestions"] = [s for s in result["suggestions"] if s is not None]
@@ -131,7 +131,7 @@ async def run_preflight(prompt: str, timeout_s: float = 8.0, task_id: str | None
         return default
 
 
-def _build_available_shortlist(settings) -> list[CuratedEntry]:
+def p_build_available_shortlist(settings) -> list[CuratedEntry]:
     """Curated entries that are NOT currently enabled and NOT dismissed."""
     try:
         enabled_names = {t.name for t in load_all_tools() if getattr(t, "enabled", False)}
@@ -154,11 +154,10 @@ def offer_for_gated_server(server_name: str, settings) -> CuratedEntry | None:
     server is vetted AND inactive AND not dismissed, reusing the same filter as the preflight."""
     if not server_name or not isinstance(server_name, str):
         return None
-    # The hot-path hands us a sanitized slug ("google-workspace"); curated ids are display names
-    # ("Google Workspace"). Match on the slug of both sides so neither form is a load-bearing string.
-    slug = _sanitize_server_name(server_name)
+    # The hot-path hands us a sanitized slug ("google-workspace"); curated ids are display names ("Google Workspace"). Match on the slug of both sides so neither form is a load-bearing string.
+    slug = sanitize_server_name(server_name)
     entry = next(
-        (e for e in _build_available_shortlist(settings) if _sanitize_server_name(e["id"]) == slug),
+        (e for e in p_build_available_shortlist(settings) if sanitize_server_name(e["id"]) == slug),
         None,
     )
     if entry is None:
@@ -166,7 +165,7 @@ def offer_for_gated_server(server_name: str, settings) -> CuratedEntry | None:
     return {"id": entry["id"], "title": entry["title"], "description": entry["description"], "reason": ""}
 
 
-def _decorate(llm_suggestion: dict, available: list[CuratedEntry]) -> dict | None:
+def p_decorate(llm_suggestion: dict, available: list[CuratedEntry]) -> dict | None:
     """Expand an LLM-returned {id, reason} into the full frontend shape."""
     entry = next((e for e in available if e["id"] == llm_suggestion["id"]), None)
     if entry is None:
@@ -179,9 +178,9 @@ def _decorate(llm_suggestion: dict, available: list[CuratedEntry]) -> dict | Non
     }
 
 
-async def _call_classifier(settings, prompt: str, available: list[CuratedEntry], task_id: str | None = None) -> dict:
+async def p_call_classifier(settings, prompt: str, available: list[CuratedEntry], task_id: str | None = None) -> dict:
     """One aux-model call, returns validated JSON {is_vague, suggestions}."""
-    aux_model, _base = await resolve_aux_model(settings, preferred_tier="haiku")
+    aux_model, p_base = await resolve_aux_model(settings, preferred_tier="haiku")
     client = get_anthropic_client_for_model(settings, aux_model)
 
     catalog_lines = "\n".join(
@@ -203,6 +202,11 @@ async def _call_classifier(settings, prompt: str, available: list[CuratedEntry],
         "below) whose connection would dramatically improve the outcome. "
         "Only include a service if the request clearly implies it. If no "
         "service clearly fits, return an empty array. Never invent ids.\n"
+        "  Google Workspace and Microsoft 365 overlap (email, calendar, "
+        "docs/drive). When the request implies one of these capabilities but "
+        "does NOT name the provider (e.g. \"email\" without saying Gmail/"
+        "Outlook or Google/Microsoft), suggest BOTH so the user picks. If the "
+        "provider is named or implied, suggest only that one.\n"
         "- reason: one short sentence (<20 words) explaining WHY this "
         "service fits this request.\n\n"
         "Return ONLY the JSON. No prose, no markdown fences, no explanation."

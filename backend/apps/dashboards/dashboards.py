@@ -25,7 +25,7 @@ from backend.config.json_store import read_json_or_none, atomic_write_json
 OLD_LAYOUT_FILE = os.path.join(OLD_LAYOUT_DIR, "layout.json")
 
 
-def _load_all() -> list[Dashboard]:
+def load_all() -> list[Dashboard]:
     result = []
     if not os.path.exists(DATA_DIR):
         return result
@@ -37,17 +37,16 @@ def _load_all() -> list[Dashboard]:
             try:
                 result.append(Dashboard(**data))
             except Exception as e:
-                # Parseable JSON, wrong shape (e.g. an older/newer schema). Skip from the
-                # list but leave the file alone so a later version can still read it.
+                # Parseable JSON, wrong shape (e.g. an older/newer schema). Skip from the list but leave the file alone so a later version can still read it.
                 logger.warning("Skipping invalid dashboard file %s: %s", fname, e)
     return result
 
 
-def _save(dashboard: Dashboard):
+def save(dashboard: Dashboard):
     atomic_write_json(os.path.join(DATA_DIR, f"{dashboard.id}.json"), dashboard.model_dump(mode="json"))
 
 
-def _load(dashboard_id: str) -> Dashboard:
+def load(dashboard_id: str) -> Dashboard:
     path = os.path.join(DATA_DIR, f"{dashboard_id}.json")
     data = read_json_or_none(path)
     if data is None:
@@ -55,15 +54,15 @@ def _load(dashboard_id: str) -> Dashboard:
     return Dashboard(**data)
 
 
-def _delete(dashboard_id: str):
+def p_delete(dashboard_id: str):
     path = os.path.join(DATA_DIR, f"{dashboard_id}.json")
     if os.path.exists(path):
         os.remove(path)
 
 
-def _migrate_if_needed():
+def migrate_if_needed():
     """One-time migration: if no dashboards exist, create 'Dashboard 1' from old layout."""
-    existing = _load_all()
+    existing = load_all()
     if existing:
         return
 
@@ -81,7 +80,7 @@ def _migrate_if_needed():
             logger.exception("Failed to read old layout.json, using empty layout")
 
     dashboard = Dashboard(name="Dashboard 1", layout=layout)
-    _save(dashboard)
+    save(dashboard)
     logger.info(f"Created default dashboard: {dashboard.id}")
 
     if os.path.exists(SESSIONS_DIR):
@@ -90,8 +89,7 @@ def _migrate_if_needed():
             if not fname.endswith(".json"):
                 continue
             fpath = os.path.join(SESSIONS_DIR, fname)
-            # Per-file guard: one unreadable session must not halt the migration partway
-            # and orphan the rest (the dashboard is already created above).
+            # Per-file guard: one unreadable session must not halt the migration partway and orphan the rest (the dashboard is already created above).
             session_data = read_json_or_none(fpath)
             if session_data is None:
                 continue
@@ -105,7 +103,7 @@ def _migrate_if_needed():
 @asynccontextmanager
 async def dashboards_lifespan():
     os.makedirs(DATA_DIR, exist_ok=True)
-    _migrate_if_needed()
+    migrate_if_needed()
     yield
 
 
@@ -114,7 +112,7 @@ dashboards = SubApp("dashboards", dashboards_lifespan)
 
 @dashboards.router.get("/list")
 async def list_dashboards():
-    all_dashboards = _load_all()
+    all_dashboards = load_all()
     all_dashboards.sort(key=lambda d: d.updated_at or d.created_at, reverse=True)
     items = []
     for d in all_dashboards:
@@ -135,14 +133,19 @@ async def list_dashboards():
 @dashboards.router.post("/create")
 async def create_dashboard(body: DashboardCreate):
     dashboard = Dashboard(name=body.name)
-    _save(dashboard)
+    save(dashboard)
+    try:
+        from backend.apps.service.analytics.client import track_dashboard_event
+        track_dashboard_event(dashboard_id=dashboard.id, action="create")
+    except Exception:
+        pass
     return dashboard.model_dump(mode="json")
 
 
 @dashboards.router.post("/{dashboard_id}/seed-demo")
 async def seed_demo(dashboard_id: str):
     """Create a pre-populated demo session for onboarding."""
-    dashboard = _load(dashboard_id)
+    dashboard = load(dashboard_id)
 
     session_id = uuid4().hex
     now = datetime.now()
@@ -216,7 +219,7 @@ async def seed_orchestration_demo(dashboard_id: str):
     drags it into a new agent and asks for a PDF report; which
     delegates back to this seeded agent.
     """
-    _load(dashboard_id)  # validate dashboard exists
+    load(dashboard_id)  # validate dashboard exists
 
     session_id = uuid4().hex
     now = datetime.now()
@@ -298,7 +301,7 @@ async def seed_orchestration_demo(dashboard_id: str):
 
 @dashboards.router.post("/{dashboard_id}/generate-name")
 async def generate_name(dashboard_id: str):
-    dashboard = _load(dashboard_id)
+    dashboard = load(dashboard_id)
 
     if not dashboard.auto_named and dashboard.name != "Untitled Dashboard":
         return {"name": dashboard.name, "auto_named": dashboard.auto_named}
@@ -323,11 +326,10 @@ async def generate_name(dashboard_id: str):
         from backend.apps.settings.credentials import get_anthropic_client_for_model
         from backend.apps.agents.providers.registry import resolve_aux_model
         global_settings = load_settings()
-        aux_model, _aux_base = await resolve_aux_model(global_settings, preferred_tier="haiku")
+        aux_model, p_aux_base = await resolve_aux_model(global_settings, preferred_tier="haiku")
         client = get_anthropic_client_for_model(global_settings, aux_model)
 
-        # Mirrors generate_title's hardening: the tasks are inert text to LABEL, never answer,
-        # or the aux model happily replies with a markdown essay that becomes the title.
+        # Mirrors generate_title's hardening: the tasks are inert text to LABEL, never answer, or the aux model happily replies with a markdown essay that becomes the title.
         system = (
             "You label tasks with a 2-4 word workspace name. "
             "Examples: 'Travel planning', 'Code review', 'Sales dashboard'. "
@@ -359,11 +361,11 @@ async def generate_name(dashboard_id: str):
     dashboard.name = fallback
     dashboard.auto_named = True
     dashboard.updated_at = datetime.now()
-    _save(dashboard)
+    save(dashboard)
     return {"name": dashboard.name, "auto_named": True}
 
 
-def _strip_orphan_session_cards(data: dict) -> None:
+def strip_orphan_session_cards(data: dict) -> None:
     """Drop layout cards (and expanded ids) whose agent session no longer exists
     anywhere, in memory OR on disk. The frontend mounts an AgentChat per card and
     GETs its session; a card pointing at a vanished session (e.g. an empty
@@ -374,7 +376,7 @@ def _strip_orphan_session_cards(data: dict) -> None:
     non-destructive: a wrong check can only hide a card for one response, not
     delete it. Drafts have no backend session yet, so they're always kept."""
     from backend.apps.agents.agent_manager import agent_manager
-    from backend.apps.agents.manager.session.session_store import _load_session_data
+    from backend.apps.agents.manager.session.session_store import load_session_data
     layout = data.get("layout")
     if not isinstance(layout, dict):
         return
@@ -385,7 +387,7 @@ def _strip_orphan_session_cards(data: dict) -> None:
     def gone(sid: str) -> bool:
         if sid.startswith("draft-") or sid in agent_manager.sessions:
             return False
-        return _load_session_data(sid) is None
+        return load_session_data(sid) is None
 
     orphans = [sid for sid in cards if gone(sid)]
     for sid in orphans:
@@ -398,15 +400,15 @@ def _strip_orphan_session_cards(data: dict) -> None:
 
 @dashboards.router.get("/{dashboard_id}")
 async def get_dashboard(dashboard_id: str):
-    dashboard = _load(dashboard_id)
+    dashboard = load(dashboard_id)
     data = dashboard.model_dump(mode="json")
-    _strip_orphan_session_cards(data)
+    strip_orphan_session_cards(data)
     return data
 
 
 @dashboards.router.put("/{dashboard_id}")
 async def update_dashboard(dashboard_id: str, body: DashboardUpdate):
-    dashboard = _load(dashboard_id)
+    dashboard = load(dashboard_id)
     if body.name is not None:
         dashboard.name = body.name
         dashboard.auto_named = False
@@ -419,13 +421,13 @@ async def update_dashboard(dashboard_id: str, body: DashboardUpdate):
         # Only a real screenshot write moves the sort key; layout/rename saves don't reorder.
         dashboard.preview_updated_at = now
     dashboard.updated_at = now
-    _save(dashboard)
+    save(dashboard)
     return dashboard.model_dump(mode="json")
 
 
 @dashboards.router.delete("/{dashboard_id}")
 async def delete_dashboard(dashboard_id: str):
-    _load(dashboard_id)
+    load(dashboard_id)
 
     if os.path.exists(SESSIONS_DIR):
         for fname in os.listdir(SESSIONS_DIR):
@@ -451,19 +453,24 @@ async def delete_dashboard(dashboard_id: str):
         except Exception:
             logger.warning(f"Failed to delete active session {sid} during dashboard deletion")
 
-    _delete(dashboard_id)
+    p_delete(dashboard_id)
+    try:
+        from backend.apps.service.analytics.client import track_dashboard_event
+        track_dashboard_event(dashboard_id=dashboard_id, action="delete")
+    except Exception:
+        pass
     return {"ok": True}
 
 
 @dashboards.router.post("/{dashboard_id}/duplicate")
 async def duplicate_dashboard(dashboard_id: str):
-    source = _load(dashboard_id)
+    source = load(dashboard_id)
     source_data = source.model_dump(mode="json")
     new_id = uuid4().hex
     now = datetime.now().isoformat()
 
     from backend.apps.agents.agent_manager import agent_manager
-    from backend.apps.agents.manager.session.session_store import _save_session
+    from backend.apps.agents.manager.session.session_store import save_session
 
     source_layout = source_data.get("layout", {}) or {}
     source_browser_cards = source_layout.get("browser_cards", {}) or {}
@@ -513,7 +520,7 @@ async def duplicate_dashboard(dashboard_id: str):
             new_sess.browser_id = browser_id_remap[old_browser_id]
         if old_parent_sid and old_parent_sid in session_id_remap:
             new_sess.parent_session_id = session_id_remap[old_parent_sid]
-        _save_session(new_sess.id, new_sess.model_dump(mode="json"))
+        save_session(new_sess.id, new_sess.model_dump(mode="json"))
 
     new_cards: dict[str, dict] = {}
     for old_sid, card in source_cards.items():
@@ -553,5 +560,11 @@ async def duplicate_dashboard(dashboard_id: str):
         "layout": new_layout,
     }
     atomic_write_json(os.path.join(DATA_DIR, f"{new_id}.json"), new_dashboard)
+
+    try:
+        from backend.apps.service.analytics.client import track_dashboard_event
+        track_dashboard_event(dashboard_id=new_id, action="create")
+    except Exception:
+        pass
 
     return new_dashboard

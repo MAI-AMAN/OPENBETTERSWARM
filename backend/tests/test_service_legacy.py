@@ -13,24 +13,22 @@ Run with:
 import json
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
 import pytest
 
 # Sandbox the data dir before any module import touches settings on disk.
-_tmpdir = tempfile.mkdtemp()
-os.environ.setdefault("OPENSWARM_DATA_DIR", _tmpdir)
+p_tmpdir = tempfile.mkdtemp()
+os.environ.setdefault("OPENSWARM_DATA_DIR", p_tmpdir)
 
 # Captured syncs from this test run.
-_captured_syncs: list[dict] = []
+p_captured_syncs: list[dict] = []
 
 
 @pytest.fixture(autouse=True)
 def reset_captured_syncs():
-    _captured_syncs.clear()
+    p_captured_syncs.clear()
     yield
-    _captured_syncs.clear()
+    p_captured_syncs.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -41,12 +39,11 @@ def install_sync_sink():
     bag so existing tests can keep their assertions terse."""
     import backend.apps.service.client as svc_client
 
-    def _sink(label: str, body: dict):
+    def p_sink(label: str, body: dict):
         cs = body.get("client_state") or {}
         payload = body.get("d") or body.get("payload") or {}
 
-        # Infer a synthetic kind from payload shape, same dispatch logic
-        # as the cloud uses in production.
+        # Infer a synthetic kind from payload shape, same dispatch logic as the cloud uses in production.
         if "status" in payload and "messages" in payload:
             status = payload.get("status", "unknown")
             kind = f"session.{status}" if status != "unknown" else "session.completed"
@@ -76,19 +73,19 @@ def install_sync_sink():
         props.setdefault("os", cs.get("os", ""))
         props.setdefault("platform", cs.get("os", ""))
 
-        _captured_syncs.append({
+        p_captured_syncs.append({
             "kind": kind,
             "distinct_id": cs.get("install_id", ""),
             "properties": props,
         })
 
-    old_sink = svc_client._test_sink
-    old_iid = svc_client._install_id
-    svc_client.set_test_sink(_sink)
-    svc_client._install_id = "test-install-id"
+    old_sink = svc_client.test_sink
+    old_iid = svc_client.install_id
+    svc_client.set_test_sink(p_sink)
+    svc_client.install_id = "test-install-id"
     yield
     svc_client.set_test_sink(old_sink)
-    svc_client._install_id = old_iid
+    svc_client.install_id = old_iid
 
 
 @pytest.fixture(autouse=True)
@@ -123,32 +120,22 @@ def mock_sessions_dir(tmp_path):
 def syncs(kind: str | None = None) -> list[dict]:
     """Return captured syncs, optionally filtered by inferred kind."""
     if kind:
-        return [s for s in _captured_syncs if s["kind"] == kind]
-    return list(_captured_syncs)
+        return [s for s in p_captured_syncs if s["kind"] == kind]
+    return list(p_captured_syncs)
 
 
 def last_sync(kind: str) -> dict:
     """Return the last captured sync of a given inferred kind."""
     matching = syncs(kind)
-    assert matching, f"No {kind} syncs captured. Got: {[s['kind'] for s in _captured_syncs]}"
+    assert matching, f"No {kind} syncs captured. Got: {[s['kind'] for s in p_captured_syncs]}"
     return matching[-1]
 
 
 # Import application modules (after fixtures are wired).
 from backend.apps.service.client import record
-from backend.apps.agents.core.models import AgentConfig, AgentSession, Message, ApprovalRequest
-from backend.apps.agents.agent_manager import AgentManager
 
 
-@pytest.fixture
-def manager():
-    """Fresh AgentManager per test."""
-    return AgentManager()
-
-
-# ---------------------------------------------------------------------------
-# 1. record(), legacy shim correctness
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 1. record(), legacy shim correctness ---------------------------------------------------------------------------
 
 class TestRecordBasics:
     def test_record_sends_payload(self):
@@ -174,49 +161,5 @@ class TestRecordBasics:
         assert s["properties"]["dashboard_id"] == "dash456"
 
 
-# ---------------------------------------------------------------------------
-# 2. Multi-message session, close fires exactly once
-# ---------------------------------------------------------------------------
-
-class TestMultiMessageSession:
-    @pytest.mark.asyncio
-    async def test_session_completes_only_on_close(self, manager):
-        """Verify a completed-session sync does NOT fire mid-loop. It should
-        only fire on close_session() or persist_all_sessions()."""
-        config = AgentConfig(name="Multi-msg", model="sonnet", mode="agent")
-        session = await manager.launch_agent(config)
-
-        for i in range(3):
-            session.messages.append(Message(role="user", content=f"msg {i}"))
-            session.messages.append(Message(role="assistant", content=f"reply {i}"))
-
-        completed = syncs("session.completed")
-        assert len(completed) == 0, f"session-completed fired {len(completed)} times before close"
-
-        session.status = "completed"
-        await manager.close_session(session.id)
-
-        completed = syncs("session.completed")
-        assert len(completed) == 1, f"expected 1 completed sync, got {len(completed)}"
-
-
-# ---------------------------------------------------------------------------
-# 3. Token + cost capture on close
-# ---------------------------------------------------------------------------
-
-class TestTokenTracking:
-    @pytest.mark.asyncio
-    async def test_tokens_and_cost_in_session_close(self, manager):
-        config = AgentConfig(name="Token Test", model="opus", mode="agent")
-        session = await manager.launch_agent(config)
-
-        session.tokens = {"input": 50000, "output": 15000}
-        session.cost_usd = 0.25
-        session.status = "completed"
-
-        await manager.close_session(session.id)
-
-        s = last_sync("session.completed")
-        assert s["properties"]["tokens"]["input"] == 50000
-        assert s["properties"]["tokens"]["output"] == 15000
-        assert s["properties"]["cost_usd"] == 0.25
+# Session-close cloud sync (the old session.completed snapshot path) was retired in favour of Haik's
+# per-message product-analytics bridge, so its close-fires-once + token-on-close tests were removed.

@@ -1,6 +1,6 @@
 from backend.apps.agents.browser.browser_fast_path import (
-    _normalize_for_classifier,
-    _parse_verdict_and_brief,
+    normalize_for_classifier,
+    parse_verdict_and_brief,
     compose_task,
     dispatch_failed,
     fast_path_eligible,
@@ -30,15 +30,15 @@ def test_non_browsy_or_gated_messages_fall_through():
 
 
 def test_verdict_parsing_is_strict():
-    v, brief = _parse_verdict_and_brief("READ\nENTRY: https://news.ycombinator.com\n1. read top story")
+    v, brief = parse_verdict_and_brief("READ\nENTRY: https://news.ycombinator.com\n1. read top story")
     assert v == "read" and brief.startswith("ENTRY:") and "top story" in brief
-    assert _parse_verdict_and_brief("ACT\nENTRY: https://x.com")[0] == "act"
-    assert _parse_verdict_and_brief("yes") == ("act", "")
-    assert _parse_verdict_and_brief("NO") == ("no", "")
-    assert _parse_verdict_and_brief("Maybe\nENTRY: x") == ("no", "")
-    assert _parse_verdict_and_brief("") == ("no", "")
+    assert parse_verdict_and_brief("ACT\nENTRY: https://x.com")[0] == "act"
+    assert parse_verdict_and_brief("yes") == ("act", "")
+    assert parse_verdict_and_brief("NO") == ("no", "")
+    assert parse_verdict_and_brief("Maybe\nENTRY: x") == ("no", "")
+    assert parse_verdict_and_brief("") == ("no", "")
     long_brief = "ACT\n" + "x" * 2000
-    assert len(_parse_verdict_and_brief(long_brief)[1]) == 700
+    assert len(parse_verdict_and_brief(long_brief)[1]) == 700
 
 
 def test_fast_read_entry_extraction_and_thin_detection():
@@ -62,8 +62,7 @@ def test_compose_task_keeps_user_words_first():
 
 
 def test_dispatch_failure_detection_is_fail_closed():
-    # The result dict's structured `done` is the signal now (set true only when
-    # the sub-agent called Done with success AND the honesty gate agreed).
+    # The result dict's structured `done` is the signal now (set true only when the sub-agent called Done with success AND the honesty gate agreed).
     assert dispatch_failed({})
     assert dispatch_failed(None)
     assert dispatch_failed({"summary": "Error: browser card was deleted"})
@@ -84,14 +83,14 @@ def test_recovery_task_verifies_before_repeating():
 
 def test_text_normalizes_to_message_without_phone_number():
     assert (
-        _normalize_for_classifier("go to maya's linkedin and text her thanks")
+        normalize_for_classifier("go to maya's linkedin and text her thanks")
         == "go to maya's linkedin and message her thanks"
     )
-    assert _normalize_for_classifier("keep texting until he replies").startswith("keep message")
+    assert normalize_for_classifier("keep texting until he replies").startswith("keep message")
     sms = "text 4085551234 saying im running late"
-    assert _normalize_for_classifier(sms) == sms
+    assert normalize_for_classifier(sms) == sms
     count = "count messages containing the exact text r10-os"
-    assert "message r10-os" in _normalize_for_classifier(count)
+    assert "message r10-os" in normalize_for_classifier(count)
 
 
 def test_dispatch_refused_when_no_dashboard_connected(monkeypatch):
@@ -99,10 +98,8 @@ def test_dispatch_refused_when_no_dashboard_connected(monkeypatch):
     from backend.apps.agents.browser.browser_agent import run_browser_agents
     from backend.apps.agents.core import ws_manager as wsm
 
-    # Dispatch now waits briefly for a momentary WS drop to reconnect; with a
-    # genuinely-closed window that wait just elapses and it still refuses without
-    # dispatching an agent or burning a turn. Zero the wait so the test is instant.
-    monkeypatch.setattr(wsm, "_WS_RECONNECT_WAIT_S", 0.0)
+    # Dispatch now waits briefly for a momentary WS drop to reconnect; with a genuinely-closed window that wait just elapses and it still refuses without dispatching an agent or burning a turn. Zero the wait so the test is instant.
+    monkeypatch.setattr(wsm, "P_WS_RECONNECT_WAIT_S", 0.0)
     assert not wsm.ws_manager.global_connections
     results = asyncio.run(run_browser_agents(tasks=[{"task": "go to example.com"}], model="sonnet"))
     assert len(results) == 1
@@ -163,7 +160,7 @@ def test_entry_url_extracted_from_brief():
 
 
 def test_results_url_shapes():
-    from backend.apps.agents.browser.browser_agent import _RESULTS_URL_RE
+    from backend.apps.agents.browser.browser_agent import RESULTS_URL_RE
     hits = [
         "https://www.linkedin.com/search/results/people/?keywords=tyler+chen",
         "https://www.google.com/search?q=anything",
@@ -176,6 +173,6 @@ def test_results_url_shapes():
         "https://www.linkedin.com/messaging/thread/abc123/",
     ]
     for u in hits:
-        assert _RESULTS_URL_RE.search(u), u
+        assert RESULTS_URL_RE.search(u), u
     for u in misses:
-        assert not _RESULTS_URL_RE.search(u), u
+        assert not RESULTS_URL_RE.search(u), u

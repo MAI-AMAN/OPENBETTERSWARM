@@ -10,27 +10,18 @@ import os
 
 import httpx
 
-from .process import NINE_ROUTER_API, NINE_ROUTER_PORT, NINE_ROUTER_V1, cli_auth_headers
-from backend.apps.oauth_state import _pending_oauth, _mark_oauth_completed
+from backend.apps.nine_router.process import NINE_ROUTER_API, NINE_ROUTER_PORT, NINE_ROUTER_V1, cli_auth_headers
+from backend.apps.oauth_state import pending_oauth, mark_oauth_completed
 
 logger = logging.getLogger(__name__)
 
-# OpenAI's Codex OAuth client is registered with a fixed redirect URI
-# `http://localhost:1455/auth/callback` and rejects any other with `unknown_error`.
-# Anthropic and Google's clients accept arbitrary localhost callbacks (we use
-# 9Router's 20128 callback page). For Codex we spawn a one-shot listener on
-# 1455 that serves the same postMessage/BroadcastChannel/localStorage relay so
-# the frontend's existing popup + msgHandler flow works unchanged.
+# OpenAI's Codex OAuth client is registered with a fixed redirect URI `http://localhost:1455/auth/callback` and rejects any other with `unknown_error`. Anthropic and Google's clients accept arbitrary localhost callbacks (we use 9Router's 20128 callback page). For Codex we spawn a one-shot listener on 1455 that serves the same postMessage/BroadcastChannel/localStorage relay so the frontend's existing popup + msgHandler flow works unchanged.
 
-# OpenAI's Codex OAuth client registers BOTH of these loopback redirect ports in its
-# Hydra allow-list (1455 default, 1457 fallback); the official Codex CLI falls back to 1457
-# for this exact "another app holds 1455" case (openai/codex PR #19334). We try them in
-# order so a running Codex CLI / ChatGPT VS Code extension / Cursor sitting on 1455 doesn't
-# block us. OpenAI rejects any port not on this list, so don't add speculative ones.
-_CODEX_CALLBACK_PORTS = (1455, 1457)
-_CODEX_CALLBACK_PORT = _CODEX_CALLBACK_PORTS[0]
-_CODEX_CALLBACK_PATH = "/auth/callback"
-_CODEX_CALLBACK_HTML = b"""<!DOCTYPE html>
+# OpenAI's Codex OAuth client registers BOTH loopback redirect ports in its Hydra allow-list (1455 default, 1457 fallback) and the official Codex CLI falls back to 1457 for the "another app holds 1455" case (openai/codex PR #19334), so we try them in order and reject anything off the list.
+P_CODEX_CALLBACK_PORTS = (1455, 1457)
+P_CODEX_CALLBACK_PORT = P_CODEX_CALLBACK_PORTS[0]
+P_CODEX_CALLBACK_PATH = "/auth/callback"
+P_CODEX_CALLBACK_HTML = b"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Authorization Complete</title>
 <style>body{font-family:-apple-system,system-ui,sans-serif;background:#111;color:#eee;
 text-align:center;padding:60px 20px;margin:0}h1{font-weight:600;margin:0 0 12px}
@@ -65,18 +56,16 @@ p{color:#888;margin:0}</style></head><body>
 </body></html>"""
 
 
-# Tracks the live Codex callback listener so a fresh connect attempt can reclaim port
-# 1455 from a still-bound prior attempt (each lingers up to `timeout`s), instead of
-# failing to bind and leaving OpenAI's redirect with nothing to answer it.
-_codex_listener_server: "asyncio.base_events.Server | None" = None
+# Tracks the live Codex callback listener so a fresh connect can reclaim a port from a still-bound prior attempt instead of failing to bind and leaving OpenAI's redirect unanswered.
+p_codex_listener_server: "asyncio.base_events.Server | None" = None
 
 
-async def _start_codex_callback_listener(timeout: float = 300.0) -> int | None:
+async def p_start_codex_callback_listener(timeout: float = 300.0) -> int | None:
     """Spawn a one-shot HTTP listener on the first free Codex callback port and return it.
 
-    Tries each of _CODEX_CALLBACK_PORTS (1455 then 1457, both on OpenAI's allow-list) and
+    Tries each of P_CODEX_CALLBACK_PORTS (1455 then 1457, both on OpenAI's allow-list) and
     binds the first that's free, returning the bound port so the caller builds the matching
-    redirect_uri. Serves GET /auth/callback with _CODEX_CALLBACK_HTML. After serving the
+    redirect_uri. Serves GET /auth/callback with P_CODEX_CALLBACK_HTML. After serving the
     callback (or after `timeout` seconds with no callback) the listener closes itself in a
     background task. Returns None only when EVERY allow-listed port is held by another app,
     so start_oauth can fail fast with an actionable message instead of a dead-end flow.
@@ -93,7 +82,7 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> int | None:
 
     callback_served = asyncio.Event()
 
-    async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def p_handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         try:
             # Read the request line ("GET /auth/callback?... HTTP/1.1\r\n")
             raw_request_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
@@ -103,18 +92,13 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> int | None:
                 if not line or line in (b"\r\n", b"\n"):
                     break
 
-            # Only respond to the OAuth callback path. Chrome preflights and
-            # favicon fetches get a 404 so they don't trigger the served-event.
+            # Only respond to the OAuth callback path. Chrome preflights and favicon fetches get a 404 so they don't trigger the served-event.
             parts = request_line.split(" ")
             path = parts[1] if len(parts) >= 2 else ""
             method = parts[0] if parts else ""
 
-            if method == "GET" and path.startswith(_CODEX_CALLBACK_PATH):
-                # Parse code/state out of the query string and exchange
-                # server-side before serving the HTML. Duplicate exchanges
-                # are harmless (single-use auth codes fail the second call,
-                # which we swallow) so racing with the frontend's
-                # msgHandler-driven exchange is fine.
+            if method == "GET" and path.startswith(P_CODEX_CALLBACK_PATH):
+                # Parse code/state out of the query string and exchange server-side before serving the HTML. Duplicate exchanges are harmless (single-use auth codes fail the second call, which we swallow) so racing with the frontend's msgHandler-driven exchange is fine.
                 try:
                     from urllib.parse import urlparse, parse_qs
                     parsed = urlparse(path)
@@ -122,7 +106,7 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> int | None:
                     code = (q.get("code") or [""])[0]
                     state = (q.get("state") or [""])[0]
                     if code and state:
-                        pending = _pending_oauth.pop(state, None)
+                        pending = pending_oauth.pop(state, None)
                         if pending:
                             try:
                                 await exchange_oauth(
@@ -132,24 +116,20 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> int | None:
                                     pending["code_verifier"],
                                     state,
                                 )
-                                _mark_oauth_completed(state)
+                                mark_oauth_completed(state)
                                 logger.info(
                                     f"Codex callback: server-side exchange succeeded for state {state[:8]}..."
                                 )
                             except Exception as e:
-                                # Put the pending entry back so the
-                                # frontend's msgHandler retry via
-                                # /agents/subscriptions/exchange still
-                                # has a shot. Safe because we only popped
-                                # it a moment ago.
-                                _pending_oauth[state] = pending
+                                # Put the pending entry back so the frontend's msgHandler retry via /agents/subscriptions/exchange still has a shot. Safe because we only popped it a moment ago.
+                                pending_oauth[state] = pending
                                 logger.debug(
                                     f"Codex callback: server-side exchange failed ({e}); leaving for frontend retry"
                                 )
                 except Exception as e:
                     logger.debug(f"Codex callback listener pre-exchange error: {e}")
 
-                body = _CODEX_CALLBACK_HTML
+                body = P_CODEX_CALLBACK_HTML
                 response = (
                     b"HTTP/1.1 200 OK\r\n"
                     b"Content-Type: text/html; charset=utf-8\r\n"
@@ -177,45 +157,40 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> int | None:
             except Exception:
                 pass
 
-    global _codex_listener_server
-    # A new connect supersedes any abandoned one: close our own still-bound prior
-    # listener first so this attempt can take 1455 instead of colliding with it.
-    if _codex_listener_server is not None:
+    global p_codex_listener_server
+    # A new connect supersedes any abandoned one: close our own still-bound prior listener first so this attempt can take the port instead of colliding.
+    if p_codex_listener_server is not None:
         try:
-            _codex_listener_server.close()
-            await _codex_listener_server.wait_closed()
+            p_codex_listener_server.close()
+            await p_codex_listener_server.wait_closed()
         except Exception:
             pass
-        _codex_listener_server = None
+        p_codex_listener_server = None
 
-    # Try each allow-listed port; the first free one wins. A running Codex CLI / ChatGPT
-    # extension typically holds 1455, so we land on 1457.
+    # Try each allow-listed port; the first free one wins (a running Codex CLI / ChatGPT extension typically holds 1455, so we land on 1457).
     server = None
     bound_port = None
-    for port in _CODEX_CALLBACK_PORTS:
+    for port in P_CODEX_CALLBACK_PORTS:
         try:
-            server = await asyncio.start_server(_handle, "127.0.0.1", port)
+            server = await asyncio.start_server(p_handle, "127.0.0.1", port)
             bound_port = port
             break
         except OSError:
             continue
     if server is None:
-        # Every allow-listed port is held by another app. OpenAI accepts only these two
-        # redirect ports, so we can't pick a third; bail and let the UI tell the user.
-        ports = "/".join(str(p) for p in _CODEX_CALLBACK_PORTS)
+        # Every allow-listed port is held by another app; OpenAI accepts only these two redirect ports so we can't pick a third, bail and let the UI tell the user.
+        ports = "/".join(str(p) for p in P_CODEX_CALLBACK_PORTS)
         logger.warning(
             f"Could not start Codex callback listener: ports {ports} are all in use by "
-            f"another app (Codex CLI / ChatGPT extension). Close it (lsof -i :{_CODEX_CALLBACK_PORTS[0]}) and retry."
+            f"another app (Codex CLI / ChatGPT extension). Close it (lsof -i :{P_CODEX_CALLBACK_PORTS[0]}) and retry."
         )
         return None
-    _codex_listener_server = server
+    p_codex_listener_server = server
 
-    async def _lifecycle():
+    async def p_lifecycle():
         try:
             await asyncio.wait_for(callback_served.wait(), timeout=timeout)
-            # Give the served HTML a moment to run its JS (postMessage +
-            # window.close) before we close the socket. Chromium closes
-            # the tab on window.close() but the JS needs to run first.
+            # Give the served HTML a moment to run its JS (postMessage + window.close) before we close the socket. Chromium closes the tab on window.close() but the JS needs to run first.
             await asyncio.sleep(2.0)
         except asyncio.TimeoutError:
             logger.info(f"Codex callback listener timed out after {timeout}s")
@@ -227,37 +202,24 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> int | None:
                 await server.wait_closed()
             except Exception:
                 pass
-            global _codex_listener_server
-            if _codex_listener_server is server:
-                _codex_listener_server = None
+            global p_codex_listener_server
+            if p_codex_listener_server is server:
+                p_codex_listener_server = None
 
-    asyncio.create_task(_lifecycle())
-    logger.info(f"Started Codex callback listener on http://localhost:{bound_port}{_CODEX_CALLBACK_PATH}")
+    asyncio.create_task(p_lifecycle())
+    logger.info(f"Started Codex callback listener on http://localhost:{bound_port}{P_CODEX_CALLBACK_PATH}")
     return bound_port
 
 
-# Providers whose OAuth flow MUST run in the user's real browser via
-# shell.openExternal, not the in-Electron window.open popup:
-# - gemini-cli, antigravity: Google's Embedded WebView Restrictions policy uses
-#   JS-fingerprint detection that no UA spoof defeats. RFC 8252 and Google's
-#   own Desktop-app OAuth guidance both prescribe the system browser.
-# - codex: auth.openai.com renders blank in our popup on some machines (newer
-#   embed detection + regional checks); system browser surfaces the real error.
-# - claude: email magic-link opens in the user's default browser, which is a
-#   different cookie jar from the embedded popup, so the popup can never receive
-#   the auth. Forcing the OAuth flow into the system browser keeps everything
-#   in one cookie jar.
-# The callback for gemini-cli/antigravity lands on /api/subscriptions/callback
-# and runs the exchange server-side; codex uses its fixed 1455 listener; claude
-# is special-cased in _callback_uri_for_provider below.
-_EXTERNAL_BROWSER_PROVIDERS: set[str] = {"gemini-cli", "antigravity", "codex", "claude"}
+# Providers whose OAuth flow MUST run in the user's real browser via shell.openExternal, not the in-Electron window.open popup: - gemini-cli, antigravity: Google's Embedded WebView Restrictions policy uses JS-fingerprint detection that no UA spoof defeats. RFC 8252 and Google's own Desktop-app OAuth guidance both prescribe the system browser. - codex: auth.openai.com renders blank in our popup on some machines (newer embed detection + regional checks); system browser surfaces the real error. - claude: email magic-link opens in the user's default browser, which is a different cookie jar from the embedded popup, so the popup can never receive the auth. Forcing the OAuth flow into the system browser keeps everything in one cookie jar. The callback for gemini-cli/antigravity lands on /api/subscriptions/callback and runs the exchange server-side; codex uses its fixed 1455 listener; claude is special-cased in p_callback_uri_for_provider below.
+P_EXTERNAL_BROWSER_PROVIDERS: set[str] = {"gemini-cli", "antigravity", "codex", "claude"}
 
 
-def _should_use_external_browser(provider: str) -> bool:
-    return provider in _EXTERNAL_BROWSER_PROVIDERS
+def p_should_use_external_browser(provider: str) -> bool:
+    return provider in P_EXTERNAL_BROWSER_PROVIDERS
 
 
-def _backend_port() -> int:
+def p_backend_port() -> int:
     """Best-effort lookup of the OpenSwarm backend HTTP port.
 
     Falls back to 8324 (the default in backend/main.py) if OPENSWARM_PORT
@@ -271,27 +233,26 @@ def _backend_port() -> int:
         return 8324
 
 
-def _callback_uri_for_provider(provider: str) -> str:
+def p_callback_uri_for_provider(provider: str) -> str:
     """Return the redirect URI to pass to 9Router's authorize endpoint.
 
     Most providers accept 9Router's built-in callback page at port 20128.
     Special cases:
     - Codex/OpenAI's OAuth client is bound to a fixed
       http://localhost:1455/auth/callback URI; handled by
-      _start_codex_callback_listener above.
+      p_start_codex_callback_listener above.
     - Gemini/Google's OAuth consent page rejects embedded browsers, so we
       route the callback through OpenSwarm's backend endpoint at
       /api/subscriptions/callback (backend/main.py) which runs the
       exchange itself.
     """
     if provider == "codex":
-        return f"http://localhost:{_CODEX_CALLBACK_PORT}{_CODEX_CALLBACK_PATH}"
-    # Anthropic's OAuth client only whitelists localhost:20128/callback;
-    # 9router_gpt5_patch.js 302-rewrites the hit to the backend handler.
+        return f"http://localhost:{P_CODEX_CALLBACK_PORT}{P_CODEX_CALLBACK_PATH}"
+    # Anthropic's OAuth client only whitelists localhost:20128/callback; 9router_gpt5_patch.js 302-rewrites the hit to the backend handler.
     if provider == "claude":
         return f"http://localhost:{NINE_ROUTER_PORT}/callback"
-    if provider in _EXTERNAL_BROWSER_PROVIDERS:
-        return f"http://localhost:{_backend_port()}/api/subscriptions/callback"
+    if provider in P_EXTERNAL_BROWSER_PROVIDERS:
+        return f"http://localhost:{p_backend_port()}/api/subscriptions/callback"
     return f"http://localhost:{NINE_ROUTER_PORT}/callback"
 
 
@@ -317,20 +278,17 @@ async def start_oauth(provider: str) -> dict:
         except Exception:
             pass
 
-        callback_url = _callback_uri_for_provider(provider)
+        callback_url = p_callback_uri_for_provider(provider)
         if provider == "codex":
-            # Codex's redirect must be one of OpenAI's allow-listed loopback ports. Bind the
-            # first free one (1455, else 1457) and use ITS redirect_uri so authorize + token
-            # exchange agree. Only fail if BOTH are held by another app (Codex CLI / ChatGPT
-            # extension), in which case the auth would redirect into that app, not us.
-            bound_port = await _start_codex_callback_listener()
+            # Codex's redirect must be an OpenAI allow-listed loopback port; bind the first free one (1455 else 1457) and use ITS redirect_uri so authorize + token exchange agree.
+            bound_port = await p_start_codex_callback_listener()
             if bound_port is None:
                 raise RuntimeError(
                     "Can't start the ChatGPT login: the Codex login ports (1455 and 1457) are "
                     "both in use by another app (the Codex CLI or its VS Code extension). "
                     "Quit that app, then try again."
                 )
-            callback_url = f"http://localhost:{bound_port}{_CODEX_CALLBACK_PATH}"
+            callback_url = f"http://localhost:{bound_port}{P_CODEX_CALLBACK_PATH}"
 
         r = await client.get(
             f"{NINE_ROUTER_API}/oauth/{provider}/authorize",
@@ -344,7 +302,7 @@ async def start_oauth(provider: str) -> dict:
             "code_verifier": data.get("codeVerifier", ""),
             "state": data.get("state", ""),
             "redirect_uri": callback_url,
-            "use_external_browser": _should_use_external_browser(provider),
+            "use_external_browser": p_should_use_external_browser(provider),
         }
 
 
