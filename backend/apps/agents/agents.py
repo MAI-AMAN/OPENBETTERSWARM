@@ -810,6 +810,16 @@ async def list_models():
         if entries:
             result[cp_name] = entries
 
+    # Free lane: nothing of the user's own is connected, so surface the funded Haiku as the free-trial face. The picker shows "Claude Haiku" and the session/default reconcile to it, instead of the picker going empty and the model staying stuck on a dead last-used id (active = it runs; spent = the send is gated by the out-of-runs UI).
+    if not result:
+        haiku_entry = next((m for m in anthropic_models if m.get("value") == "haiku"), None)
+        if haiku_entry:
+            haiku_rows = p_serialize([haiku_entry])
+            for hr in haiku_rows:
+                hr["is_free"] = True
+                hr["billing_kind"] = "free"
+            result["Anthropic"] = haiku_rows
+
     return {"models": result, "notes": notes}
 
 
