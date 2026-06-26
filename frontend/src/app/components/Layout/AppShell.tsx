@@ -336,15 +336,14 @@ const AppShell: React.FC = () => {
     return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, []);
 
-  // Cmd/Ctrl+R: main neutralizes the default-menu reload (which would always reload the whole app) and hands us the decision. Reload the browser you last interacted with; if that wasn't a live browser, reload the app, exactly as before.
+  // Cmd/Ctrl+R: main neutralizes the default-menu reload and hands us the decision. Reload the browser you last interacted with; if your last click was NOT in a live browser, do nothing, a real browser reloads the active tab, not the whole app shell, and reloading the renderer here would destroy every browser card's webContents and wipe its sessionStorage (silently logging you out of sites like Discord). View > Reload still reloads the app on purpose.
   useEffect(() => {
     const w = window as any;
     if (!w.openswarm?.onReloadShortcut) return;
     return w.openswarm.onReloadShortcut(() => {
       const id = getLastInteractedBrowser();
       const wv = id ? getWebview(id) : undefined;
-      if (wv) { try { wv.reload(); return; } catch (_e) { /* torn-down webview; fall through to app reload */ } }
-      window.location.reload();
+      if (wv) { try { wv.reload(); } catch (_e) { /* torn-down webview; ignore */ } }
     });
   }, []);
 
