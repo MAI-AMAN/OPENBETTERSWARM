@@ -2105,6 +2105,7 @@ app.on('web-contents-created', (_event, contents) => {
           var registration = null;
           var AUTOPILOT = '__autopilot__';
           var autopilotRAF = 0;
+          var autopilotFrames = 0;
           var autopilotHint = {};
           function resolveControls() {
             if (!registration) return [];
@@ -2114,8 +2115,10 @@ app.on('web-contents-created', (_event, contents) => {
           function autopilotRunning() { return autopilotRAF !== 0; }
           function startAutopilot() {
             if (autopilotRAF || !registration || typeof registration.policy !== 'function') return;
+            autopilotFrames = 0;
             var step = function() {
               autopilotRAF = requestAnimationFrame(step);
+              autopilotFrames++;
               try {
                 var name = registration && registration.policy ? registration.policy(autopilotHint) : null;
                 if (name) bridge.invoke(name);
@@ -2128,7 +2131,7 @@ app.on('web-contents-created', (_event, contents) => {
           }
           var bridge = {
             __openswarm: true, __ready: false, __rev: 0,
-            register: function(api) { stopAutopilot(); autopilotHint = {}; registration = api; bridge.__ready = true; bridge.__rev += 1; },
+            register: function(api) { stopAutopilot(); autopilotHint = {}; autopilotFrames = 0; registration = api; bridge.__ready = true; bridge.__rev += 1; },
             refresh: function() { bridge.__rev += 1; },
             describe: function() {
               if (!bridge.__ready || !registration) return { __ready: false, __rev: bridge.__rev };
@@ -2144,7 +2147,7 @@ app.on('web-contents-created', (_event, contents) => {
               try { state = registration.getState ? registration.getState() : {}; }
               catch (e) { return { __error__: String((e && e.message) || e), __rev: bridge.__rev }; }
               var out = (state && typeof state === 'object' && !Array.isArray(state)) ? Object.assign({}, state) : { value: state };
-              if (typeof registration.policy === 'function') { out.__autopilot = autopilotRunning(); out.__hint = autopilotHint; }
+              if (typeof registration.policy === 'function') { out.__autopilot = autopilotRunning(); out.__autopilotFrames = autopilotFrames; out.__hint = autopilotHint; }
               out.__rev = bridge.__rev;
               return out;
             },

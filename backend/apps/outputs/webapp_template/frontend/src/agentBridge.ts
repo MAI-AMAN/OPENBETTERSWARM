@@ -108,6 +108,7 @@ const bridge: Bridge = {
   register(api: AgentRegistration) {
     stopAutopilot(); // a fresh registration owns its own loop; drop any prior one
     autopilotHint = {};
+    autopilotFrames = 0;
     registration = api;
     bridge.__ready = true;
     bridge.__rev += 1;
@@ -160,6 +161,7 @@ const bridge: Bridge = {
     // and the knobs in effect; only surfaced for apps that registered a policy.
     if (typeof registration.policy === 'function') {
       out.__autopilot = autopilotRunning();
+      out.__autopilotFrames = autopilotFrames;
       out.__hint = autopilotHint;
     }
     out.__rev = bridge.__rev;
