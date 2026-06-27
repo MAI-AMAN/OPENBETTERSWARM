@@ -3,6 +3,8 @@ import { report } from '@/shared/serviceClient';
 import { store } from '@/shared/state/store';
 import { useAppDispatch } from '@/shared/hooks';
 import {
+  createDraftSession,
+  removeDraftSession,
   expandSession,
   launchAndSendFirstMessage,
   generateTitle,
@@ -10,6 +12,7 @@ import {
 } from '@/shared/state/agentsSlice';
 import {
   placeCard,
+  removeCard,
   setGlowingAgentCard,
   setGlowingBrowserCards,
   DEFAULT_CARD_W,
@@ -132,25 +135,49 @@ export function useAgentSpawn({
       setToolbarOpen(false);
       report('dashboard', 'agent_created', { mode, model, has_images: !!images?.length, has_context: !!contextPaths?.length, has_browser: !!selectedBrowserIds?.length });
 
-      const draftId = `draft-${Date.now().toString(36)}`;
-
+      // Toolbar position in canvas coords drives the spawn-from-toolbar grow animation.
+      let origin: SpawnOrigin | null = null;
       const toolbarEl = toolbarRef.current;
       const vpEl = viewportRef.current;
       if (toolbarEl && vpEl) {
         const tr = toolbarEl.getBoundingClientRect();
         const vr = vpEl.getBoundingClientRect();
-        const toolbarCenterX = tr.left + tr.width / 2;
-        const toolbarTopY = tr.top;
         const { panX, panY, zoom } = canvasStateRef.current!;
-        spawnOriginsRef.current![draftId] = {
-          x: (toolbarCenterX - vr.left - panX) / zoom,
-          y: (toolbarTopY - vr.top - panY) / zoom,
+        origin = {
+          x: (tr.left + tr.width / 2 - vr.left - panX) / zoom,
+          y: (tr.top - vr.top - panY) / zoom,
         };
       }
+
+      // Single selected browser: the chat's ideal home is just left of that browser card.
+      const browserAnchor =
+        selectedBrowserIds?.length === 1
+          ? store.getState().dashboardLayout.browserCards[selectedBrowserIds[0]]
+          : undefined;
 
       const config: AgentConfig = { name: 'New chat', model, mode, dashboard_id: dashboardId };
       // Editing an existing app: bind the launch to it so the backend edits in place instead of seeding a duplicate empty app (App Builder mode only).
       if (selectedAppIds?.length) config.selected_app_output_ids = selectedAppIds;
+
+      // Optimistic spawn: materialize, expand, and focus the card NOW so none of it waits on the three launch round-trips. Without this the card only appears (collapsed, unfocused) when the WS 'running' event lands mid-launch, then expand+focus jump in late on fulfilled. The draft id is rekeyed in place to the server id on fulfilled, so no visual hop.
+      const draftId = dispatch(createDraftSession({ mode, model, dashboardId, setActive: false })).payload.draftId;
+      if (origin) spawnOriginsRef.current![draftId] = origin;
+
+      const cardHeight = expandNewChats ? EXPANDED_CARD_MIN_H : DEFAULT_CARD_H;
+      const anchorX = browserAnchor ? browserAnchor.x - DEFAULT_CARD_W - GRID_GAP * 12 : origin?.x ?? 0;
+      const anchorY = browserAnchor ? browserAnchor.y : origin?.y ?? 0;
+      dispatch(placeCard({ sessionId: draftId, x: anchorX, y: anchorY, width: DEFAULT_CARD_W, height: cardHeight, expandedSessionIds }));
+      if (expandNewChats) {
+        dispatch(expandSession(draftId));
+        setAutoFocusSessionId(draftId);
+      } else {
+        setPendingSelectSessionId(draftId);
+      }
+      const placed = store.getState().dashboardLayout.cards[draftId];
+      if (placed) {
+        canvasActions.fitToCards([{ x: placed.x, y: placed.y, width: placed.width, height: cardHeight }], 1.15, true);
+        handleHighlightCard(draftId);
+      }
 
       dispatch(
         launchAndSendFirstMessage({
@@ -173,39 +200,10 @@ export function useAgentSpawn({
           dispatch(generateTitle({ sessionId: realId, prompt }));
           if (selectedBrowserIds?.length) {
             dispatch(setGlowingBrowserCards({ browserIds: selectedBrowserIds, sessionId: realId, label: 'Use Browser' }));
-
-            if (selectedBrowserIds.length === 1) {
-              const bc = store.getState().dashboardLayout.browserCards[selectedBrowserIds[0]];
-              if (bc) {
-                // Use placeCard (collision-aware) instead of setCardPosition (blind setter). The "left of the browser" anchor is the IDEAL spot, but if it's already taken by an existing chat (e.g. step 3's YouTube agent that's still on canvas when step 5 creates a new chat for the same browser), placeCard cascades to the nearest free cell instead of stacking on top.
-                dispatch(placeCard({
-                  sessionId: realId,
-                  x: bc.x - DEFAULT_CARD_W - GRID_GAP * 12,
-                  y: bc.y,
-                  width: DEFAULT_CARD_W,
-                  height: DEFAULT_CARD_H,
-                  expandedSessionIds,
-                }));
-              }
-            }
           }
-          spawnOriginsRef.current![realId] = spawnOriginsRef.current![draftId];
-          delete spawnOriginsRef.current![draftId];
-
-          if (expandNewChats) {
-            setAutoFocusSessionId(realId);
-            dispatch(expandSession(realId));
-          } else {
-            setPendingSelectSessionId(realId);
-          }
-
-          setTimeout(() => {
-            const card = store.getState().dashboardLayout.cards[realId];
-            if (card) {
-              canvasActions.fitToCards([{ x: card.x, y: card.y, width: card.width, height: card.height }], 1.15, true);
-              handleHighlightCard(realId);
-            }
-          }, 200);
+          // Re-point focus/selection at the rekeyed real card; the draft id is gone after the in-place swap.
+          if (expandNewChats) setAutoFocusSessionId(realId);
+          else setPendingSelectSessionId(realId);
 
           if (dashboardId) {
             const currentSessions = store.getState().agents.sessions;
@@ -223,11 +221,14 @@ export function useAgentSpawn({
             }
           }
         } else {
+          // Launch failed: tear down the optimistic draft so no orphan card lingers.
+          dispatch(removeCard(draftId));
+          dispatch(removeDraftSession(draftId));
           delete spawnOriginsRef.current![draftId];
         }
       });
     },
-    [viewportRef, canvasActions, dispatch, dashboardId, expandNewChats, handleHighlightCard],
+    [viewportRef, canvasActions, dispatch, dashboardId, expandNewChats, expandedSessionIds, handleHighlightCard, setToolbarOpen, setAutoFocusSessionId, setPendingSelectSessionId, toolbarRef, canvasStateRef, spawnOriginsRef],
   );
 
   return {
