@@ -1713,6 +1713,16 @@ app.whenReady().then(async () => {
   // Off-window mouse-release crash dodge (macOS). Safe to call before windows exist.
   installMacMouseClamp();
 
+  // PASSKEY SPIKE (macOS only): turn on the Secure-Enclave/Touch ID WebAuthn authenticator that Electron 42 added. Without this, isUserVerifyingPlatformAuthenticatorAvailable() is hardwired false (why the old reject-shim existed). keychainAccessGroup MUST match the keychain-access-groups entitlement (Y26NUZH4NG.<bundle>.webauthn) or this throws. Windows has no equivalent, so the reject-shim still runs there.
+  if (process.platform === 'darwin' && typeof app.configureWebAuthn === 'function') {
+    try {
+      app.configureWebAuthn({ touchID: { keychainAccessGroup: 'Y26NUZH4NG.com.clusterlabs.openswarm.webauthn', promptReason: 'sign in to $1' } });
+      console.log('[passkey] configureWebAuthn(touchID) enabled');
+    } catch (e) {
+      console.warn('[passkey] configureWebAuthn failed (entitlement missing? unsigned dev build?):', e && e.message);
+    }
+  }
+
   // Cold-launch: if the OS opened us via openswarm:// (Windows/Linux it's
   // in argv; macOS fires open-url AFTER whenReady which we handle above)
   // route through forwardDeepLinkToRenderer so the URL gets stashed under
@@ -1779,6 +1789,17 @@ app.whenReady().then(async () => {
   };
   configureBrowsingSession(session.defaultSession);
   configureBrowsingSession(session.fromPartition(BROWSER_PARTITION));
+
+  // PASSKEY SPIKE: when a site offers several discoverable passkeys, Electron fires this so we pick one; without a handler the WebAuthn flow stalls. For the spike just take the first; a real impl would surface a picker. macOS-only event (no-op elsewhere).
+  for (const ses of [session.defaultSession, session.fromPartition(BROWSER_PARTITION)]) {
+    try {
+      ses.on('select-webauthn-account', (event, accounts, callback) => {
+        console.log('[passkey] select-webauthn-account, n=', accounts && accounts.length);
+        event.preventDefault();
+        callback((accounts && accounts[0] && accounts[0].accountId) || null);
+      });
+    } catch (_) {}
+  }
 
   // Add a "Google Chrome" brand to the browser partition's sec-ch-ua request hints so they match the navigator.userAgentData patch injected on dom-ready and the spoofed Chrome UA string; a Chrome UA paired with Chromium-only hints is the embedded-app tell aggressive anti-bot (Cloudflare) flags on a real human. Scoped to the browser partition, the app's own file:// + localhost traffic is untouched.
   const addGoogleChromeBrand = (value) => {
@@ -2345,7 +2366,8 @@ app.on('web-contents-created', (_event, contents) => {
     // navigator.credentials so passkey calls reject cleanly and post a
     // tagged message back; webview-preload.js listens and forwards to the
     // embedder, which surfaces the "Passkeys aren't supported" dialog.
-    contents.on('dom-ready', () => {
+    // PASSKEY SPIKE: Windows ONLY now. On macOS the real Secure-Enclave authenticator (app.configureWebAuthn above) handles passkeys, so rejecting would defeat the whole point; Windows still has no platform authenticator in Electron, so the reject-shim stays there.
+    if (process.platform === 'win32') contents.on('dom-ready', () => {
       contents.executeJavaScript(`
         (function() {
           if (window.__openswarm_passkey_shim__) return;

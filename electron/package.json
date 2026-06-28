@@ -24,7 +24,7 @@
   "devDependencies": {
     "@electron/notarize": "3.1.1",
     "cross-env": "7.0.3",
-    "electron": "github:castlabs/electron-releases#v42.0.0+wvcus",
+    "electron": "github:castlabs/electron-releases#v42.3.3+wvcus",
     "electron-builder": "^26.8.1",
     "electron-builder-squirrel-windows": "^26.8.1"
   },
@@ -58,8 +58,12 @@
       "category": "public.app-category.developer-tools",
       "hardenedRuntime": true,
       "notarize": false,
+      "extendInfo": {
+        "NSFaceIDUsageDescription": "OpenSwarm uses Touch ID to sign you in to websites with passkeys."
+      },
+      "provisioningProfile": "build/embedded.provisionprofile",
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extraResources": [
         {
           "from": "build-staging/mouseclamp/${arch}",

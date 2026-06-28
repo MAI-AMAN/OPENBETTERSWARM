@@ -5,9 +5,10 @@
 set -euo pipefail
 
 ARCH="${1:?usage: build-mouseclamp.sh <arm64|x64>}"
-ELECTRON_TARGET="42.0.0"
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"   # electron/
+# Derive the node-gyp header target from the actually-installed electron so a version bump (e.g. 42.0.0 -> 42.3.3) is auto-tracked instead of silently building against stale headers. Strip any +wvcus suffix; node-gyp wants a plain semver.
+ELECTRON_TARGET="$(node -p "require('$HERE/node_modules/electron/package.json').version.split('+')[0]" 2>/dev/null || echo '42.3.3')"
 SRC="$HERE/native/mouseclamp"
 OUT="$HERE/build-staging/mouseclamp/$ARCH"
 NODE_GYP="$HERE/node_modules/.bin/node-gyp"

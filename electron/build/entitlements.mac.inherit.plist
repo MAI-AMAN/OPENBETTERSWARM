@@ -16,10 +16,5 @@
     <true/>
     <key>com.apple.security.inherit</key>
     <true/>
-    <!-- Secure-Enclave WebAuthn credential storage (Touch ID passkeys). Authorized by the embedded Developer ID provisioning profile (Y26NUZH4NG.* wildcard); must match the group passed to app.configureWebAuthn. Main app only, NOT the helper-inherit file. -->
-    <key>keychain-access-groups</key>
-    <array>
-        <string>Y26NUZH4NG.com.clusterlabs.openswarm.webauthn</string>
-    </array>
 </dict>
 </plist>
