@@ -1553,6 +1553,10 @@ const dashboardLayoutSlice = createSlice({
           delete state.cards[draftId];
           state.cards[session.id] = { ...card, session_id: session.id, zOrder: state.nextZOrder++ };
         }
+        // Carry an optimistic browser tether from the draft id to the real session id, in place (no flicker, no stale draft endpoint).
+        for (const entry of Object.values(state.glowingBrowserCards)) {
+          if (entry.sourceId === draftId) entry.sourceId = session.id;
+        }
       });
   },
 });

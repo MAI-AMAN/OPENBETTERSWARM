@@ -15,6 +15,7 @@ import {
   removeCard,
   setGlowingAgentCard,
   setGlowingBrowserCards,
+  clearGlowingBrowserCards,
   DEFAULT_CARD_W,
   DEFAULT_CARD_H,
   EXPANDED_CARD_MIN_H,
@@ -173,9 +174,22 @@ export function useAgentSpawn({
       } else {
         setPendingSelectSessionId(draftId);
       }
+      // Tether the chat to the browser(s) it'll drive NOW so the arrow doesn't pop in after the launch round-trips. Keyed on the draft id; the fulfilled rekey carries it to the real session id in place.
+      if (selectedBrowserIds?.length) {
+        dispatch(setGlowingBrowserCards({ browserIds: selectedBrowserIds, sessionId: draftId, label: 'Use Browser' }));
+      }
       const placed = store.getState().dashboardLayout.cards[draftId];
       if (placed) {
-        canvasActions.fitToCards([{ x: placed.x, y: placed.y, width: placed.width, height: cardHeight }], 1.15, true);
+        // Frame the chat plus any browser it's attached to, so the tether connection is visible from the first frame.
+        const rects = [{ x: placed.x, y: placed.y, width: placed.width, height: cardHeight }];
+        if (selectedBrowserIds?.length) {
+          const bcards = store.getState().dashboardLayout.browserCards;
+          for (const bid of selectedBrowserIds) {
+            const bc = bcards[bid];
+            if (bc) rects.push({ x: bc.x, y: bc.y, width: bc.width, height: bc.height });
+          }
+        }
+        canvasActions.fitToCards(rects, 1.15, true);
         handleHighlightCard(draftId);
       }
 
@@ -198,10 +212,7 @@ export function useAgentSpawn({
         if (launchAndSendFirstMessage.fulfilled.match(action)) {
           const realId = action.payload.session.id;
           dispatch(generateTitle({ sessionId: realId, prompt }));
-          if (selectedBrowserIds?.length) {
-            dispatch(setGlowingBrowserCards({ browserIds: selectedBrowserIds, sessionId: realId, label: 'Use Browser' }));
-          }
-          // Re-point focus/selection at the rekeyed real card; the draft id is gone after the in-place swap.
+          // Re-point focus/selection at the rekeyed real card; the draft id is gone after the in-place swap. The browser tether rekeys with the card in the dashboardLayout extraReducer.
           if (expandNewChats) setAutoFocusSessionId(realId);
           else setPendingSelectSessionId(realId);
 
@@ -221,9 +232,10 @@ export function useAgentSpawn({
             }
           }
         } else {
-          // Launch failed: tear down the optimistic draft so no orphan card lingers.
+          // Launch failed: tear down the optimistic draft (card + tether) so nothing orphaned lingers.
           dispatch(removeCard(draftId));
           dispatch(removeDraftSession(draftId));
+          if (selectedBrowserIds?.length) dispatch(clearGlowingBrowserCards(draftId));
           delete spawnOriginsRef.current![draftId];
         }
       });
