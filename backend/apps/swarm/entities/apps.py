@@ -40,7 +40,8 @@ class AppExportable:
             "description": self.output.description,
             "icon": self.output.icon,
             "input_schema": self.output.input_schema,
-            "files": self.output.files,  # flat-app inline source; webapp apps leave this empty
+            # With a workspace, disk is the source and files() ships it; carrying output.files too snaps every edited file back to its creation-time v1 on import (new files survive, edits look reverted). Only true flat apps (no workspace) still need the inline copy.
+            "files": self.output.files if not self.output.workspace_id else {},
         }
 
     def files(self) -> dict[str, bytes]:
