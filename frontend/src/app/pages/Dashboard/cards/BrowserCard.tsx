@@ -244,6 +244,23 @@ const BrowserCard: React.FC<Props> = ({
   const webviewMap = useRef<Map<string, WebviewElement>>(new Map());
   const initializedTabs = useRef(new Set<string>());
   const tabBarRef = useRef<HTMLDivElement>(null);
+  // Some pages (Zillow's map) rewrite their own URL many times a second, across did-navigate-in-page AND did-stop-loading; throttle the persisted URL mirror so each tick can't fan out to a full dashboard save + webview suspend re-eval. Leading edge keeps a real navigation's URL immediate.
+  const urlChurnThrottle = useRef<Map<string, { lastAt: number; timer: ReturnType<typeof setTimeout> | null }>>(new Map());
+  const throttleUrlMirror = useCallback((tabId: string, run: () => void) => {
+    const URL_CHURN_MS = 1500;
+    const m = urlChurnThrottle.current;
+    let entry = m.get(tabId);
+    if (!entry) { entry = { lastAt: 0, timer: null }; m.set(tabId, entry); }
+    const e = entry;
+    const since = Date.now() - e.lastAt;
+    if (since >= URL_CHURN_MS) {
+      if (e.timer) { clearTimeout(e.timer); e.timer = null; }
+      e.lastAt = Date.now();
+      run();
+    } else if (!e.timer) {
+      e.timer = setTimeout(() => { e.lastAt = Date.now(); e.timer = null; run(); }, URL_CHURN_MS - since);
+    }
+  }, []);
 
   useEffect(() => {
     setRegistryActiveTab(browserId, activeTabId);
@@ -302,13 +319,13 @@ const BrowserCard: React.FC<Props> = ({
         cleanups.push(() => wv.removeEventListener('dom-ready', doLoad));
       }
 
+      const mirrorUrl = () => dispatch(updateBrowserTabUrl({ browserId, tabId, url: wv.getURL() }));
       const onNavigate = () => {
-        const newUrl = wv.getURL();
-        dispatch(updateBrowserTabUrl({ browserId, tabId, url: newUrl }));
         updateTabLocal(tabId, {
           canGoBack: wv.canGoBack(),
           canGoForward: wv.canGoForward(),
         });
+        throttleUrlMirror(tabId, mirrorUrl);
       };
 
       const onIpcMessage = (e: any) => {
@@ -412,12 +429,14 @@ const BrowserCard: React.FC<Props> = ({
         wv.removeEventListener('new-window', onNewWindow as any);
         wv.removeEventListener('render-process-gone', onProcessGone as any);
         wv.removeEventListener('crashed', onProcessGone as any);
+        const churn = urlChurnThrottle.current.get(tabId);
+        if (churn?.timer) { clearTimeout(churn.timer); churn.timer = null; }
       });
     }
 
     return () => cleanups.forEach((fn) => fn());
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabIdKey, browserId, dispatch, updateTabLocal, suspendedSnap]);
+  }, [tabIdKey, browserId, dispatch, updateTabLocal, suspendedSnap, throttleUrlMirror]);
 
   const navigate = useCallback((targetUrl: string) => {
     const finalUrl = resolveInput(targetUrl);
