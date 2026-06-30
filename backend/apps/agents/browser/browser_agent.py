@@ -151,22 +151,6 @@ def p_app_output_id(browser_id: str) -> str | None:
     return browser_id[4:] if browser_id.startswith("app:") else None
 
 
-def p_app_workspace_dir(browser_id: str) -> str | None:
-    """Resolve the on-disk workspace folder for an `app:<output_id>` target."""
-    oid = p_app_output_id(browser_id)
-    if not oid:
-        return None
-    try:
-        from backend.apps.outputs.workspace_io import load_output
-        from backend.config.paths import OUTPUTS_WORKSPACE_DIR
-        out = load_output(oid)
-        if not out or not getattr(out, "workspace_id", None):
-            return None
-        return os.path.join(OUTPUTS_WORKSPACE_DIR, out.workspace_id)
-    except Exception:
-        return None
-
-
 def render_app_controls(describe_value: object) -> tuple[str, str] | None:
     """From a decoded describe() value build (rules_md, controls_md). Returns
     None when the value is not a ready, usable describe."""
@@ -192,29 +176,6 @@ def render_app_controls(describe_value: object) -> tuple[str, str] | None:
     controls_md = "\n".join(lines) + "\n"
     rules_md = (rules.strip() + "\n") if rules.strip() else ""
     return rules_md, controls_md
-
-
-def p_persist_app_controls(browser_id: str, describe_value: object) -> None:
-    """Cache rules.md + controls.md into the app workspace so the agent reads them
-    up front and only re-describes when controls change. Best-effort; written
-    under .openswarm/ so they stay out of the app's own file tree."""
-    rendered = render_app_controls(describe_value)
-    if not rendered:
-        return
-    folder = p_app_workspace_dir(browser_id)
-    if not folder or not os.path.isdir(folder):
-        return
-    rules_md, controls_md = rendered
-    try:
-        cache_dir = os.path.join(folder, ".openswarm")
-        os.makedirs(cache_dir, exist_ok=True)
-        with open(os.path.join(cache_dir, "controls.md"), "w", encoding="utf-8") as f:
-            f.write(controls_md)
-        if rules_md:
-            with open(os.path.join(cache_dir, "rules.md"), "w", encoding="utf-8") as f:
-                f.write(rules_md)
-    except Exception:
-        logger.debug("[app-agent] failed to persist controls cache", exc_info=True)
 
 
 # Single-tool names -> the sub-action type they map to, so one summarizer covers
@@ -286,10 +247,6 @@ async def execute_browser_tool(
     tool_name: str, tool_input: dict, browser_id: str, tab_id: str = "",
 ) -> dict:
     """Execute a browser tool via ws_manager directly (no MCP/HTTP round-trip)."""
-    # [app-agent] step trace: only for app targets / bridge tools so normal
-    # browser-agent runs stay quiet. Greppable prefix; remove when done.
-    p_trace = browser_id.startswith("app:") or tool_name in APP_BRIDGE_TOOLS
-
     # One greppable line naming the actual buttons/keys/selectors this call drives,
     # so a run reads as "key:ArrowRight x5" rather than an opaque tool name. Fires
     # for action tools only (reads stay quiet) and ungated so web runs get it too.
@@ -306,12 +263,7 @@ async def execute_browser_tool(
 
         async def p_eval_once() -> dict:
             rid = uuid4().hex
-            if p_trace:
-                logger.info(f"[app-agent] DISPATCH {tool_name} -> {browser_id} (req {rid[:8]}) js={expr[:120]}")
-            r = await ws_manager.send_browser_command(rid, action, browser_id, params, tab_id=tab_id)
-            if p_trace:
-                logger.info(f"[app-agent] RESULT   {tool_name} <- {browser_id}: {json.dumps(r)[:300]}")
-            return r
+            return await ws_manager.send_browser_command(rid, action, browser_id, params, tab_id=tab_id)
 
         result = await p_eval_once()
         # Reads poll for the bridge to come up (app still mounting on turn 1).
@@ -334,8 +286,6 @@ async def execute_browser_tool(
                 p_bridge_known_absent.discard(browser_id)
             else:
                 p_bridge_known_absent.add(browser_id)
-        if tool_name == "AppDescribe":
-            p_persist_app_controls(browser_id, parse_bridge_result(result))
         return result
 
     action = ACTION_MAP.get(tool_name)
@@ -344,13 +294,9 @@ async def execute_browser_tool(
 
     params = {k: v for k, v in tool_input.items()}
     request_id = uuid4().hex
-    if p_trace:
-        logger.info(f"[app-agent] DISPATCH {tool_name}/{action} -> {browser_id} (req {request_id[:8]})")
     result = await ws_manager.send_browser_command(
         request_id, action, browser_id, params, tab_id=tab_id,
     )
-    if p_trace:
-        logger.info(f"[app-agent] RESULT   {tool_name} <- {browser_id}: {json.dumps(result)[:300]}")
     return result
 
 
@@ -603,9 +549,6 @@ async def run_browser_agent(
     from backend.apps.agents.agent_manager import agent_manager
 
     p_browser_perms = load_builtin_permissions()
-
-    if app_mode:
-        logger.info(f"[app-agent] START loop: browser_id={browser_id} task={task[:140]!r}")
 
     session_id = uuid4().hex
     cancel_event = asyncio.Event()

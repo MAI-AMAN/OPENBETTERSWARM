@@ -203,7 +203,6 @@ def test_app_describe_polls_until_bridge_ready(monkeypatch):
 
     monkeypatch.setattr(BA.ws_manager, "send_browser_command", p_send, raising=False)
     monkeypatch.setattr(BA.asyncio, "sleep", p_no_sleep, raising=True)
-    monkeypatch.setattr(BA, "p_persist_app_controls", lambda *a, **k: None, raising=True)
 
     out = asyncio.run(BA.execute_browser_tool("AppDescribe", {}, "app:abc"))
     assert calls["n"] == 3  # polled twice, succeeded on the third
@@ -225,19 +224,3 @@ def test_app_invoke_does_not_poll(monkeypatch):
 
     asyncio.run(BA.execute_browser_tool("AppInvoke", {"name": "flap"}, "app:abc"))
     assert calls["n"] == 1  # single shot, no readiness wait
-
-
-def test_app_describe_persists_controls_cache(monkeypatch, tmp_path):
-    ready = {"rules": "Keep the bird airborne.", "controls": [{"name": "flap", "keys": "Space"}], "__rev": 1}
-
-    async def p_send(request_id, action, browser_id, params, tab_id=""):
-        return {"text": json.dumps(ready)}
-
-    monkeypatch.setattr(BA.ws_manager, "send_browser_command", p_send, raising=False)
-    monkeypatch.setattr(BA, "p_app_workspace_dir", lambda bid: str(tmp_path), raising=True)
-
-    asyncio.run(BA.execute_browser_tool("AppDescribe", {}, "app:abc"))
-    controls = (tmp_path / ".openswarm" / "controls.md").read_text()
-    rules = (tmp_path / ".openswarm" / "rules.md").read_text()
-    assert "- `flap`" in controls and "[Space]" in controls
-    assert "Keep the bird airborne." in rules
