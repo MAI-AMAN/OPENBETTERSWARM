@@ -23,6 +23,34 @@ export interface Integration {
 
 export const INTEGRATIONS: Integration[] = [
   {
+    id: 'x',
+    name: 'X',
+    description: 'Read your timeline, search, post, reply, quote, like, retweet, bookmark, follow, and DM, all from your own logged-in X (Twitter) session. No API key.',
+    mcp_config: { type: 'stdio', command: 'python', args: ['-m', 'backend.apps.x_mcp_shim'] },
+    color: '#000000',
+    website: 'https://x.com',
+    connectInstructions: 'Uses your own X account: open x.com in an OpenSwarm browser card and sign in once. Nothing is stored, the integration borrows your live session per request and paces itself to stay within human limits.',
+    icon: (
+      <svg viewBox="0 0 24 24" width="20" height="20">
+        <path fill="#000000" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'tiktok',
+    name: 'TikTok',
+    description: 'Browse the For You feed, search, read videos and comments, like, comment, follow, and favorite, all from your own logged-in TikTok session. No API key.',
+    mcp_config: { type: 'stdio', command: 'python', args: ['-m', 'backend.apps.tiktok_mcp_shim'] },
+    color: '#FE2C55',
+    website: 'https://www.tiktok.com',
+    connectInstructions: 'Uses your own TikTok account: open tiktok.com in an OpenSwarm browser card and sign in once. Nothing is stored. Note: TikTok signs every request, so signed writes and uploads route to the OpenSwarm browser agent (also free, using your real session).',
+    icon: (
+      <svg viewBox="0 0 24 24" width="20" height="20">
+        <path fill="#FE2C55" d="M16.6 5.82a4.28 4.28 0 0 1-1.05-2.82h-3.2v12.86a2.6 2.6 0 1 1-1.86-2.49V9.9a5.77 5.77 0 1 0 5.06 5.72V9.01a7.45 7.45 0 0 0 4.35 1.4V7.2a4.28 4.28 0 0 1-3.3-1.38z"/>
+      </svg>
+    ),
+  },
+  {
     id: 'reddit',
     name: 'Reddit',
     description: 'Browse, search, post, comment, vote, save, subscribe, and DM, all from your own logged-in Reddit session. No API key.',

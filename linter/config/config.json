@@ -143,6 +143,9 @@
     "max-folder-items": [
       "backend",
       "backend/apps",
+      "backend/apps/reddit_mcp_shim",
+      "backend/apps/x_mcp_shim",
+      "backend/apps/tiktok_mcp_shim",
       "backend/apps/agents",
       "backend/apps/agents/core",
       "backend/apps/agents/manager",
