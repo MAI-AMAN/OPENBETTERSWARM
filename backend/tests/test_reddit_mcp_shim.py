@@ -12,7 +12,7 @@ from unittest.mock import patch
 from backend.apps.reddit_mcp_shim import rate_limit, reddit_reads, reddit_writes
 from backend.apps.reddit_mcp_shim.handlers import handle_tool_call
 from backend.apps.reddit_mcp_shim.reddit_http import EXPIRES_RE, TOKEN_RE
-from backend.apps.reddit_mcp_shim.session_source import SessionUnavailable
+from backend.apps.social_shims.session_source import SessionUnavailable
 
 
 def p_text(result: dict) -> str:

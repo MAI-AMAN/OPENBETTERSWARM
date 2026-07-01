@@ -1,10 +1,10 @@
 """Borrow the user's live browser session (cookies + UA) for a domain.
 
-The shim never stores credentials. It asks the backend's browser-session bridge
-(gated by the same per-install token every OpenSwarm shim uses) for the cookies
-the user's own logged-in browser already holds in the persist:openswarm-browser
-partition, then talks to the site as that browser. stdlib-only so the subprocess
-starts fast, matching the sibling shims.
+Shared by every social MCP shim (reddit/x/tiktok). The shim never stores
+credentials. It asks the backend's browser-session bridge (gated by the same
+per-install token every OpenSwarm shim uses) for the cookies the user's own
+logged-in browser already holds in the persist:openswarm-browser partition, then
+talks to the site as that browser. stdlib-only so the subprocess starts fast.
 """
 
 import json
@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Dict, Tuple
 
 BACKEND_PORT = os.environ.get("OPENSWARM_PORT", "8324")
 AUTH_TOKEN = os.environ.get("OPENSWARM_AUTH_TOKEN", "")
@@ -25,14 +26,14 @@ DEFAULT_UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-p_cache: dict[str, tuple[float, str, str]] = {}
+p_cache: Dict[str, Tuple[float, str, str]] = {}
 
 
 class SessionUnavailable(Exception):
     """No live logged-in session could be borrowed for the domain."""
 
 
-def get_session(domain: str) -> tuple[str, str]:
+def get_session(domain: str) -> Tuple[str, str]:
     """Return (cookie_header, user_agent) for domain from the live browser session.
 
     Raises SessionUnavailable with a human-actionable message when the bridge is
@@ -71,6 +72,16 @@ def get_session(domain: str) -> tuple[str, str]:
     user_agent = data.get("userAgent") or DEFAULT_UA
     p_cache[domain] = (now, cookie_header, user_agent)
     return cookie_header, user_agent
+
+
+def cookie_value(domain: str, name: str) -> str:
+    """Pull a single cookie's value from the borrowed session (e.g. x's ct0 CSRF token)."""
+    cookie_header, _ = get_session(domain)
+    for pair in cookie_header.split(";"):
+        k, _, v = pair.strip().partition("=")
+        if k == name:
+            return v
+    return ""
 
 
 def invalidate(domain: str) -> None:

@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 
 from backend.apps.reddit_mcp_shim import rate_limit
-from backend.apps.reddit_mcp_shim.session_source import get_session, invalidate
+from backend.apps.social_shims.session_source import get_session, invalidate
 
 DOMAIN = "reddit.com"
 WWW = "https://www.reddit.com"
