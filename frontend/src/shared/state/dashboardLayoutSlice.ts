@@ -1219,6 +1219,51 @@ const dashboardLayoutSlice = createSlice({
       card.tabs.splice(Math.max(0, Math.min(action.payload.toIndex, card.tabs.length)), 0, tab);
     },
 
+    // Drag a tab OUT of a browser card: into another card (absorbed, appended + activated) or onto empty canvas (spins off a new card at the drop point). Moving the last tab dissolves the source card, Chrome-style.
+    moveBrowserTab(
+      state,
+      action: PayloadAction<{ fromBrowserId: string; tabId: string; toBrowserId?: string; x?: number; y?: number }>
+    ) {
+      const { fromBrowserId, tabId, toBrowserId, x, y } = action.payload;
+      if (toBrowserId === fromBrowserId) return;
+      const source = state.browserCards[fromBrowserId];
+      if (!source) return;
+      const idx = source.tabs.findIndex((t) => t.id === tabId);
+      if (idx === -1) return;
+      const target = toBrowserId ? state.browserCards[toBrowserId] : undefined;
+      if (toBrowserId && !target) return;
+      const [moved] = source.tabs.splice(idx, 1);
+      // Fresh id: reusing the old one makes the receiving BrowserCard think the tab is already initialized, so its webview never loads the URL and sits at about:blank.
+      const tab = { ...moved, id: generateTabId() };
+      if (source.tabs.length === 0) {
+        delete state.browserCards[fromBrowserId];
+      } else if (source.activeTabId === tabId) {
+        const nextActive = source.tabs[Math.min(idx, source.tabs.length - 1)];
+        source.activeTabId = nextActive.id;
+        source.url = nextActive.url;
+      }
+      if (target) {
+        target.tabs.push(tab);
+        target.activeTabId = tab.id;
+        target.url = tab.url;
+        target.zOrder = state.nextZOrder++;
+      } else {
+        const id = `browser-${Date.now().toString(36)}`;
+        state.browserCards[id] = {
+          browser_id: id,
+          url: tab.url,
+          tabs: [tab],
+          activeTabId: tab.id,
+          x: x ?? source.x + 60,
+          y: y ?? source.y + 60,
+          width: source.width,
+          height: source.height,
+          zOrder: state.nextZOrder++,
+          dashboard_id: source.dashboard_id,
+        };
+      }
+    },
+
     moveCards(
       state,
       action: PayloadAction<{
@@ -1610,6 +1655,7 @@ export const {
   updateBrowserTabTitle,
   updateBrowserTabFavicon,
   reorderBrowserTab,
+  moveBrowserTab,
   moveCards,
   setGlowingBrowserCards,
   fadeGlowingBrowserCards,
