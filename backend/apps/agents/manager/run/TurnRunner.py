@@ -113,6 +113,7 @@ class TurnRunner(AgentManagerProtocol):
                         message, session, session_id, turn, thinking, self.live_partial, self.sessions
                     )
                 elif isinstance(message, ResultMessage):
+                    ttft_probe(session_id, "result", chars=turn.assistant_text_chars)
                     await handle_result_message(
                         message, session, session_id, turn, thinking, self.sessions,
                         resolved_model, api_type, global_settings,
