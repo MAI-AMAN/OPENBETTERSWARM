@@ -129,6 +129,37 @@ def test_reuse_respawn_force_and_teardown():
     asyncio.run(run())
 
 
+def test_idle_eviction():
+    async def run():
+        import backend.apps.agents.manager.run.client_pool as cp
+        pool: Dict[str, ClientHandle] = {}
+        made: List[FakeClient] = []
+
+        async def connect():
+            return FakeClient(made)
+
+        old_ttl = cp.P_IDLE_EVICT_SECONDS
+        cp.P_IDLE_EVICT_SECONDS = 0.05
+        try:
+            h = await acquire_client(pool, "s1", "fp", connect)
+            await acquire_client(pool, "s2", "fp", connect)
+            await asyncio.sleep(0.1)
+            # s1 is mid-turn (lock held): the sweep must skip it and evict only the idle s2.
+            async with h.lock:
+                await cp.evict_idle_clients(pool)
+                assert "s1" in pool and "s2" not in pool and made[1].disconnected
+            await asyncio.sleep(0.1)
+            await cp.evict_idle_clients(pool)
+            assert "s1" not in pool and made[0].disconnected
+            # a fresh acquire after eviction reconnects transparently
+            h2 = await acquire_client(pool, "s1", "fp", connect)
+            assert h2.client.alive
+        finally:
+            cp.P_IDLE_EVICT_SECONDS = old_ttl
+
+    asyncio.run(run())
+
+
 def test_seeded_simulation_invariants():
     """Random op sequences: reuse only on identical fingerprint, dead clients always replaced, pool
     never re-serves a disposed client, and boots never exceed the one-shot baseline (one per turn)."""

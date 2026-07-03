@@ -31,6 +31,10 @@ def persistent_client_enabled() -> bool:
     return os.environ.get("OSW_TTFT_PERSISTENT_CLIENT") == "1"
 
 
+# Per-session field-level digests from the last fingerprint call; lets a mismatch log WHICH boot field drifted (probe-gated diagnostics only).
+p_last_field_digests: Dict[str, Dict[str, str]] = {}
+
+
 @typechecked
 def boot_fingerprint(options_kwargs: Dict, session: AgentSession) -> str:
     """Hash of every input the CLI subprocess freezes at boot. Includes the full mcp_servers config
@@ -40,6 +44,14 @@ def boot_fingerprint(options_kwargs: Dict, session: AgentSession) -> str:
     frozen = {k: v for k, v in options_kwargs.items() if k not in P_NON_BOOT_KEYS}
     frozen["p_branch"] = session.active_branch_id
     frozen["p_compacted_through"] = session.compacted_through_msg_id
+    if os.environ.get("OSW_TTFT_PROBE") == "1":
+        digests = {k: hashlib.sha256(json.dumps(v, sort_keys=True, default=str).encode()).hexdigest()[:10] for k, v in frozen.items()}
+        prev = p_last_field_digests.get(session.id)
+        if prev is not None:
+            changed = [k for k in digests if prev.get(k) != digests.get(k)] + [k for k in prev if k not in digests]
+            if changed:
+                logger.info(f"[client-pool] {session.id}: fingerprint fields changed: {sorted(set(changed))}")
+        p_last_field_digests[session.id] = digests
     blob = json.dumps(frozen, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()
 
@@ -51,7 +63,25 @@ class ClientHandle(BaseModel):
     client: InstanceOf[object]
     lock: InstanceOf[asyncio.Lock]
     connected_at: float
+    last_used: float
     turns_served: int = 0
+
+
+# A pooled CLI holds ~100MB+ per session; evict clients idle past this so parked chats don't accumulate subprocesses (respawn on the next message is the normal cold path).
+P_IDLE_EVICT_SECONDS = float(os.environ.get("OSW_CLIENT_IDLE_EVICT_SECONDS", "1800"))
+
+
+@typechecked
+async def evict_idle_clients(pool: Dict[str, "ClientHandle"]) -> None:
+    """Dispose every handle idle past the TTL, skipping any mid-turn (lock held)."""
+    now = time.monotonic()
+    for sid in list(pool.keys()):
+        handle = pool.get(sid)
+        if handle is None or handle.lock.locked():
+            continue
+        if now - handle.last_used > P_IDLE_EVICT_SECONDS:
+            logger.info(f"[client-pool] {sid}: idle-evict after {int(now - handle.last_used)}s")
+            await dispose_client(pool, sid)
 
 
 @typechecked
@@ -65,16 +95,19 @@ async def acquire_client(
     """Return a live client whose boot matches `fingerprint`, connecting fresh when there is none,
     the fingerprint mismatches, or the caller demands a fresh session (needs_fresh/fork consumed
     upstream, so the flag must be read BEFORE build_agent_options and passed in)."""
+    await evict_idle_clients(pool)
     existing = pool.get(session_id)
     if existing is not None:
         if not force_respawn and existing.fingerprint == fingerprint:
+            existing.last_used = time.monotonic()
             return existing
         reason = "force_respawn" if force_respawn else "fingerprint_changed"
         logger.info(f"[client-pool] {session_id}: respawn ({reason})")
         await dispose_client(pool, session_id)
     client = await connect_fn()
+    now = time.monotonic()
     handle = ClientHandle(
-        fingerprint=fingerprint, client=client, lock=asyncio.Lock(), connected_at=time.monotonic(),
+        fingerprint=fingerprint, client=client, lock=asyncio.Lock(), connected_at=now, last_used=now,
     )
     pool[session_id] = handle
     logger.info(f"[client-pool] {session_id}: connected fresh client")
