@@ -35,10 +35,23 @@ def p_ran_late(started_at: datetime, scheduled_for: datetime) -> bool:
 # run_id -> "stop". Set by the stop endpoint so the executor loop, not the HTTP handler, owns the run's terminal write. Without this the still-running executor task could overwrite a "Stopped by user" failure with success. Pause is NOT in here: it rides the agent session's own "stopped" status, which the step loop waits out (see _await_session_idle).
 _run_control: dict[str, str] = {}
 _run_pause_override: dict[str, tuple[bool, float]] = {}
+# workflow_id -> session_id of the in-flight run, kept in step with _running so pause/trash can halt a live run even for a workflow that list_workflows() now filters out (deleted).
+_running_session: dict[str, str] = {}
 
 
 def request_stop(run_id: str) -> None:
     _run_control[run_id] = "stop"
+
+
+def stop_active_run(workflow_id: str) -> Optional[str]:
+    """Signal the in-flight run for this workflow to stop and return its session id
+    (None if nothing is running). Lets delete/pause halt a live run NOW instead of only
+    stopping future fires; reads the workflow_id-keyed maps so it still works after trash."""
+    run_id = _running.get(workflow_id)
+    if not run_id:
+        return None
+    _run_control[run_id] = "stop"
+    return _running_session.get(workflow_id)
 
 
 def set_pause_override(run_id: str, paused: bool, ttl_s: float = 5.0) -> None:
@@ -268,6 +281,7 @@ async def execute(
 
         session = await agent_manager.launch_agent(config)
         run.session_id = session.id
+        _running_session[wf.id] = session.id
         storage.record_run(run)
 
         # Reuse the user's earlier allow/deny answers so an unattended fire doesn't park on a permission prompt. Scheduled runs prompt for an unseen tool only briefly (30s) before failing; manual/test runs are attended, so keep the roomy window. Sensitive-path prompts are never remembered (handled by the gate); they keep prompting every run.
@@ -342,6 +356,14 @@ async def execute(
         for idx, step in enumerate(steps):
             if _run_control.get(run.id) == "stop":
                 step_error = "Stopped by user"
+                break
+            # Re-read live state each step so pause/trash actually halts an in-flight run at the next step boundary. The scheduler tick + routes only stop FUTURE fires; without this a run keeps stepping after the workflow is trashed (any trigger) or, for a scheduled run, paused. Manual "Run Now" of a paused workflow is deliberately left alone.
+            fresh_wf = storage.get_workflow(wf.id)
+            if fresh_wf is None or fresh_wf.deleted_at is not None:
+                step_error = "Workflow deleted"
+                break
+            if triggered_by == "schedule" and not fresh_wf.schedule.enabled:
+                step_error = "Workflow paused"
                 break
             # Broadcast the step bump before sending so RunningView flips the disc immediately, not after the agent finishes the step. Advancing means we're not paused; keep the broadcast authoritative so it never races a stale paused=True from the watcher.
             run.active_step_idx = idx
@@ -427,6 +449,7 @@ async def execute(
                 logger.exception("close_session failed for workflow run %s", run.id)
         async with _running_lock:
             _running.pop(wf.id, None)
+            _running_session.pop(wf.id, None)
 
     try:
         from backend.apps.workflows.notifier import notify_run_complete
