@@ -24,13 +24,16 @@ async def agents_lifespan():
     logger.info("Agents sub-app starting")
     await agent_manager.reconcile_on_startup()
     await agent_manager.restore_all_sessions()
+    from backend.apps.agents.manager.run.client_pool import start_pool_sweeper, stop_pool_sweeper, dispose_all_clients
+    pool_sweeper = start_pool_sweeper(agent_manager.client_pool)
     yield
     logger.info("Agents sub-app shutting down")
     for session_id in list(agent_manager.tasks.keys()):
         await agent_manager.stop_agent(session_id)
     await agent_manager.persist_all_sessions()
+    # Cancel the sweeper before disposing so a background sweep can't race the shutdown teardown.
+    await stop_pool_sweeper(pool_sweeper)
     # Persistent CLI clients outlive turns; without this a uvicorn reload/quit orphans one subprocess per live session.
-    from backend.apps.agents.manager.run.client_pool import dispose_all_clients
     await dispose_all_clients(agent_manager.client_pool)
 
 agents = SubApp("agents", agents_lifespan)

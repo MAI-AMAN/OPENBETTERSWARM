@@ -134,6 +134,8 @@ class TurnRunner(AgentManagerProtocol):
                 try:
                     await handle.client.query(prompt_stream())
                     await p_run_streaming_turn(p_stream=handle.client.receive_response())
+                    # LRU by turn-END so a session mid-long-turn isn't first cap-evicted the instant it finishes.
+                    handle.last_used = time.monotonic()
                 except BaseException:
                     # Fail-safe: an error or stop mid-turn poisons the live conversation; drop the client so the next attempt/turn reconnects fresh (== today's one-shot behavior, never worse). Pool pop is sync-first, so even a cancelled disconnect can't leave a reusable stale handle.
                     await dispose_client(self.client_pool, session_id)

@@ -17,6 +17,9 @@ from backend.apps.agents.manager.run.client_pool import (
     dispose_all_clients,
     dispose_client,
     dispose_client_soon,
+    start_pool_sweeper,
+    stop_pool_sweeper,
+    trim_pool_to_cap,
 )
 
 
@@ -156,6 +159,93 @@ def test_idle_eviction():
             assert h2.client.alive
         finally:
             cp.IDLE_EVICT_SECONDS = old_ttl
+
+    asyncio.run(run())
+
+
+def test_cap_lru_eviction():
+    """Over MAX_LIVE_CLIENTS, acquire trims the least-recently-used IDLE sessions and keeps the newest."""
+    async def run():
+        import backend.apps.agents.manager.run.client_pool as cp
+        pool: Dict[str, ClientHandle] = {}
+        made: List[FakeClient] = []
+
+        async def connect():
+            return FakeClient(made)
+
+        old_max, old_guard = cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS
+        cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS = 3, 0.0
+        try:
+            for i in range(5):
+                await acquire_client(pool, f"s{i}", "fp", connect)
+                await asyncio.sleep(0.001)  # distinct last_used so LRU order is deterministic
+            assert len(pool) == 3
+            assert "s0" not in pool and "s1" not in pool  # two oldest reaped
+            assert {"s2", "s3", "s4"} <= set(pool)
+            assert made[0].disconnected and made[1].disconnected
+            assert not made[3].disconnected and not made[4].disconnected
+        finally:
+            cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS = old_max, old_guard
+
+    asyncio.run(run())
+
+
+def test_cap_soft_exceeds_when_busy():
+    """A cap can't evict mid-turn clients: a new acquire over the cap exceeds it rather than kill a
+    live turn, then trims back once they go idle."""
+    async def run():
+        import backend.apps.agents.manager.run.client_pool as cp
+        pool: Dict[str, ClientHandle] = {}
+        made: List[FakeClient] = []
+
+        async def connect():
+            return FakeClient(made)
+
+        old_max, old_guard = cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS
+        cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS = 2, 0.4
+        try:
+            h0 = await acquire_client(pool, "s0", "fp", connect)
+            h1 = await acquire_client(pool, "s1", "fp", connect)
+            async with h0.lock, h1.lock:
+                await acquire_client(pool, "s2", "fp", connect)
+                # s0/s1 locked, s2 just-acquired (guard-protected): nothing is eligible, so the pool exceeds the cap.
+                assert len(pool) == 3
+                assert not made[0].disconnected and not made[1].disconnected
+            await asyncio.sleep(0.5)  # past the guard: the now-idle sessions become eligible
+            await trim_pool_to_cap(pool)
+            assert len(pool) == 2 and made[0].disconnected  # oldest idle reaped back to cap
+        finally:
+            cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS = old_max, old_guard
+
+    asyncio.run(run())
+
+
+def test_pool_sweeper_reclaims_over_cap():
+    """The background sweeper trims an over-cap pool on its timer, with no new turn to trigger it."""
+    async def run():
+        import backend.apps.agents.manager.run.client_pool as cp
+        pool: Dict[str, ClientHandle] = {}
+        made: List[FakeClient] = []
+
+        async def connect():
+            return FakeClient(made)
+
+        old_max, old_guard, old_int = cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS, cp.SWEEP_INTERVAL_SECONDS
+        cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS, cp.SWEEP_INTERVAL_SECONDS = 10, 0.0, 0.02
+        try:
+            for i in range(5):
+                await acquire_client(pool, f"s{i}", "fp", connect)
+                await asyncio.sleep(0.001)
+            assert len(pool) == 5  # under the temporary high cap
+            cp.MAX_LIVE_CLIENTS = 3
+            task = start_pool_sweeper(pool)
+            await asyncio.sleep(0.1)  # several sweep cycles
+            await stop_pool_sweeper(task)
+            assert len(pool) == 3
+            assert "s0" not in pool and "s1" not in pool
+            await stop_pool_sweeper(None)  # None is a no-op, must not raise
+        finally:
+            cp.MAX_LIVE_CLIENTS, cp.LRU_GUARD_SECONDS, cp.SWEEP_INTERVAL_SECONDS = old_max, old_guard, old_int
 
     asyncio.run(run())
 
