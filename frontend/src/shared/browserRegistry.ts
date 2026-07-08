@@ -23,6 +23,8 @@ export interface BrowserWebview extends HTMLElement {
   getURL: () => string;
   getTitle: () => string;
   isLoading: () => boolean;
+  // Optional: present on real Electron webviews; the iframe fallback lacks it, callers must ?.() it.
+  isCurrentlyAudible?: () => boolean;
   capturePage: (rect?: { x: number; y: number; width: number; height: number }) => Promise<ElectronNativeImage>;
   executeJavaScript: (code: string) => Promise<any>;
   sendInputEvent: (event: any) => void;

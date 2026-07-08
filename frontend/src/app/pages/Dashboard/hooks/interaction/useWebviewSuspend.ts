@@ -71,9 +71,21 @@ function agentNeedsLive(browserId: string, card: BrowserCardPosition): boolean {
   return false;
 }
 
-// A card we must never snapshot-swap: an agent is driving it, OR it's in the keep-alive set (recently used). Suspending a keep-alive card would destroy its webContents and wipe its sessionStorage (logged-in sites drop their session), the whole thing we're preventing.
+// Chrome never discards an audible tab: a card playing music off-screen keeps playing instead of going silent mid-song.
+function cardIsAudible(browserId: string, card: BrowserCardPosition): boolean {
+  for (const tab of card.tabs ?? []) {
+    try {
+      if (getWebview(browserId, tab.id)?.isCurrentlyAudible?.()) return true;
+    } catch {
+      // A detached/dying webview reads as silent.
+    }
+  }
+  return false;
+}
+
+// A card we must never snapshot-swap: an agent is driving it, it's in the keep-alive set (recently used), or it's playing audio. Suspending destroys the webContents (sessionStorage, playback), the things we're preserving.
 function mustStayLive(browserId: string, card: BrowserCardPosition): boolean {
-  return agentNeedsLive(browserId, card) || isKeepAliveBrowser(browserId);
+  return agentNeedsLive(browserId, card) || isKeepAliveBrowser(browserId) || cardIsAudible(browserId, card);
 }
 
 /**
