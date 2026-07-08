@@ -419,6 +419,7 @@ export function placeBesideCard(
   exclude?: CardPlacementExclusion,
   gap: number = GRID_GAP * 12,
   exact: boolean = false,
+  overlap: boolean = false,
 ): { x: number; y: number } {
   const rects = collectOccupiedRects(state, expandedSessionIds, exclude);
   const targetX = anchor.x + anchor.width + gap;
@@ -434,6 +435,8 @@ export function placeBesideCard(
     ? Math.max(...columnCards.map((c) => c.y + c.height)) + GRID_GAP
     : anchor.y;
 
+  // overlap: dock beside the anchor no matter what else is there (the new card sits on top via its higher zOrder). A chat-spawned browser must land next to its chat even onto an occupied spot; dodging to a free grid cell is the "spawned off to the side" behavior we're removing. Still stacks under this chat's own browser column (targetY) so sibling browsers don't cover each other.
+  if (overlap) return { x: targetX, y: targetY };
   // exact keeps the precise gap (so the card mirrors however its anchor was placed, e.g. a run browser matching the hub->monitor gap); grid-snapping would knock that gap off. Fall back to the snapped search only if the exact spot is taken.
   if (exact && !rects.some((r) => rectsOverlap({ x: targetX, y: targetY, w: newW, h: newH }, r))) {
     return { x: targetX, y: targetY };
@@ -1651,6 +1654,17 @@ const dashboardLayoutSlice = createSlice({
         // Carry an optimistic browser tether from the draft id to the real session id, in place (no flicker, no stale draft endpoint).
         for (const entry of Object.values(state.glowingBrowserCards)) {
           if (entry.sourceId === draftId) entry.sourceId = session.id;
+        }
+        // First-turn browser race: a browser the first message spawns carries parent_session_id = the real id, so its browser_card_added can land BEFORE this re-key, find no parent card, and fall back to the grid. Now that the chat card exists under the real id, dock each such browser beside it (freshly spawned, so not user-moved yet) and restore the tether the racing path skipped.
+        const parentCard = state.cards[session.id];
+        if (parentCard) {
+          for (const bc of Object.values(state.browserCards)) {
+            if (bc.spawned_by !== session.id) continue;
+            const pos = placeBesideCard(state, parentCard, bc.width, bc.height, undefined, { type: 'browser' as const, id: bc.browser_id }, undefined, false, true);
+            bc.x = pos.x;
+            bc.y = pos.y;
+            state.glowingBrowserCards[bc.browser_id] = { sourceId: session.id, fading: false, label: 'Use Browser' };
+          }
         }
       });
   },

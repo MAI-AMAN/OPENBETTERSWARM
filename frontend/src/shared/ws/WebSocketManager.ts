@@ -791,7 +791,7 @@ class WebSocketManager {
               let pos: { x: number; y: number } | null = null;
               let glowLabel = 'Use Browser';
               if (parentCard) {
-                pos = placeBesideCard(layoutState, parentCard, browserCard.width, browserCard.height, undefined, exclude);
+                pos = placeBesideCard(layoutState, parentCard, browserCard.width, browserCard.height, undefined, exclude, undefined, false, true);
               } else if (sess?.workflow_run_id && layoutState.workflowsMonitorCard) {
                 pos = placeBesideCard(layoutState, layoutState.workflowsMonitorCard, browserCard.width, browserCard.height, undefined, exclude, WORKFLOW_CARD_GAP, true);
               } else if (sess?.workflow_edit_id && layoutState.workflowsHub) {
