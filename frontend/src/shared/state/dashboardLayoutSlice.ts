@@ -441,6 +441,25 @@ export function placeBesideCard(
   return findOpenSpotNear(targetX, targetY, rects, newW, newH);
 }
 
+// Dock a chat-spawned browser to the right of its chat card. Unlike placeBesideCard, this ALWAYS lands beside the chat (overlap is fine, the new card sits on top via zOrder) so an occupied spot can never fling the browser to a far grid cell or stack it under an unrelated card. Only this chat's OWN browsers (same spawned_by, still in the column) stack under each other so siblings don't fully cover one another; every other card is ignored.
+export function placeBrowserBesideChat(
+  state: DashboardLayoutState,
+  chat: { x: number; y: number; width: number; height: number },
+  parentSessionId: string,
+  newW: number,
+  newH: number,
+  excludeBrowserId?: string,
+): { x: number; y: number } {
+  const targetX = chat.x + chat.width + GRID_GAP * 12;
+  const siblings = Object.values(state.browserCards).filter(
+    (c) => c.browser_id !== excludeBrowserId && c.spawned_by === parentSessionId && Math.abs(c.x - targetX) < 50,
+  );
+  const targetY = siblings.length > 0
+    ? Math.max(...siblings.map((c) => c.y + c.height)) + GRID_GAP
+    : chat.y;
+  return { x: targetX, y: targetY };
+}
+
 // Dock a new card directly below an anchor card (left edges aligned). Used for a browser spawned by a Workflows-hub chat, which has no agent card to sit beside.
 export function placeBelowCard(
   state: DashboardLayoutState,
@@ -467,6 +486,29 @@ export function placeInParentColumn(
     return findOpenGridCell(collectOccupiedRects(state, expandedSessionIds, exclude), newW, newH);
   }
   return placeBesideCard(state, parentCard, newW, newH, expandedSessionIds, exclude);
+}
+
+// Where a user-created card (chat/app/browser/note) should land. Resolved in the UI layer where selection + viewport are known, then handed to the add reducers as an explicit x/y. `beside` (the currently selected card) docks the new card to its right, stacking under that column (collision-aware); `viewportCenter` (canvas-space center of what the user is looking at) drops it dead-center "in front of you", overlapping whatever's there. With neither, falls back to the legacy top-left grid scan.
+export interface SpawnAnchor {
+  beside?: { x: number; y: number; width: number; height: number };
+  viewportCenter?: { x: number; y: number };
+}
+
+export function computeSpawnPosition(
+  state: DashboardLayoutState,
+  newW: number,
+  newH: number,
+  anchor: SpawnAnchor,
+  expandedSessionIds?: string[],
+): { x: number; y: number } {
+  if (anchor.beside) {
+    return placeBesideCard(state, anchor.beside, newW, newH, expandedSessionIds);
+  }
+  if (anchor.viewportCenter) {
+    // Land dead-center, "in front of you", even if a card is already there. Overlap is intentional (new card sits on top via its higher zOrder); dodging to free space is exactly the "spawned off to the side" behavior we're removing.
+    return { x: anchor.viewportCenter.x - newW / 2, y: anchor.viewportCenter.y - newH / 2 };
+  }
+  return findOpenGridCell(collectOccupiedRects(state, expandedSessionIds), newW, newH);
 }
 
 // Reconnect-refetch merge: ADD only the cards the snapshot carries that the client is missing (e.g. a spawned browser whose broadcast was lost in a socket gap), collision-resolving each against the live layout so a recovered card can't land on a card already on canvas, and NEVER touch a card the client already has (that's exactly what preserves its live, collision-placed position). The shared `occupied` list carries placements forward so two recovered cards in the same pass also avoid each other.
@@ -522,11 +564,12 @@ const dashboardLayoutSlice = createSlice({
         height: number;
         // Optional: which existing sessions are currently expanded (showing their full chat history). Without this, the collision check uses each card's STORED height, which is the collapsed value, even when the card is currently rendering at the expanded ~620px. Result: new sub-agent cards spawn into the collapsed footprint but overlap the visually expanded one. Caller (Dashboard.tsx) passes the current expanded set so the collision math matches what the user actually sees.
         expandedSessionIds?: string[];
+        // Honor the given x/y verbatim (dead-center "in front of you", overlap allowed) instead of collision-dodging to a free grid cell. Set when the caller already resolved the spot (viewport center / beside a selected card) and dodging would defeat that; tidyLayout cleans up any overlap on demand.
+        exact?: boolean;
       }>
     ) {
-      const { sessionId, x, y, width, height, expandedSessionIds } = action.payload;
-      const rects = collectOccupiedRects(state, expandedSessionIds);
-      const pos = findOpenSpotNear(x, y, rects, width, height);
+      const { sessionId, x, y, width, height, expandedSessionIds, exact } = action.payload;
+      const pos = exact ? { x, y } : findOpenSpotNear(x, y, collectOccupiedRects(state, expandedSessionIds), width, height);
       state.cards[sessionId] = {
         session_id: sessionId,
         x: pos.x,
@@ -766,11 +809,13 @@ const dashboardLayoutSlice = createSlice({
       state.activeViewCardId = action.payload;
     },
 
-    addBrowserCard(state, action: PayloadAction<{ url: string; expandedSessionIds?: string[] }>) {
+    addBrowserCard(state, action: PayloadAction<{ url: string; expandedSessionIds?: string[]; x?: number; y?: number }>) {
       const id = `browser-${Date.now().toString(36)}`;
       const tabId = generateTabId();
-      const rects = collectOccupiedRects(state, action.payload.expandedSessionIds);
-      const pos = findOpenGridCell(rects, DEFAULT_BROWSER_CARD_W, DEFAULT_BROWSER_CARD_H);
+      // Caller may pre-resolve the spawn position (beside the selected card, or in front of the viewport); otherwise fall back to the top-left grid scan.
+      const pos = action.payload.x != null && action.payload.y != null
+        ? { x: action.payload.x, y: action.payload.y }
+        : findOpenGridCell(collectOccupiedRects(state, action.payload.expandedSessionIds), DEFAULT_BROWSER_CARD_W, DEFAULT_BROWSER_CARD_H);
       state.browserCards[id] = {
         browser_id: id,
         url: action.payload.url,
@@ -1625,6 +1670,17 @@ const dashboardLayoutSlice = createSlice({
         // Carry an optimistic browser tether from the draft id to the real session id, in place (no flicker, no stale draft endpoint).
         for (const entry of Object.values(state.glowingBrowserCards)) {
           if (entry.sourceId === draftId) entry.sourceId = session.id;
+        }
+        // First-turn browser race: a browser the first message spawns carries parent_session_id = the real id, so its browser_card_added can land BEFORE this re-key, find no parent card, and fall back to the grid. Now that the chat card exists under the real id, dock each such browser beside it (freshly spawned, so not user-moved yet) and restore the tether the racing path skipped.
+        const parentCard = state.cards[session.id];
+        if (parentCard) {
+          for (const bc of Object.values(state.browserCards)) {
+            if (bc.spawned_by !== session.id) continue;
+            const pos = placeBrowserBesideChat(state, parentCard, session.id, bc.width, bc.height, bc.browser_id);
+            bc.x = pos.x;
+            bc.y = pos.y;
+            state.glowingBrowserCards[bc.browser_id] = { sourceId: session.id, fading: false, label: 'Use Browser' };
+          }
         }
       });
   },
