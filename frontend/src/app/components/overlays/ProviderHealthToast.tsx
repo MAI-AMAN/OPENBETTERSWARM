@@ -28,7 +28,8 @@ export default function ProviderHealthToast() {
     <Snackbar
       open={open && dead.length > 0}
       autoHideDuration={null}
-      onClose={() => dispatch(hideProviderHealthToast())}
+      // Clickaway would kill the pill on the user's first canvas click, before they read it; only the X or Reconnect dismisses.
+      onClose={(event, reason) => { if (reason !== 'clickaway') dispatch(hideProviderHealthToast()); }}
       anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
     >
       <Alert
