@@ -5,6 +5,7 @@ import { fetchModels } from '@/shared/state/modelsSlice';
 import { fetchTools } from '@/shared/state/toolsSlice';
 import { API_BASE } from '@/shared/config';
 import { report } from '@/shared/serviceClient';
+import { getAffiliateAppInstallId } from '@/shared/affiliateInstall';
 
 /** Subscribe to openswarm:// auth/oauth deep-links from Electron main; no-op in browser. */
 export function useDeepLink(): void {
@@ -14,7 +15,7 @@ export function useDeepLink(): void {
     const api = (window as any).openswarm as OpenSwarmAPI | undefined;
     if (!api) return;
 
-    const unsubscribe = api.onAuthUrl?.((rawUrl: string) => {
+    const unsubscribe = api.onAuthUrl?.(async (rawUrl: string) => {
       try {
         // openswarm://auth?token=...; signin=true => free sign-in, else Stripe activation.
         const url = new URL(rawUrl);
@@ -34,11 +35,16 @@ export function useDeepLink(): void {
         const expires = url.searchParams.get('expires');
 
         if (isSignin) {
-          // 1.0.29 only ships Google sign-in; read for forward compat.
-          void signinMethodRaw;
-          report('signin', 'deep_link_received', { method: 'google' });
+          const signinMethod = signinMethodRaw === 'email' ? 'email' : 'google';
+          const appInstallId = url.searchParams.get('app_install_id') || (await getAffiliateAppInstallId());
+          report('signin', 'deep_link_received', { method: signinMethod });
 
-          dispatch(activateSignin({ token, signin_method: 'google', email }))
+          dispatch(activateSignin({
+            token,
+            signin_method: signinMethod,
+            email,
+            ...(appInstallId ? { app_install_id: appInstallId } : {}),
+          }))
             .unwrap()
             .then((res) => {
               report('signin', 'activated', { method: res.signin_method, plan: res.plan });

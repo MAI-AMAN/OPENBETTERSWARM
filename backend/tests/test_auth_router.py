@@ -58,9 +58,14 @@ def test_signin_activate_persists_user_id(client, reset_settings):
                 "token": "fake-bearer-1234567890abcdef",
                 "signin_method": "google",
                 "email": "smoke@example.com",
+                "app_install_id": "app-install-affiliate-123",
             },
         )
     assert r.status_code == 200
+    assert any(
+        call.kwargs.get("json", {}).get("app_install_id") == "app-install-affiliate-123"
+        for call in instance.post.call_args_list
+    )
     body = r.json()
     assert body["user_id"] == "u-1234"
     assert body["email"] == "smoke@example.com"

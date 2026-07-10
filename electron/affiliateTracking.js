@@ -13,6 +13,7 @@
 //     first_launch_at: 1700000000000,  // unix ms; presence = "this isn't first launch"
 //     ref: "haik" | null,              // populated once lookup succeeds
 //     ref_bound_at: 1700000000000 | null,
+//     ref_bind_method: "affiliate_filename_hash" | null,
 //     attempts: 0                       // last polling attempt count, for debugging
 //   }
 //
@@ -22,6 +23,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const os = require("os");
 
 const DEFAULT_LANDING_URL = "https://openswarm.com";
 const DEFAULT_CLOUD_URL = "https://api.openswarm.com";
@@ -35,6 +37,10 @@ const DEFAULT_CLOUD_URL = "https://api.openswarm.com";
 // poll window instead of 60s.
 const POLL_INTERVAL_MS = Number(process.env.OPENSWARM_AFFILIATE_POLL_INTERVAL_MS) || 5000;
 const POLL_MAX_ATTEMPTS = Number(process.env.OPENSWARM_AFFILIATE_POLL_MAX_ATTEMPTS) || 12;
+const FILENAME_ATTRIBUTION_WINDOW_MS =
+  Number(process.env.OPENSWARM_AFFILIATE_FILENAME_WINDOW_MS) || 30 * 24 * 60 * 60 * 1000;
+const INSTALLER_HASH_RE =
+  /^OpenSwarm(?:-Setup)?-(?:arm64|x64)-([A-Za-z0-9_-]{16,32})(?: \([0-9]+\))?\.(dmg|exe|AppImage)$/i;
 
 function getStateFilePath(userDataDir) {
   return path.join(userDataDir, "install.json");
@@ -91,6 +97,90 @@ async function pollLookupOnce(cloudUrl, appInstallId) {
   }
 }
 
+async function bindAffiliateHashOnce(cloudUrl, appInstallId, affiliateHash) {
+  const url = `${cloudUrl}/api/install/bind`;
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ affiliate_hash: affiliateHash, app_install_id: appInstallId }),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    if (body && typeof body.ref === "string" && body.ref) return body.ref;
+    return null;
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function hashFromInstallerBasename(filePath) {
+  const base = path.basename(String(filePath || ""));
+  const m = INSTALLER_HASH_RE.exec(base);
+  return m ? m[1] : null;
+}
+
+function likelyDownloadDirs(homeDir) {
+  if (!homeDir) return [];
+  return [path.join(homeDir, "Downloads"), path.join(homeDir, "Desktop")];
+}
+
+function recentInstallerHashesInDir(dir, nowMs) {
+  const out = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (_) {
+    return out;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const hash = hashFromInstallerBasename(entry.name);
+    if (!hash) continue;
+    const fullPath = path.join(dir, entry.name);
+    try {
+      const st = fs.statSync(fullPath);
+      const ageMs = nowMs - st.mtimeMs;
+      if (ageMs < 0 || ageMs > FILENAME_ATTRIBUTION_WINDOW_MS) continue;
+      out.push({ hash, path: fullPath, mtimeMs: st.mtimeMs });
+    } catch (_) {}
+  }
+  return out;
+}
+
+function findAffiliateHashFromInstaller({
+  platform = process.platform,
+  env = process.env,
+  homeDir = os.homedir(),
+  nowMs = Date.now(),
+} = {}) {
+  if (platform === "linux") {
+    return hashFromInstallerBasename(env.APPIMAGE);
+  }
+
+  if (platform !== "darwin" && platform !== "win32") {
+    return null;
+  }
+
+  const matches = [];
+  for (const dir of likelyDownloadDirs(homeDir)) {
+    matches.push(...recentInstallerHashesInDir(dir, nowMs));
+  }
+  if (matches.length !== 1) {
+    if (matches.length > 1) {
+      console.log("[affiliate] multiple stamped installers found; falling back to welcome flow");
+    }
+    return null;
+  }
+  return matches[0].hash;
+}
+
 function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -118,7 +208,15 @@ async function pollUntilBound({ cloudUrl, appInstallId, userDataDir }) {
 // call on every launch — internal first-launch check makes subsequent calls
 // a no-op. `shell` is electron's shell module, passed in to avoid this
 // module needing to require electron at the top (keeps it test-friendly).
-async function maybeRunFirstLaunchHandshake({ shell, userDataDir, isDev, isPackaged }) {
+async function maybeRunFirstLaunchHandshake({
+  shell,
+  userDataDir,
+  isDev,
+  isPackaged,
+  platform = process.platform,
+  env = process.env,
+  homeDir = os.homedir(),
+}) {
   // Skip in dev to avoid spawning a browser tab on every `bash run.sh`.
   // OPENSWARM_AFFILIATE_FORCE=1 lets us actually exercise the flow against
   // a local landing page + local cloud during integration testing.
@@ -161,6 +259,23 @@ async function maybeRunFirstLaunchHandshake({ shell, userDataDir, isDev, isPacka
   writeState(userDataDir, fresh);
 
   const { landingUrl, cloudUrl } = urlsFromEnv();
+  const affiliateHash = findAffiliateHashFromInstaller({ platform, env, homeDir });
+  if (affiliateHash) {
+    const ref = await bindAffiliateHashOnce(cloudUrl, appInstallId, affiliateHash);
+    if (ref) {
+      const bound = {
+        ...fresh,
+        ref,
+        ref_bound_at: Date.now(),
+        ref_bind_method: "affiliate_filename_hash",
+      };
+      writeState(userDataDir, bound);
+      console.log(`[affiliate] bound filename hash ref=${ref}; skipping welcome URL`);
+      return;
+    }
+    console.log("[affiliate] filename hash bind failed; falling back to welcome flow");
+  }
+
   const welcomeUrl = `${landingUrl}/welcome?app_install_id=${encodeURIComponent(appInstallId)}`;
 
   console.log(`[affiliate] first launch: opening ${welcomeUrl}`);
@@ -186,4 +301,7 @@ module.exports = {
   _writeState: writeState,
   _getStateFilePath: getStateFilePath,
   _pollLookupOnce: pollLookupOnce,
+  _bindAffiliateHashOnce: bindAffiliateHashOnce,
+  _hashFromInstallerBasename: hashFromInstallerBasename,
+  _findAffiliateHashFromInstaller: findAffiliateHashFromInstaller,
 };

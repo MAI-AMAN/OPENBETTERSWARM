@@ -90,6 +90,7 @@ class SigninActivateRequest(BaseModel):
     token: str
     signin_method: Literal["google", "email"]
     email: Optional[str] = None
+    app_install_id: Optional[str] = None
 
 
 @auth.router.post("/signin-activate")
@@ -114,6 +115,7 @@ async def signin_activate(body: SigninActivateRequest):
                     "token": body.token,
                     "signin_method": body.signin_method,
                     "email": body.email,
+                    "app_install_id": body.app_install_id,
                 },
             )
     except httpx.HTTPError as e:

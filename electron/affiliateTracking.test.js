@@ -38,6 +38,7 @@ const affiliateTracking = require("./affiliateTracking");
 function makeMockCloud() {
   // Mirrors the install_tokens table.
   const tokens = new Map();
+  const filenameHashes = new Map();
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -77,8 +78,23 @@ function makeMockCloud() {
 
       if (req.method === "POST" && url.pathname === "/api/install/bind") {
         const body = await readBody();
-        if (!body || typeof body.install_token !== "string" || typeof body.app_install_id !== "string") {
-          return send(400, { error: "install_token + app_install_id required" });
+        if (!body || typeof body.app_install_id !== "string") {
+          return send(400, { error: "app_install_id required" });
+        }
+        if (typeof body.affiliate_hash === "string" && !body.install_token) {
+          const ref = filenameHashes.get(body.affiliate_hash);
+          if (!ref) return send(404, { error: "affiliate_hash not found" });
+          const token = `filename_${crypto.randomBytes(24).toString("base64url")}`;
+          tokens.set(token, {
+            ref,
+            app_install_id: body.app_install_id,
+            bound_at: Date.now(),
+            expires_at: Date.now() + 24 * 60 * 60 * 1000,
+          });
+          return send(200, { ok: true, ref });
+        }
+        if (typeof body.install_token !== "string") {
+          return send(400, { error: "install_token required" });
         }
         const row = tokens.get(body.install_token);
         if (!row) return send(404, { error: "not found" });
@@ -114,6 +130,7 @@ function makeMockCloud() {
       resolve({
         url: `http://127.0.0.1:${addr.port}`,
         tokens,
+        filenameHashes,
         close: () => new Promise((r) => server.close(r)),
       });
     });
@@ -234,6 +251,65 @@ test("first launch: opens welcome URL and binds ref via poll loop", async () => 
   } finally {
     await cloud.close();
   }
+});
+
+test("first launch: stamped AppImage hash binds before opening welcome URL", async () => {
+  const cloud = await makeMockCloud();
+  try {
+    const userDataDir = makeTempUserDataDir();
+    const shell = makeFakeShell();
+    const hash = "abcDEF1234567890_hash";
+    cloud.filenameHashes.set(hash, "filename-affiliate");
+
+    process.env.OPENSWARM_AFFILIATE_LANDING_URL = "https://landing.test";
+    process.env.OPENSWARM_AFFILIATE_CLOUD_URL = cloud.url;
+
+    await affiliateTracking.maybeRunFirstLaunchHandshake({
+      shell,
+      userDataDir,
+      isDev: false,
+      isPackaged: true,
+      platform: "linux",
+      env: { APPIMAGE: `/tmp/OpenSwarm-x64-${hash}.AppImage` },
+    });
+
+    assert.equal(shell.opened.length, 0, "filename hash bind skips welcome URL");
+    const state = readJson(path.join(userDataDir, "install.json"));
+    assert.equal(state.ref, "filename-affiliate");
+    assert.equal(state.ref_bind_method, "affiliate_filename_hash");
+    assert.ok(state.ref_bound_at > 0);
+  } finally {
+    await cloud.close();
+  }
+});
+
+test("filename parser accepts browser duplicate suffix", () => {
+  assert.equal(
+    affiliateTracking._hashFromInstallerBasename("OpenSwarm-arm64-abcDEF1234567890_hash (1).dmg"),
+    "abcDEF1234567890_hash",
+  );
+});
+
+test("filename parser keeps hyphens inside base64url affiliate hash", () => {
+  assert.equal(
+    affiliateTracking._hashFromInstallerBasename("OpenSwarm-arm64-abcDEF1234567890-hash.dmg"),
+    "abcDEF1234567890-hash",
+  );
+});
+
+test("download scan refuses ambiguous stamped installers", () => {
+  const userDataDir = makeTempUserDataDir();
+  const downloads = path.join(userDataDir, "Downloads");
+  fs.mkdirSync(downloads, { recursive: true });
+  fs.writeFileSync(path.join(downloads, "OpenSwarm-arm64-abcDEF1234567890_a.dmg"), "");
+  fs.writeFileSync(path.join(downloads, "OpenSwarm-arm64-abcDEF1234567890_b.dmg"), "");
+
+  const hash = affiliateTracking._findAffiliateHashFromInstaller({
+    platform: "darwin",
+    homeDir: userDataDir,
+    nowMs: Date.now(),
+  });
+  assert.equal(hash, null);
 });
 
 test("returning launch: no-op when ref already bound", async () => {
