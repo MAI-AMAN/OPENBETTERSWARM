@@ -1,25 +1,3 @@
-// Affiliate / referral install tracking on the desktop side.
-//
-// On first launch the app opens https://openswarm.com/welcome?app_install_id=…
-// in the user's default browser and polls the cloud's /api/install/lookup
-// endpoint until a referral binding shows up (or we time out). The browser
-// page is what actually performs the bind: it reads the install_token that
-// the landing page stashed in localStorage / cookie when the user clicked
-// Download, and POSTs it to the cloud paired with our app_install_id.
-//
-// State lives in `<userData>/install.json`. The shape:
-//   {
-//     app_install_id: "uuid",          // unified install id, see resolveInstallId()
-//     first_launch_at: 1700000000000,  // unix ms; presence = "this isn't first launch"
-//     ref: "haik" | null,              // populated once lookup succeeds
-//     ref_bound_at: 1700000000000 | null,
-//     ref_bind_method: "affiliate_filename_hash" | null,
-//     attempts: 0                       // last polling attempt count, for debugging
-//   }
-//
-// Skipped entirely in dev unless OPENSWARM_AFFILIATE_FORCE=1 is set, so
-// `bash run.sh` doesn't pop a browser tab on every restart.
-
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -28,22 +6,13 @@ const os = require("os");
 const DEFAULT_LANDING_URL = "https://openswarm.com";
 const DEFAULT_CLOUD_URL = "https://api.openswarm.com";
 
-// Polling: 12 attempts, 5s apart = 60s window. Generous enough for the user
-// to actually click through the welcome page; small enough that a stuck
-// poll doesn't sit around all day. The page itself is fast (single POST)
-// so most binds land in the first one or two ticks.
-//
-// Both knobs are overridable via env so tests can drive a 200ms × 5
-// poll window instead of 60s.
 const POLL_INTERVAL_MS = Number(process.env.OPENSWARM_AFFILIATE_POLL_INTERVAL_MS) || 5000;
 const POLL_MAX_ATTEMPTS = Number(process.env.OPENSWARM_AFFILIATE_POLL_MAX_ATTEMPTS) || 12;
 const FILENAME_ATTRIBUTION_WINDOW_MS =
   Number(process.env.OPENSWARM_AFFILIATE_FILENAME_WINDOW_MS) || 30 * 24 * 60 * 60 * 1000;
 const INSTALLER_HASH_RE =
   /^OpenSwarm(?:-Setup)?-(?:arm64|x64)-([A-Za-z0-9_-]{16,32})(?: \([0-9]+\))?\.(dmg|exe|AppImage)$/i;
-// A file whose mtime is slightly in the future is NOT suspicious: APFS/NTFS
-// keep sub-ms timestamps, and NTP can step the clock backwards between the
-// download and first launch. Only skip files more than a minute ahead.
+// Allow clock skew so a fresh installer is not discarded after an NTP adjustment.
 const FUTURE_MTIME_TOLERANCE_MS = 60 * 1000;
 
 function getStateFilePath(userDataDir) {
@@ -56,7 +25,7 @@ function readState(userDataDir) {
     const raw = fs.readFileSync(p, "utf8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") return parsed;
-  } catch (_) {}
+  } catch {}
   return {};
 }
 
@@ -64,9 +33,7 @@ function writeState(userDataDir, state) {
   const p = getStateFilePath(userDataDir);
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    // Atomic-ish write: temp file + rename. Avoids leaving a half-written
-    // install.json if the process is killed mid-write (which would brick
-    // first-launch detection on the next start).
+    // Rename a complete temp file so termination cannot leave invalid JSON.
     const tmp = p + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
     fs.renameSync(tmp, p);
@@ -75,31 +42,8 @@ function writeState(userDataDir, state) {
   }
 }
 
-// --------------------------------------------------------------------------
-// Unified install identity.
-//
-// The desktop historically had TWO per-install ids that never met: this
-// module's app_install_id (install.json, affiliate handshake) and the Python
-// backend's settings.installation_id (analytics envelope). Affiliate data
-// could therefore only join to analytics through a signed-in user — and
-// sign-in is optional. resolveInstallId collapses them into one value:
-// main.js calls it BEFORE spawning the backend and exports the result as
-// OPENSWARM_INSTALLATION_ID, so install_tokens.app_install_id in the cloud
-// and the analytics install_id carry the same id and affiliate refs join
-// directly to telemetry with no sign-in required.
-//
-// Resolution order (first hit wins):
-//   1. install.json app_install_id — continuity for installs that already
-//      ran the affiliate handshake
-//   2. python settings.json installation_id — upgrades adopt the existing
-//      analytics identity instead of minting a second one
-//   3. fresh crypto.randomUUID(), persisted to install.json immediately so
-//      every later reader (handshake, renderer, next boot) agrees on it
-
 const INSTALL_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
 
-// Mirrors backend/config/paths.py: packaged data root is per-OS app support;
-// dev is <projectRoot>/backend/data.
 function pythonSettingsFile({ isPackaged, projectRoot, platform, env, homeDir }) {
   if (!isPackaged) {
     return path.join(projectRoot, "backend", "data", "settings", "settings.json");
@@ -135,7 +79,7 @@ function resolveInstallId({
       writeState(userDataDir, { ...state, app_install_id: iid });
       return iid;
     }
-  } catch (_) {}
+  } catch {}
 
   const freshId = crypto.randomUUID();
   writeState(userDataDir, { ...state, app_install_id: freshId });
@@ -151,8 +95,6 @@ function urlsFromEnv() {
 
 async function pollLookupOnce(cloudUrl, appInstallId) {
   const url = `${cloudUrl}/api/install/lookup?app_install_id=${encodeURIComponent(appInstallId)}`;
-  // Node 18+ ships global fetch; Electron 40 is on a Chromium that has it.
-  // Defensive timeout via AbortSignal.timeout (Node 17+).
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 5000);
   try {
@@ -161,7 +103,7 @@ async function pollLookupOnce(cloudUrl, appInstallId) {
     const body = await res.json();
     if (body && typeof body.ref === "string" && body.ref) return body.ref;
     return null;
-  } catch (_) {
+  } catch {
     return null;
   } finally {
     clearTimeout(t);
@@ -183,7 +125,7 @@ async function bindAffiliateHashOnce(cloudUrl, appInstallId, affiliateHash) {
     const body = await res.json();
     if (body && typeof body.ref === "string" && body.ref) return body.ref;
     return null;
-  } catch (_) {
+  } catch {
     return null;
   } finally {
     clearTimeout(t);
@@ -206,7 +148,7 @@ function recentInstallerHashesInDir(dir, nowMs) {
   let entries = [];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (_) {
+  } catch {
     return out;
   }
 
@@ -220,7 +162,7 @@ function recentInstallerHashesInDir(dir, nowMs) {
       const ageMs = nowMs - st.mtimeMs;
       if (ageMs < -FUTURE_MTIME_TOLERANCE_MS || ageMs > FILENAME_ATTRIBUTION_WINDOW_MS) continue;
       out.push({ hash, path: fullPath, mtimeMs: st.mtimeMs });
-    } catch (_) {}
+    } catch {}
   }
   return out;
 }
@@ -317,9 +259,6 @@ async function maybeRunFirstLaunchHandshake({
     return;
   }
 
-  // First launch. Reuse the id resolveInstallId persisted before the backend
-  // spawned (the unified install id); only generate here if main.js never
-  // resolved one (e.g. direct module use in tests).
   const appInstallId =
     typeof state.app_install_id === "string" && INSTALL_ID_RE.test(state.app_install_id)
       ? state.app_install_id
@@ -373,12 +312,8 @@ async function maybeRunFirstLaunchHandshake({
 module.exports = {
   maybeRunFirstLaunchHandshake,
   resolveInstallId,
-  // Exported for tests + IPC handlers.
-  _readState: readState,
-  _writeState: writeState,
-  _getStateFilePath: getStateFilePath,
-  _pollLookupOnce: pollLookupOnce,
-  _bindAffiliateHashOnce: bindAffiliateHashOnce,
-  _hashFromInstallerBasename: hashFromInstallerBasename,
-  _findAffiliateHashFromInstaller: findAffiliateHashFromInstaller,
+  p_readState: readState,
+  p_writeState: writeState,
+  p_hashFromInstallerBasename: hashFromInstallerBasename,
+  p_findAffiliateHashFromInstaller: findAffiliateHashFromInstaller,
 };

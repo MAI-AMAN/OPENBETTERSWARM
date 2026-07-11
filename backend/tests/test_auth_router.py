@@ -39,9 +39,6 @@ def reset_settings():
 # --------------------------------------------------------------------------- /api/auth/signin-activate ---------------------------------------------------------------------------
 
 def test_signin_activate_persists_user_id(client, reset_settings):
-    # Give settings a known installation_id so we can assert the router
-    # forwards it as install_id (the unified id the cloud uses for both
-    # identity stitching and affiliate attribution).
     from backend.apps.settings.settings import load_settings, save_settings
     s = load_settings()
     s.installation_id = "unified-install-id-123"

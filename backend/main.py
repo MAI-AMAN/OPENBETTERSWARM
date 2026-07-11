@@ -70,11 +70,7 @@ try:
     from backend.apps.settings.store import load_settings as p_load_boot_settings, save_settings as p_save_boot_settings
     p_boot_settings = p_load_boot_settings()
     if not getattr(p_boot_settings, "installation_id", None):
-        # Prefer the unified install id Electron resolved before spawning us
-        # (shared with the affiliate install.json app_install_id), so the
-        # analytics install_id and the affiliate id are the same value and
-        # affiliate refs join directly to telemetry. Falls back to a fresh
-        # uuid for bare `uvicorn backend.main:app` runs.
+        # Electron resolves this before startup so analytics and affiliate attribution share one install id.
         p_env_iid = os.environ.get("OPENSWARM_INSTALLATION_ID", "")
         p_boot_settings.installation_id = (
             p_env_iid if p_re.fullmatch(r"[A-Za-z0-9_-]{8,128}", p_env_iid) else p_uuid.uuid4().hex

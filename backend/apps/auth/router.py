@@ -106,10 +106,6 @@ async def signin_activate(body: SigninActivateRequest):
         raise HTTPException(status_code=400, detail="Invalid token")
 
     proxy = p_proxy_url()
-    # settings.installation_id doubles as the affiliate app_install_id (one
-    # unified id, resolved by Electron before the backend spawns). Forwarding
-    # it lets the cloud record affiliate attribution the moment sign-in
-    # identifies the user, instead of waiting for a Stripe checkout.
     payload = {
         "token": body.token,
         "signin_method": body.signin_method,
