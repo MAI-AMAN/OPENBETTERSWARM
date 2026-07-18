@@ -166,32 +166,51 @@ class Messaging(AgentManagerProtocol):
             async def real_runtime_executor(node):
                 logger.info(f"[PLANNER] Executing node {node.node_id} with agent {node.agent_id} and model {node.model_id}")
                 
-                # Temporarily enforce the model selection from the Planner layer
-                # We comment this out to prevent hijacking the user's selected model 
-                # (which causes infinite hangs if they don't have the API key for our heuristic model)
-                original_model = session.model
-                # session.model = node.model_id
-                
-                # Enforce Tools
-                original_tools = kwargs.get("forced_tools")
-                kwargs["forced_tools"] = node.tools
-                
-                # Enforce Context Strategy (History)
+                # ── Tool Filtering (the actual token saver) ──
+                # Override session.allowed_tools so build_effective_tool_lists() in
+                # RunOptions.py only ships the planner-selected tools to the SDK.
+                # This is the mechanism vanilla OpenSwarm already uses for mode-based
+                # tool gating — we just narrow it further.
+                original_allowed_tools = list(session.allowed_tools)
+                if node.tools:
+                    # Merge planner tools with essential infrastructure tools that
+                    # the SDK always needs (ToolSearch for deferred schemas, etc.)
+                    from backend.apps.agents.manager.prompt.tool_catalog import FULL_TOOLS
+                    infra_tools = {"ToolSearch", "AskUserQuestion", "TaskOutput", "TaskStop"}
+                    planner_tools = list(set(node.tools) | infra_tools)
+                    session.allowed_tools = planner_tools
+                    logger.info(f"[PLANNER] Tool filter: {len(original_allowed_tools)} → {len(planner_tools)} tools")
+
+                # ── Context Window Reduction ──
+                # Apply the context planner's max_context_tokens to shrink the
+                # history payload for simple / latency-sensitive queries.
+                original_context_window = getattr(session, 'context_window', None)
+                if (node.context_strategy
+                    and node.context_strategy.max_context_tokens
+                    and original_context_window
+                    and node.context_strategy.max_context_tokens < original_context_window):
+                    session.context_window = node.context_strategy.max_context_tokens
+                    logger.info(f"[PLANNER] Context window: {original_context_window} → {node.context_strategy.max_context_tokens} tokens")
+
+                # ── Remove forced_tools from kwargs (stop prompt bloat) ──
+                saved_forced_tools = kwargs.pop("forced_tools", None)
+
+                # ── History Gating ──
                 original_messages = session.messages.copy()
                 if not node.context_strategy.include_history:
                     session.messages = []
                 
-                # Snapshot history to capture delta
                 start_len = len(session.messages)
                 
-                # Execute the core OpenSwarm turn. This handles UI streaming automatically.
+                # Execute the core OpenSwarm turn
                 await self.run_agent_loop(session_id, prompt, **kwargs)
                 
-                # Restore state (model hijacking is disabled, so no model restore needed)
-                if original_tools is not None:
-                    kwargs["forced_tools"] = original_tools
-                else:
-                    kwargs.pop("forced_tools", None)
+                # ── Restore all state ──
+                session.allowed_tools = original_allowed_tools
+                if original_context_window is not None:
+                    session.context_window = original_context_window
+                if saved_forced_tools is not None:
+                    kwargs["forced_tools"] = saved_forced_tools
                     
                 if not node.context_strategy.include_history:
                     new_messages = session.messages[start_len:]
