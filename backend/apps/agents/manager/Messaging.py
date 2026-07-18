@@ -173,8 +173,8 @@ class Messaging(AgentManagerProtocol):
                 # session.model = node.model_id
                 
                 # Enforce Tools
-                original_tools = kwargs.get("allowed_tools")
-                kwargs["allowed_tools"] = node.tools
+                original_tools = kwargs.get("forced_tools")
+                kwargs["forced_tools"] = node.tools
                 
                 # Enforce Context Strategy (History)
                 original_messages = session.messages.copy()
@@ -187,13 +187,11 @@ class Messaging(AgentManagerProtocol):
                 # Execute the core OpenSwarm turn. This handles UI streaming automatically.
                 await self.run_agent_loop(session_id, prompt, **kwargs)
                 
-                # Restore state
-                session.model = original_model
-                
+                # Restore state (model hijacking is disabled, so no model restore needed)
                 if original_tools is not None:
-                    kwargs["allowed_tools"] = original_tools
+                    kwargs["forced_tools"] = original_tools
                 else:
-                    del kwargs["allowed_tools"]
+                    kwargs.pop("forced_tools", None)
                     
                 if not node.context_strategy.include_history:
                     new_messages = session.messages[start_len:]
