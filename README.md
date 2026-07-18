@@ -42,6 +42,8 @@ Running agents in a terminal works fine for one task. But when you're juggling f
 
 **Spatial Dashboard** — Infinite canvas with drag-and-drop agent cards, view cards, and embedded browser cards. Create multiple dashboards for different workspaces.
 
+**Planner Progress Bubble** — Real-time visual feedback for the agent planning stage, surfaced natively in the chat UI via WebSockets.
+
 **Agent Chat** — Full streaming chat interface powered by WebSockets. Real-time token output, cost tracking per session, and persistent history that survives restarts.
 
 **Human-in-the-Loop Approvals** — Agents request permission before executing tools. Approve or deny individually, or batch-approve from the dashboard. Configurable per-tool permissions (always allow, ask, deny).
