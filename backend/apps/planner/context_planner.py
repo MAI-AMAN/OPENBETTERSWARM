@@ -63,6 +63,7 @@ async def plan_context(analysis: TaskAnalysis, agent: AgentSelection) -> Context
             max_tokens=aux_max_tokens_for(aux_model, base=300),
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
+            timeout=2.0
         )
         
         raw_text = response.content[0].text

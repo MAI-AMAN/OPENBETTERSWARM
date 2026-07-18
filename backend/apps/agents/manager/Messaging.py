@@ -167,8 +167,10 @@ class Messaging(AgentManagerProtocol):
                 logger.info(f"[PLANNER] Executing node {node.node_id} with agent {node.agent_id} and model {node.model_id}")
                 
                 # Temporarily enforce the model selection from the Planner layer
+                # We comment this out to prevent hijacking the user's selected model 
+                # (which causes infinite hangs if they don't have the API key for our heuristic model)
                 original_model = session.model
-                session.model = node.model_id
+                # session.model = node.model_id
                 
                 # Enforce Tools
                 original_tools = kwargs.get("allowed_tools")
