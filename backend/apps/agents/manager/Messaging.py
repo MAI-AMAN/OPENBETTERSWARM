@@ -162,58 +162,73 @@ class Messaging(AgentManagerProtocol):
         if not session:
             return
 
-        async def real_runtime_executor(node):
-            logger.info(f"[PLANNER] Executing node {node.node_id} with agent {node.agent_id} and model {node.model_id}")
-            
-            # Temporarily enforce the model selection from the Planner layer
-            original_model = session.model
-            session.model = node.model_id
-            
-            # Enforce Tools
-            original_tools = kwargs.get("allowed_tools")
-            kwargs["allowed_tools"] = node.tools
-            
-            # Enforce Context Strategy (History)
-            original_messages = session.messages.copy()
-            if not node.context_strategy.include_history:
-                session.messages = []
-            
-            # Snapshot history to capture delta
-            start_len = len(session.messages)
-            
-            # Execute the core OpenSwarm turn. This handles UI streaming automatically.
-            await self.run_agent_loop(session_id, prompt, **kwargs)
-            
-            # Restore state
-            session.model = original_model
-            
-            if original_tools is not None:
-                kwargs["allowed_tools"] = original_tools
-            else:
-                del kwargs["allowed_tools"]
+        try:
+            async def real_runtime_executor(node):
+                logger.info(f"[PLANNER] Executing node {node.node_id} with agent {node.agent_id} and model {node.model_id}")
                 
-            if not node.context_strategy.include_history:
-                new_messages = session.messages[start_len:]
-                session.messages = original_messages + new_messages
-            
-            if len(session.messages) > len(original_messages):
-                return {"status": "success", "data": session.messages[-1].content}
-            return {"status": "error", "error_type": "no_output"}
+                # Temporarily enforce the model selection from the Planner layer
+                original_model = session.model
+                session.model = node.model_id
+                
+                # Enforce Tools
+                original_tools = kwargs.get("allowed_tools")
+                kwargs["allowed_tools"] = node.tools
+                
+                # Enforce Context Strategy (History)
+                original_messages = session.messages.copy()
+                if not node.context_strategy.include_history:
+                    session.messages = []
+                
+                # Snapshot history to capture delta
+                start_len = len(session.messages)
+                
+                # Execute the core OpenSwarm turn. This handles UI streaming automatically.
+                await self.run_agent_loop(session_id, prompt, **kwargs)
+                
+                # Restore state
+                session.model = original_model
+                
+                if original_tools is not None:
+                    kwargs["allowed_tools"] = original_tools
+                else:
+                    del kwargs["allowed_tools"]
+                    
+                if not node.context_strategy.include_history:
+                    new_messages = session.messages[start_len:]
+                    session.messages = original_messages + new_messages
+                
+                if len(session.messages) > len(original_messages):
+                    return {"status": "success", "data": session.messages[-1].content}
+                return {"status": "error", "error_type": "no_output"}
 
-        pipeline = PlannerPipeline(mock_runtime_executor=real_runtime_executor)
-        
-        history_dicts = [{"role": m.role, "content": m.content} for m in session.messages]
-        
-        async def emit_status(step: str, message: str):
+            pipeline = PlannerPipeline(mock_runtime_executor=real_runtime_executor)
+            
+            history_dicts = [{"role": m.role, "content": m.content} for m in session.messages]
+            
+            async def emit_status(step: str, message: str):
+                await ws_manager.send_to_session(session_id, "agent:planner_status", {
+                    "session_id": session_id,
+                    "step": step,
+                    "message": message
+                })
+                # Add a small delay so the user can actually read the bubble in the UI
+                # before it instantly disappears, especially if heuristics execute in 5ms.
+                if step != "COMPLETE":
+                    await asyncio.sleep(0.7)
+
+            logger.info("[PLANNER] Beginning planning phase...")
+            final_result = await pipeline.plan_and_execute(prompt, history_dicts, session_id=session_id, emit_status=emit_status)
+            logger.info(f"[PLANNER] Pipeline finished. Nodes executed: {final_result.node_count}")
+        except Exception as e:
+            logger.error(f"[PLANNER] Critical planner error, falling back to direct execution: {e}", exc_info=True)
+            # Remove any stuck planner bubble
             await ws_manager.send_to_session(session_id, "agent:planner_status", {
                 "session_id": session_id,
-                "step": step,
-                "message": message
+                "step": "COMPLETE",
+                "message": "Fallback"
             })
-
-        logger.info("[PLANNER] Beginning planning phase...")
-        final_result = await pipeline.plan_and_execute(prompt, history_dicts, session_id=session_id, emit_status=emit_status)
-        logger.info(f"[PLANNER] Pipeline finished. Nodes executed: {final_result.node_count}")
+            # Fallback directly to normal OpenSwarm loop
+            await self.run_agent_loop(session_id, prompt, **kwargs)
 
     @typechecked
     async def edit_message(self, session_id: str, message_id: str, new_content: str):
