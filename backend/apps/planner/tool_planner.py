@@ -104,10 +104,18 @@ def _plan_tools_heuristic(analysis: TaskAnalysis, match: CapabilityMatch) -> Too
     if "code_execution" in match.supported_capabilities:
         if "Bash" not in restricted:
             recommended.append("Bash")
+        if "PythonExecution" not in restricted:
+            recommended.append("PythonExecution")
             
     if "web_search" in match.supported_capabilities:
         if "WebSearch" not in restricted:
             recommended.append("WebSearch")
+            
+    if analysis.primary_intent == "creation":
+        if "Write" not in restricted:
+            recommended.append("Write")
+        if "Edit" not in restricted:
+            recommended.append("Edit")
 
     return ToolStrategy(
         recommended_tool_ids=recommended,
