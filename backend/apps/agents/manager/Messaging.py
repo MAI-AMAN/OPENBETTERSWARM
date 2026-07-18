@@ -140,8 +140,80 @@ class Messaging(AgentManagerProtocol):
         if fast_verdict != "no":
             task = asyncio.create_task(run_browser_fast_path(session, session_id, prompt, selected_browser_ids, fast_brief, fast_verdict))
         else:
-            task = asyncio.create_task(self.run_agent_loop(session_id, prompt, images=images, context_paths=context_paths, forced_tools=forced_tools, attached_skills=attached_skills, selected_browser_ids=selected_browser_ids, selected_app_output_ids=selected_app_output_ids, selected_setting_ids=selected_setting_ids))
+            # INTERCEPT: Route the request through the new Planner Pipeline instead of direct execution!
+            task = asyncio.create_task(self._run_planner_pipeline_loop(
+                session_id, prompt, 
+                images=images, 
+                context_paths=context_paths, 
+                forced_tools=forced_tools, 
+                attached_skills=attached_skills, 
+                selected_browser_ids=selected_browser_ids, 
+                selected_app_output_ids=selected_app_output_ids, 
+                selected_setting_ids=selected_setting_ids
+            ))
         self.tasks[session_id] = task
+
+    async def _run_planner_pipeline_loop(self, session_id: str, prompt: str, **kwargs):
+        """
+        Wraps the normal `run_agent_loop` within the new 10-module Planner Pipeline.
+        """
+        from backend.apps.planner.planner_pipeline import PlannerPipeline
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+
+        async def real_runtime_executor(node):
+            logger.info(f"[PLANNER] Executing node {node.node_id} with agent {node.agent_id} and model {node.model_id}")
+            
+            # Temporarily enforce the model selection from the Planner layer
+            original_model = session.model
+            session.model = node.model_id
+            
+            # Enforce Tools
+            original_tools = kwargs.get("allowed_tools")
+            kwargs["allowed_tools"] = node.tools
+            
+            # Enforce Context Strategy (History)
+            original_messages = session.messages.copy()
+            if not node.context_strategy.include_history:
+                session.messages = []
+            
+            # Snapshot history to capture delta
+            start_len = len(session.messages)
+            
+            # Execute the core OpenSwarm turn. This handles UI streaming automatically.
+            await self.run_agent_loop(session_id, prompt, **kwargs)
+            
+            # Restore state
+            session.model = original_model
+            
+            if original_tools is not None:
+                kwargs["allowed_tools"] = original_tools
+            else:
+                del kwargs["allowed_tools"]
+                
+            if not node.context_strategy.include_history:
+                new_messages = session.messages[start_len:]
+                session.messages = original_messages + new_messages
+            
+            if len(session.messages) > len(original_messages):
+                return {"status": "success", "data": session.messages[-1].content}
+            return {"status": "error", "error_type": "no_output"}
+
+        pipeline = PlannerPipeline(mock_runtime_executor=real_runtime_executor)
+        
+        history_dicts = [{"role": m.role, "content": m.content} for m in session.messages]
+        
+        async def emit_status(step: str, message: str):
+            await ws_manager.send_to_session(session_id, "agent:planner_status", {
+                "session_id": session_id,
+                "step": step,
+                "message": message
+            })
+
+        logger.info("[PLANNER] Beginning planning phase...")
+        final_result = await pipeline.plan_and_execute(prompt, history_dicts, session_id=session_id, emit_status=emit_status)
+        logger.info(f"[PLANNER] Pipeline finished. Nodes executed: {final_result.node_count}")
 
     @typechecked
     async def edit_message(self, session_id: str, message_id: str, new_content: str):

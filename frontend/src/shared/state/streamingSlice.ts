@@ -17,13 +17,20 @@ export interface StreamingMessage {
   tool_name?: string;
 }
 
+export interface PlannerStatus {
+  step: string;
+  message: string;
+}
+
 interface StreamingState {
   /** Keyed by sessionId; entry exists iff a stream is in flight, removed on stream_end. */
   bySession: Record<string, StreamingMessage>;
+  plannerBySession: Record<string, PlannerStatus>;
 }
 
 const initialState: StreamingState = {
   bySession: {},
+  plannerBySession: {},
 };
 
 const streamingSlice = createSlice({
@@ -62,6 +69,20 @@ const streamingSlice = createSlice({
     /** Clear when a session is fully closed/removed, so stuck streaming entries don't leak. */
     clearStreamingForSession(state, action: PayloadAction<string>) {
       delete state.bySession[action.payload];
+      delete state.plannerBySession[action.payload];
+    },
+    updatePlannerStatus(
+      state,
+      action: PayloadAction<{ sessionId: string; step: string; message: string }>
+    ) {
+      if (action.payload.step === 'COMPLETE') {
+        delete state.plannerBySession[action.payload.sessionId];
+      } else {
+        state.plannerBySession[action.payload.sessionId] = {
+          step: action.payload.step,
+          message: action.payload.message,
+        };
+      }
     },
   },
   extraReducers: (builder) => {
@@ -91,11 +112,15 @@ const streamingSlice = createSlice({
   },
 });
 
-export const { streamStart, streamDelta, streamEnd, clearStreamingForSession } = streamingSlice.actions;
+export const { streamStart, streamDelta, streamEnd, clearStreamingForSession, updatePlannerStatus } = streamingSlice.actions;
 export default streamingSlice.reducer;
 
 /** Subscribes only to one session's stream entry; null when no stream is active. */
 import { useAppSelector } from '@/shared/hooks';
 export function useStreamingMessage(sessionId: string | null | undefined) {
   return useAppSelector((s) => sessionId ? s.streaming.bySession[sessionId] ?? null : null);
+}
+
+export function usePlannerStatus(sessionId: string | null | undefined) {
+  return useAppSelector((s) => sessionId ? s.streaming.plannerBySession[sessionId] ?? null : null);
 }

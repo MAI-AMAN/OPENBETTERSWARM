@@ -27,7 +27,7 @@ import {
   setQueued,
   clearTurnLabel,
 } from '../state/agentsSlice';
-import { streamStart, streamDelta, streamEnd, clearStreamingForSession } from '../state/streamingSlice';
+import { streamStart, streamDelta, streamEnd, clearStreamingForSession, updatePlannerStatus } from '../state/streamingSlice';
 import { addBrowserCardFromBackend, markBrowserCardEnding, keepBrowserCardOpen, placeBesideCard, placeBelowCard, placeBrowserBesideChat, setBrowserCardPosition, setGlowingBrowserCards, fadeGlowingBrowserCards, clearGlowingBrowserCards, GRID_GAP, WORKFLOW_CARD_GAP, openWorkflowsApp, openWorkflowMonitor } from '../state/dashboardLayoutSlice';
 import { upsertOutput } from '../state/outputsSlice';
 import { fetchSettings } from '../state/settingsSlice';
@@ -471,6 +471,16 @@ class WebSocketManager {
         // Emitted by the backend when an Output row is created (canvas-launched App Builder seed) or updated (post-session meta.json sync). The upsert reducer merges over an existing row so a UI that already loaded the row doesn't lose locally-applied fields.
         if (data.output && data.output.id) {
           store.dispatch(upsertOutput(data.output));
+        }
+        break;
+
+      case 'agent:planner_status':
+        if (session_id && data.step && data.message) {
+          store.dispatch(updatePlannerStatus({
+            sessionId: session_id,
+            step: data.step,
+            message: data.message,
+          }));
         }
         break;
 

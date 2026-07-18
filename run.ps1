@@ -68,7 +68,7 @@ $FrontendDir = Join-Path $ScriptDir 'frontend'
 if (-not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
     Write-Host "[setup] Installing frontend deps..."
     Push-Location $FrontendDir
-    try { & npm install } finally { Pop-Location }
+    try { & npm.cmd install } finally { Pop-Location }
 }
 
 # --- Electron deps ---
@@ -76,7 +76,7 @@ $ElectronDir = Join-Path $ScriptDir 'electron'
 if (-not (Test-Path (Join-Path $ElectronDir 'node_modules'))) {
     Write-Host "[setup] Installing electron deps..."
     Push-Location $ElectronDir
-    try { & npm install } finally { Pop-Location }
+    try { & npm.cmd install } finally { Pop-Location }
 }
 
 # --- Process tracking + cleanup ---

@@ -49,6 +49,7 @@ import { store } from '@/shared/state/store';
 import { fetchModes } from '@/shared/state/modesSlice';
 import { createSessionWs, acquireSessionWs, releaseSessionWs } from '@/shared/ws/WebSocketManager';
 import StreamingBubble from './bubbles/StreamingBubble';
+import PlannerProgressBubble from './bubbles/PlannerProgressBubble';
 import WelcomeQuickReplies from './WelcomeQuickReplies';
 import { useWelcomeGreeting } from './useWelcomeGreeting';
 import { THINKING_LABELS } from './thinkingLabels';
@@ -1771,7 +1772,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
               />
             )}
             {(preSendActivityLabel || awaitingResponse || (session.status === 'running' && !streamingMessageId)) && (
-              <Box sx={{ overflowAnchor: 'none' }}>
+              <Box sx={{ overflowAnchor: 'none', display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {id && <PlannerProgressBubble sessionId={id} />}
                 <ThinkingBubble
                   label={preSendActivityLabel || session.turn_label?.label}
                   seedKey={`${session.id}:${session.messages?.length ?? 0}`}
